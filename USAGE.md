@@ -150,7 +150,7 @@ drovr msgs pay-api
 
 ### Review what agents produced
 
-- **Reports** (⌘3): HTML reports in `~/.claude/plans/`, grouped by folder, newest first, with new ones marked. A revised report replaces the agent's earlier copy, and older copies with the same title fold under the newest as earlier versions. Open one, then send feedback to an agent from the bottom bar.
+- **Reports** (⌘3): HTML reports in `~/.claude/plans/`, grouped by folder, newest first, with new ones marked; if any are unread, the newest opens straight away. A revised report replaces the agent's earlier copy, and older copies with the same title fold under the newest as earlier versions. Open one, then send feedback to an agent from the bottom bar.
 - **Code review** (⌘7): pick an agent to see each repo and worktree it worked in, with what changed on its branch (committed or not) and the diffs. It works when the agent started in a folder above your repos. Send feedback about a file. If your plans folder is in a git repo (say `~/.claude`), only the part this agent worked in is shown there.
 - **Agents:** each agent's full output, tool calls and cost. **Open in herdr** opens its session interactively, or **Copy attach cmd** for any terminal.
 - **Timeline:** with `workflow.enabled`, everything that happened on a ticket (see [Read a ticket's timeline](#read-a-tickets-timeline)).

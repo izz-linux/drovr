@@ -228,7 +228,7 @@ Reports are everything you need to look at and review, saved as HTML in `~/.clau
 - **Revisions replace:** when an agent publishes a title it already published in that folder, the new version replaces its file and shows as unread again. Older copies with the same title, from before drovr did this, are folded under the newest one as **earlier versions**.
 - **Order:** newest first, in each folder and across folders.
 - **What the view lists:** every `.html` file in the folder and its subfolders, including ones you or other tools put there. They're grouped by folder, newest first.
-- **Unread:** a report an agent published shows a dot until you open it, and the sidebar shows an unread count. **Mark all read** clears them.
+- **Unread:** a report an agent published shows a dot until you open it, and the sidebar shows an unread count. Opening Reports while there's an unread report opens the newest one. **Mark all read** clears them.
 - **On each report:** preview it, **Open in browser**, **Show folder** (in Finder), or send feedback to any agent.
 - **Previews run as the page would in a browser:** its scripts, theme and saved settings (`localStorage`) work, and its own images and stylesheets load from next to it. It can load files only from the plans folder and the repos you've opened in Code review. The same goes for HTML previews in Code review. See [Security](#security).
 
