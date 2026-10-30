@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { api, ago, ticketsIn, type Agent, type Line } from "$lib/api";
-  import { app, act, toast } from "$lib/state.svelte";
-  import { md } from "$lib/md";
+  import { api, ago, ticketsIn, type Agent, type Line } from "#lib/api.ts";
+  import { app, act, toast } from "#lib/state.svelte.ts";
+  import { md } from "#lib/md.ts";
   import TerminalPanel from "./TerminalPanel.svelte";
 
   let lines = $state<Line[]>([]);

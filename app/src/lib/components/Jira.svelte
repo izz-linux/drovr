@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { api } from "$lib/api";
-  import { app, jira } from "$lib/state.svelte";
-  import { md } from "$lib/md";
+  import { api } from "#lib/api.ts";
+  import { app, jira } from "#lib/state.svelte.ts";
+  import { md } from "#lib/md.ts";
   import LookupProgress from "./LookupProgress.svelte";
 
 

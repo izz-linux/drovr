@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { api, ago, type ReportFile } from "$lib/api";
-  import { app, act, toast, select } from "$lib/state.svelte";
+  import { api, ago, type ReportFile } from "#lib/api.ts";
+  import { app, act, toast, select } from "#lib/state.svelte.ts";
 
   let dir = $state("");
   let files = $state<ReportFile[]>([]);

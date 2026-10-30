@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { api, ago, type Proposal, type Retro, type TicketRecord } from "$lib/api";
-  import { app, act, select, toast } from "$lib/state.svelte";
+  import { api, ago, type Proposal, type Retro, type TicketRecord } from "#lib/api.ts";
+  import { app, act, select, toast } from "#lib/state.svelte.ts";
   import Modal from "./Modal.svelte";
 
   // Retros you started, with their proposals: approve one (which applies

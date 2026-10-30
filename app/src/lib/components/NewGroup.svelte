@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type Defaults, type PlansFolder } from "$lib/api";
-  import { app, act, select, toast } from "$lib/state.svelte";
-  import { slug, nameInput, NAME_FIELD } from "$lib/slug";
+  import { api, type Defaults, type PlansFolder } from "#lib/api.ts";
+  import { app, act, select, toast } from "#lib/state.svelte.ts";
+  import { slug, nameInput, NAME_FIELD } from "#lib/slug.ts";
   import Modal from "./Modal.svelte";
   import RunDefaults from "./RunDefaults.svelte";
 

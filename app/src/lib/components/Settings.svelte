@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "$lib/api";
-  import { app, act, toast } from "$lib/state.svelte";
-  import { theme, setTheme } from "$lib/theme.svelte";
-  import { THEME_SETTINGS, isThemeSetting } from "$lib/themes";
+  import { api } from "#lib/api.ts";
+  import { app, act, toast } from "#lib/state.svelte.ts";
+  import { theme, setTheme } from "#lib/theme.svelte.ts";
+  import { THEME_SETTINGS, isThemeSetting } from "#lib/themes.ts";
 
   let info = $state<{ path: string; home: string; text: string; effective: string } | null>(null);
   let text = $state("");

@@ -1,23 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "$lib/api";
+  import { api } from "#lib/api.ts";
   import { listen } from "@tauri-apps/api/event";
-  import { app, refresh, type View } from "$lib/state.svelte";
-  import { initTheme } from "$lib/theme.svelte";
-  import Agents from "$lib/components/Agents.svelte";
-  import Inbox from "$lib/components/Inbox.svelte";
-  import Jira from "$lib/components/Jira.svelte";
-  import Search from "$lib/components/Search.svelte";
-  import Bus from "$lib/components/Bus.svelte";
-  import Review from "$lib/components/Review.svelte";
-  import Settings from "$lib/components/Settings.svelte";
-  import Reports from "$lib/components/Reports.svelte";
-  import NewAgent from "$lib/components/NewAgent.svelte";
-  import NewGroup from "$lib/components/NewGroup.svelte";
-  import Dispatch from "$lib/components/Dispatch.svelte";
-  import Shortcuts from "$lib/components/Shortcuts.svelte";
-  import Timeline from "$lib/components/Timeline.svelte";
-  import Pipeline from "$lib/components/Pipeline.svelte";
+  import { app, refresh, type View } from "#lib/state.svelte.ts";
+  import { initTheme } from "#lib/theme.svelte.ts";
+  import Agents from "#lib/components/Agents.svelte";
+  import Inbox from "#lib/components/Inbox.svelte";
+  import Jira from "#lib/components/Jira.svelte";
+  import Search from "#lib/components/Search.svelte";
+  import Bus from "#lib/components/Bus.svelte";
+  import Review from "#lib/components/Review.svelte";
+  import Settings from "#lib/components/Settings.svelte";
+  import Reports from "#lib/components/Reports.svelte";
+  import NewAgent from "#lib/components/NewAgent.svelte";
+  import NewGroup from "#lib/components/NewGroup.svelte";
+  import Dispatch from "#lib/components/Dispatch.svelte";
+  import Shortcuts from "#lib/components/Shortcuts.svelte";
+  import Timeline from "#lib/components/Timeline.svelte";
+  import Pipeline from "#lib/components/Pipeline.svelte";
 
   // Pipeline is part of the ticket workflow (workflow.enabled).
   const nav: { id: View; label: string; key: string }[] = $derived([

@@ -1,9 +1,9 @@
 <script lang="ts">
   import "@xterm/xterm/css/xterm.css";
-  import type { Agent } from "$lib/api";
-  import { app, toast } from "$lib/state.svelte";
+  import type { Agent } from "#lib/api.ts";
+  import { app, toast } from "#lib/state.svelte.ts";
   import { untrack } from "svelte";
-  import { terminalFor, termKey, termLabel, typeInto, fitAll, stopJob, restartShell, attach } from "$lib/terminal.svelte";
+  import { terminalFor, termKey, termLabel, typeInto, fitAll, stopJob, restartShell, attach } from "#lib/terminal.svelte.ts";
 
   let { agent }: { agent: Agent } = $props();
   let host: HTMLDivElement | undefined = $state();

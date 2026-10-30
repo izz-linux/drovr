@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type Defaults } from "$lib/api";
-  import { app, act, select } from "$lib/state.svelte";
+  import { api, type Defaults } from "#lib/api.ts";
+  import { app, act, select } from "#lib/state.svelte.ts";
   import Modal from "./Modal.svelte";
   import RunDefaults from "./RunDefaults.svelte";
-  import { nameInput, NAME_FIELD } from "$lib/slug";
+  import { nameInput, NAME_FIELD } from "#lib/slug.ts";
 
   const ticket = app.dispatching!;
   // With the ticket workflow, a ticket gets its own group and lead, which runs its stages.

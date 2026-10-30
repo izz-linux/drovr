@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { api, ago, type Item } from "$lib/api";
-  import { app, act, select, toast } from "$lib/state.svelte";
-  import { md } from "$lib/md";
-  import { shq } from "$lib/terminal.svelte";
+  import { api, ago, type Item } from "#lib/api.ts";
+  import { app, act, select, toast } from "#lib/state.svelte.ts";
+  import { md } from "#lib/md.ts";
+  import { shq } from "#lib/terminal.svelte.ts";
 
   let showResolved = $state(false);
   let drafts = $state<Record<number, string>>({});

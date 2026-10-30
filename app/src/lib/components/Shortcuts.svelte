@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app } from "$lib/state.svelte";
+  import { app } from "#lib/state.svelte.ts";
   import Modal from "./Modal.svelte";
 
   // ⌘ on macOS, Ctrl+ elsewhere.
