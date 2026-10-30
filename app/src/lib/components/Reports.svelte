@@ -11,12 +11,20 @@
   let feedback = $state("");
   let target = $state("");
   let frameKey = $state(0);
+  let loaded = false;
 
   async function load() {
     try {
       const r = await api.reports();
       dir = r.dir;
       files = r.files;
+      // Coming here for an unread report (the sidebar count, ⌘3) opens the
+      // newest one. Only on arrival, so a refresh never pulls you off a page.
+      if (!loaded) {
+        loaded = true;
+        const next = files.find((f) => !f.seen);
+        if (next && !current) open(next);
+      }
     } catch (e) { toast(String(e)); }
   }
 
