@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-15
     environment: release
     env:
       TAG: ${{ inputs.tag }}
