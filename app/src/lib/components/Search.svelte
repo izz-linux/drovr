@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { api, type Page } from "$lib/api";
-  import { app, act, toast, search as s, runSearch } from "$lib/state.svelte";
-  import { md } from "$lib/md";
+  import { api, type Page } from "#lib/api.ts";
+  import { app, act, toast, search as s, runSearch } from "#lib/state.svelte.ts";
+  import { md } from "#lib/md.ts";
   import LookupProgress from "./LookupProgress.svelte";
 
   async function openPage(p: Page) {

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { api, ago, ticketsIn, type Agent, type SprintTicket, type WatchState, type WatchedPr } from "$lib/api";
-  import { app, toast, select } from "$lib/state.svelte";
+  import { api, ago, ticketsIn, type Agent, type SprintTicket, type WatchState, type WatchedPr } from "#lib/api.ts";
+  import { app, toast, select } from "#lib/state.svelte.ts";
   import Retros from "./Retros.svelte";
 
   // Your sprint as the watcher sees it (Jira through your CLI, PRs through

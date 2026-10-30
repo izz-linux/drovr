@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { api } from "$lib/api";
+  import { api } from "#lib/api.ts";
 
   // Shown while a Jira / Confluence / Slack lookup runs: what it's doing,
   // how long it's been, and a way to stop it.

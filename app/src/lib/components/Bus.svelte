@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { api, ago, type Message, type Note } from "$lib/api";
-  import { app, act } from "$lib/state.svelte";
+  import { api, ago, type Message, type Note } from "#lib/api.ts";
+  import { app, act } from "#lib/state.svelte.ts";
 
   let group = $state("");
   let messages = $state<Message[]>([]);

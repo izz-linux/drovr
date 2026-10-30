@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { Defaults } from "$lib/api";
-  import { app } from "$lib/state.svelte";
+  import type { Defaults } from "#lib/api.ts";
+  import { app } from "#lib/state.svelte.ts";
 
   // What runs the agent (Claude Code or Codex) and where (headless or
   // herdr), preselected from the config.

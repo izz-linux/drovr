@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, ago, type ClaudeSession, type Defaults, type PlansFolder } from "$lib/api";
-  import { app, act, select, toast } from "$lib/state.svelte";
+  import { api, ago, type ClaudeSession, type Defaults, type PlansFolder } from "#lib/api.ts";
+  import { app, act, select, toast } from "#lib/state.svelte.ts";
   import Modal from "./Modal.svelte";
   import RunDefaults from "./RunDefaults.svelte";
-  import { slug, nameInput, NAME_FIELD } from "$lib/slug";
+  import { slug, nameInput, NAME_FIELD } from "#lib/slug.ts";
 
   let defaults = $state<Defaults | null>(null);
   let folders = $state<PlansFolder[]>([]);

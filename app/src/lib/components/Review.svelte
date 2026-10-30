@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { api, type Repo } from "$lib/api";
-  import { app, act, toast } from "$lib/state.svelte";
+  import { api, type Repo } from "#lib/api.ts";
+  import { app, act, toast } from "#lib/state.svelte.ts";
 
   let info = $state<{ cwd: string; repos: Repo[] } | null>(null);
   let root = $state("");

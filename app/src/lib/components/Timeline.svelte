@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { api, type RecordEvent, type TicketRecord } from "$lib/api";
-  import { app, toast } from "$lib/state.svelte";
+  import { api, type RecordEvent, type TicketRecord } from "#lib/api.ts";
+  import { app, toast } from "#lib/state.svelte.ts";
   import Modal from "./Modal.svelte";
 
   // A ticket's record: every run, question, answer, decision, message and
