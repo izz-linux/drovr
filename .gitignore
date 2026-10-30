@@ -1,0 +1,12 @@
+/target/
+node_modules/
+app/build/
+app/.svelte-kit/
+app/src-tauri/binaries/
+app/src-tauri/gen/
+.DS_Store
+
+# macOS signing / notarization credentials — never commit these
+.env.signing
+*.p8
+AuthKey_*.p8

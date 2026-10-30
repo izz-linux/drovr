@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "bump-minor-pre-major": true,
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "package-name": "drovr",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": "app/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "app/src-tauri/tauri.conf.json", "jsonpath": "$.version" },
+        { "type": "toml", "path": "app/src-tauri/Cargo.toml", "jsonpath": "$.package.version" },
+        { "type": "toml", "path": "crates/drovr-core/Cargo.toml", "jsonpath": "$.package.version" },
+        { "type": "toml", "path": "crates/drovr-cli/Cargo.toml", "jsonpath": "$.package.version" },
+        { "type": "generic", "path": "README.md" }
+      ]
+    }
+  }
+}

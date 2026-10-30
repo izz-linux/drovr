@@ -1,0 +1,67 @@
+name: CI
+
+# Fast checks on pull requests: does it compile and pass its tests on macOS?
+# No .app or .dmg here; signed releases are built from version tags
+# (release.yml) or locally with `pnpm tauri:build:signed`.
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "config.example.toml"
+      - ".env.signing.example"
+
+# A newer push to the same PR cancels the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          package_json_file: app/package.json
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Core tests
+        run: cargo test -p drovr-core
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check the UI
+        working-directory: app
+        run: pnpm check
+
+      # tauri::generate_context! embeds the built frontend, and tauri-build
+      # needs the drovr sidecar binary to exist, so build both (debug) first.
+      - name: Build frontend and CLI
+        working-directory: app
+        run: pnpm build && pnpm cli
+
+      - name: App tests
+        run: cargo test -p drovr-app
+
+      # Every crate, tests included; any warning fails the check.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

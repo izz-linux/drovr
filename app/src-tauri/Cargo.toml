@@ -1,0 +1,28 @@
+[package]
+name = "drovr-app"
+version = "0.5.0"
+description = "drovr: a desktop cockpit for orchestrating Claude Code agents"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "drovr_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+drovr-core = { path = "../../crates/drovr-core" }
+portable-pty = "0.9"
+libc = "0.2"
+tauri-plugin-notification = "2"
+
+[dev-dependencies]
+muda = { version = "0.20.0", default-features = false }

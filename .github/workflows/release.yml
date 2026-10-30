@@ -1,0 +1,127 @@
+name: Release
+
+# Builds a signed, notarized drovr.app/.dmg and attaches it to the GitHub
+# Release for a version tag. Normally release-please.yml runs it when a
+# release PR is merged; pushing a tag by hand (git tag v0.2.0 && git push
+# origin v0.2.0) still works and makes a draft release. Signing works like
+# scripts/build-signed.sh; see docs/signing.md for the secrets it needs.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: The version tag to build, e.g. v1.1.0
+        type: string
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # to create the draft release
+
+jobs:
+  release:
+    runs-on: macos-14
+    environment: release
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Check the tag matches the app version
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("app/src-tauri/tauri.conf.json"))["version"])')
+          if [ "${TAG}" != "v${version}" ]; then
+            echo "::error::Tag ${TAG} doesn't match the app version ${version} in app/src-tauri/tauri.conf.json"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          package_json_file: app/package.json
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: stable
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      # Import the Developer ID certificate into a throwaway keychain, and write
+      # the App Store Connect key to a file (Tauri wants a path).
+      - name: Set up signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY_P8; do
+            if [ -z "${!v}" ]; then echo "::error::Repository secret $v is not set (see docs/signing.md)"; exit 1; fi
+          done
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+          if ! security find-identity -v -p codesigning "$keychain" | grep -qF "\"$APPLE_SIGNING_IDENTITY\""; then
+            echo "::error::The certificate doesn't contain the identity named by APPLE_SIGNING_IDENTITY"
+            security find-identity -v -p codesigning "$keychain"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/keys/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Build, sign and notarize
+        working-directory: app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: pnpm tauri build --bundles app dmg
+
+      - name: Verify signature and notarization
+        run: |
+          app="target/release/bundle/macos/drovr.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --strict --verbose=2 "$app/Contents/MacOS/drovr"
+          spctl -a -vvv -t install "$app"
+          xcrun stapler validate "$app"
+
+      # release-please has already created the release, with the CHANGELOG
+      # entry as its notes; a hand-pushed tag gets a draft to review.
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" target/release/bundle/dmg/*.dmg --clobber
+          else
+            gh release create "$TAG" target/release/bundle/dmg/*.dmg \
+              --draft --generate-notes --title "drovr ${TAG#v}"
+          fi
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/keys" "$RUNNER_TEMP/certificate.p12"

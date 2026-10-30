@@ -1,0 +1,130 @@
+/* Themes match local-wiki (src/App.css there). The id list is in src/lib/themes.ts
+   and src-tauri/src/lib.rs; a Rust test checks they agree. Dark shows until
+   the saved theme loads. */
+:root {
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root,
+[data-theme="dark"] {
+  --bg: #1e1e1e;
+  --panel: #181818;
+  --panel-2: #262626;
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #e8e6e3;
+  --muted: #9a9893;
+  --accent: #4ea1f5;
+  --on-accent: #ffffff;
+  --green: #73c991;
+  --yellow: #f2d48a;
+  --red: #ff7b72;
+  --purple: #c792ea;
+  --cyan: #5ccfe6;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f7f7f5;
+  --panel-2: #efefed;
+  --border: rgba(0, 0, 0, 0.1);
+  --text: #37352f;
+  --muted: #91918e;
+  --accent: #2383e2;
+  --on-accent: #ffffff;
+  --green: #0f7b6c;
+  --yellow: #7a5a00;
+  --red: #c4382f;
+  --purple: #6940a5;
+  --cyan: #2eaadc;
+  color-scheme: light;
+}
+
+
+[data-theme="darcula"] {
+  --bg: #2b2b2b;
+  --panel: #3c3f41;
+  --panel-2: #45494a;
+  --border: rgba(0, 0, 0, 0.35);
+  --text: #a9b7c6;
+  --muted: #808080;
+  --accent: #4e8cc2;
+  --on-accent: #ffffff;
+  --green: #6a8759;
+  --yellow: #e8c46a;
+  --red: #ff6b68;
+  --purple: #9876aa;
+  --cyan: #6897bb;
+  color-scheme: dark;
+}
+
+[data-theme="solarized-dark"] {
+  --bg: #002b36;
+  --panel: #073642;
+  --panel-2: #0b3f4c;
+  --border: rgba(0, 0, 0, 0.35);
+  --text: #93a1a1;
+  --muted: #657b83;
+  --accent: #268bd2;
+  --on-accent: #fdf6e3;
+  --green: #859900;
+  --yellow: #d9a400;
+  --red: #dc322f;
+  --purple: #6c71c4;
+  --cyan: #2aa198;
+  color-scheme: dark;
+}
+
+[data-theme="nord"] {
+  --bg: #2e3440;
+  --panel: #3b4252;
+  --panel-2: #434c5e;
+  --border: rgba(0, 0, 0, 0.3);
+  --text: #d8dee9;
+  --muted: #81a1c1;
+  --accent: #88c0d0;
+  --on-accent: #2e3440;
+  --green: #a3be8c;
+  --yellow: #ebcb8b;
+  --red: #bf616a;
+  --purple: #b48ead;
+  --cyan: #8fbcbb;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+/* Keyboard focus: inputs show it with their border; buttons and links need a ring. */
+:is(button, a, summary, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; } }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+button.ghost { background: transparent; border-color: transparent; }
+button.ghost:hover { border-color: var(--border); }
+input, textarea, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; width: 100%; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+textarea { resize: vertical; font-family: var(--mono); font-size: 12px; }
+label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin: 10px 0 4px; }
+pre, code { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: center; }
+.grow { flex: 1; min-width: 0; }
+.scroll { overflow: auto; }
+.pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.s-working { color: var(--cyan); border-color: var(--cyan); }
+.s-blocked { color: var(--yellow); border-color: var(--yellow); }
+.s-done { color: var(--green); border-color: var(--green); }
+.s-error { color: var(--red); border-color: var(--red); }
+.s-interrupted { color: var(--yellow); border-color: var(--yellow); border-style: dashed; }
+.s-stopped { color: var(--muted); }
+.md :is(p, ul, ol, pre) { margin: 4px 0; }
+.md pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow: auto; }
+.md code { background: var(--bg); padding: 0 3px; border-radius: 3px; }
+.md a { color: var(--accent); }
+.empty { color: var(--muted); padding: 40px; text-align: center; }
+.error-banner { color: var(--red); white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }

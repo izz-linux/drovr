@@ -1,0 +1,148 @@
+# Copy to ~/.config/drovr/config.toml. Everything is optional; these are the defaults
+# plus examples. The Settings view in the app edits this file too.
+
+[defaults]
+backend = "headless"          # "headless" (drovr runs `claude -p`) or "herdr" (interactive panes)
+harness = "claude"            # the CLI agents run with: "claude", or "codex" (experimental, headless only)
+cwd = "~/code"                # where new agents start when you don't give a directory
+model = ""                    # e.g. "claude-sonnet-5-5"; empty = your Claude Code default
+permission_mode = "acceptEdits"
+worktrees = false             # true = every agent gets its own `git worktree` + branch drovr/<name>
+auto_wake = true              # re-prompt idle agents when a message or answer arrives
+max_budget_usd = 0            # per run; 0 = no cap
+disallowed_tools = []         # e.g. ["Artifact"] to keep reports inside drovr
+auto_resume = false           # resume headless runs a reboot/crash interrupted, without asking
+your_name = ""                # what agents call you ("Notes from Izz", ask_izz); empty = "the human" and ask_human
+cost_warning_usd = 10         # flag an agent in the app once its runs cost more than this; 0 = off
+copy_on_select = true         # selecting text in an agent's output copies it
+
+[claude]
+command = "claude"
+extra_args = []               # e.g. ["--add-dir", "~/code/shared"]
+
+[codex]                       # agents with harness = "codex" (experimental)
+command = "codex"
+model = ""                    # empty = Codex's default
+sandbox = "workspace-write"   # read-only, workspace-write or danger-full-access; there are no approval prompts,
+                              # so anything outside the sandbox comes to the Inbox as a proposed command
+extra_args = []
+
+[notifications]
+enabled = true                # a macOS notification when something new lands in the Inbox while drovr is in the background
+
+[workflow]
+enabled = false               # the ticket workflow: each ticket's record (ledger.jsonl), the timeline, record_decision, the watcher and Pipeline, and stages for groups created while it's on; false = as before
+
+[watch]                       # the watcher (with workflow.enabled): your sprint's tickets and their PRs, read without an agent
+jql = "assignee = currentUser() AND sprint in openSprints() ORDER BY updated DESC"
+github_repos = []             # e.g. ["yourorg/*", "someone/repo"]; a PR belongs to a ticket when its title has the key
+jira_poll_secs = 300
+pr_poll_secs = 120            # 60 at most while a PR's checks are running
+gh = "gh"
+merged_transition = ""        # when a ticket's PR merges, also draft this move (twg: the transition's id, e.g. "31")
+dispatch_transition = ""      # when you dispatch a ticket, make this move straight away, e.g. the id of "In Progress"
+
+[watch.rules]                 # wake the agent, ask you in the Inbox, or ignore (it's still recorded)
+ci_failed = "wake"            # with the failing log
+changes_requested = "wake"    # with the reviews and review comments
+new_review = "wake"
+conflict = "wake"
+approved_green = "ask"        # ready to merge
+merged = "ask"                # plus Jira drafts
+pr_closed = "ask"
+jira_changed = "ask"          # status, assignee, comments, or it left the sprint
+
+[stages]                      # the ticket workflow's stages: one agent each, spawned by the group's lead; you approve every handoff
+order = ["triage", "research", "blueprint", "build", "close"]
+build_checkpoint_tokens = 150000   # the build stage checkpoints and starts a fresh session past this much context (0 = off)
+build_checkpoint_usd = 15          # ...or once its session has cost this much (0 = off)
+tidy_on_close = true               # remove stopped stage agents when the last handoff is approved
+
+[retro]                       # a retro you start from a ticket's timeline or Pipeline
+model = ""                    # the retro agent's model; empty = the default
+skills_dir = "~/.claude/skills"   # where approved skill proposals are written
+
+[stages.models]               # the model each stage runs on; unset = the default
+# triage = "claude-haiku-5-5"
+# blueprint = "claude-opus-5-5"
+
+[permissions]
+# Headless agents use these without asking; everything else shows up in the Inbox.
+# WebFetch is left out on purpose: an agent that can both Read any file and fetch any
+# URL can be talked into sending your files out by a ticket, page or Slack message.
+auto_allow = ["Read", "Glob", "Grep", "LS", "TodoWrite", "WebSearch", "mcp__drovr__*"]
+wait_seconds = 900
+
+[orchestrator]
+auto_spawn = true             # false = approve each worker in the Inbox
+max_workers = 6
+
+[commands]
+timeout_seconds = 600
+
+# herdr CLI templates ({placeholders} are shell-quoted). Adjust if your herdr version differs.
+[herdr]
+command = "herdr"
+split = "{herdr} pane split --current --direction right --cwd {cwd} --no-focus"
+start = "{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}"
+run = "{herdr} pane run {pane} {cmd}"
+prompt = "{herdr} agent prompt {target} {text}"
+read = "{herdr} agent read {target} --source recent-unwrapped --lines {lines}"
+stop = "{herdr} pane close {pane}"
+get = "{herdr} agent get {target}"
+
+# ---- Sources -------------------------------------------------------------
+# provider = "agent"   : a one-shot Claude agent uses the Jira/Confluence/Slack MCPs you already have
+# provider = "rest"    : talk to the API directly (fast; needs a token in the environment)
+# provider = "command" : run any CLI that prints JSON, e.g. twg (Atlassian's Teamwork Graph CLI)
+
+[jira]
+provider = "agent"
+default_query = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+ticket_skill = ""             # the skill agents follow to write a ticket for their task (New agent → Create a Jira ticket), e.g. "~/.claude/skills/ticket-writing/SKILL.md"
+# provider = "rest"
+# base_url = "https://yourco.atlassian.net"
+# email = "you@yourco.com"
+# token_env = "JIRA_API_TOKEN"
+# provider = "command"
+# get_cmd = "twg jira workitem get {key} --comments -o json"
+# search_cmd = "twg jira workitem query --jql {query} -o json"
+# comment_cmd = "twg jira workitem comment create --issue-id {id} --body-format markdown --body {body} -o json"
+# transition_cmd = "twg jira workitem transition --id {key} --transition-id {transition} -o json"
+
+[confluence]
+provider = "agent"
+# Pages agents write, saved as drafts once you approve them (see README):
+# page_get_cmd = "twg confluence content get {id} --draft --detail full --format html -o json"
+# page_update_cmd = "twg confluence content update {id} --draft --snapshot-token {token} --title {title} --body-file {file} --format html --ack-body-formats --yes -o json"
+# page_create_cmd = "twg confluence content create --space-id {space} --parent-id {parent} --content-type page --title {title} --body-file {file} --format html --ack-body-formats --draft --yes -o json"
+# provider = "rest"
+# base_url = "https://yourco.atlassian.net"
+# email = "you@yourco.com"
+# token_env = "JIRA_API_TOKEN"
+# provider = "command"          # get_cmd ({id}) and search_cmd ({query}) must print drovr's page shape: {id, title, space, url, excerpt, body}
+# get_cmd = ""
+# search_cmd = ""
+
+[slack]
+provider = "agent"
+# provider = "rest"
+# token_env = "SLACK_USER_TOKEN"   # search.messages needs a user token (xoxp-…)
+
+[reports]
+dir = "~/.claude/plans"       # HTML reports; a group's go in <dir>/<group>/
+
+[terminal]                    # the terminal panel (⌃`) under an agent's output
+shell = ""                    # empty: $SHELL, else /bin/zsh; runs as a login shell
+font_family = ""              # empty: the app's monospace font; e.g. "MesloLGS NF" for powerlevel10k
+font_size = 13
+option_as_meta = false        # true: Option sends Esc+, like iTerm2's "Esc+" setting
+copy_on_select = true         # selecting text copies it, like iTerm2
+
+[agent_queries]
+model = "haiku"               # lookups only; agents use defaults.model
+timeout_seconds = 180
+auto_allow = []               # extra tools lookups may use, e.g. ["mcp__atlassian__getJiraIssue"];
+                              # read-only MCP tools (get/search/list/read…) are allowed already,
+                              # except ones that can reach any web address (fetchers, browsers, scrapers)
+servers = []                  # only these MCP servers' read-only tools, e.g. ["atlassian", "slack"]; empty = any
