@@ -54,6 +54,21 @@ jobs:
           git commit -m "chore: update Cargo.lock" Cargo.lock
           git push
 
+  # CI is required, but the built-in token's pushes and PRs don't trigger
+  # pull_request runs, so start CI on the release PR's branch directly.
+  ci:
+    needs: [release-please, lockfile]
+    if: needs.release-please.outputs.pr
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Run CI on the release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+        run: gh workflow run ci.yml -R "$GITHUB_REPOSITORY" --ref "$BRANCH"
+
   build:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
