@@ -29,6 +29,7 @@ A lightweight macOS desktop cockpit (Tauri + Svelte) for running Claude Code age
 - [Building, signing and CI](#building-signing-and-ci)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
+- [Security](#security)
 - [License](#license)
 
 ## Status
@@ -709,6 +710,10 @@ Repo rules, also in [CLAUDE.md](CLAUDE.md):
   - **If it says a tool isn't allowed:** drovr didn't recognize the tool as read-only. Add its full name, e.g. `mcp__atlassian__getJiraIssue`, to `agent_queries.auto_allow`.
 - **herdr panes don't start:** run the `start` template from `config.example.toml` by hand in a herdr pane, with an agent name and pane ID, and adjust the template to match what your herdr version accepts.
 - **A report shows blank:** it must be a complete HTML file. Click **Open in browser** to see what the browser makes of it.
+
+## Security
+
+Please report vulnerabilities privately, not in an issue: see [SECURITY.md](SECURITY.md).
 
 ## License
 
