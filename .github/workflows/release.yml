@@ -108,16 +108,19 @@ jobs:
           xcrun stapler validate "$app"
 
       # release-please has already created the release, with the CHANGELOG
-      # entry as its notes; a hand-pushed tag gets a draft to review.
+      # entry as its notes, and named it after the tag; a hand-pushed tag gets
+      # a draft to review. Either way the title ends up as drovr-<version>.
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          title="drovr-${TAG#v}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" target/release/bundle/dmg/*.dmg --clobber
+            gh release edit "$TAG" --title "$title"
           else
             gh release create "$TAG" target/release/bundle/dmg/*.dmg \
-              --draft --generate-notes --title "drovr ${TAG#v}"
+              --draft --generate-notes --title "$title"
           fi
 
       - name: Clean up signing material
