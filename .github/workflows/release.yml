@@ -2,9 +2,8 @@ name: Release
 
 # Builds a signed, notarized drovr.app/.dmg and attaches it to the GitHub
 # Release for a version tag. Only release-please.yml runs it, when a release
-# PR is merged: the "release tags" ruleset stops anyone pushing a v* tag by
-# hand. Signing works like scripts/build-signed.sh; see docs/signing.md for
-# the secrets it needs.
+# PR is merged; a tag pushed by hand builds nothing. Signing works like
+# scripts/build-signed.sh; see docs/signing.md for the secrets it needs.
 on:
   workflow_call:
     inputs:

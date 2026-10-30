@@ -103,7 +103,7 @@ One-time repository settings:
 - **Settings → Actions → General → Workflow permissions:** turn on **Allow GitHub Actions to create and approve pull requests**, so release-please can open its PR.
 - PRs opened with the built-in token don't trigger other workflows, and CI is a required check on `main`. So after updating the release PR, `release-please.yml` starts CI on its branch with `workflow_dispatch`, which the built-in token is allowed to trigger.
 
-There's no releasing by hand. The **release tags** ruleset blocks pushing `v*` tags, so only release-please (through the GitHub Actions app, which is the ruleset's only bypass) creates them.
+There's no releasing by hand: `release.yml` only runs when release-please calls it, so pushing a `v*` tag builds nothing. The **release tags** ruleset, which has no bypass, stops anyone moving or deleting a `v*` tag. It can't restrict creating them as well, because on a personal account's repo the built-in GitHub Actions app can't be a bypass actor, and release-please needs to create them.
 
 The job runs in the GitHub environment `release`, which holds the signing secrets and only deploys from `main`, so a workflow on any other branch can't read them. To make each release wait for your approval, add yourself as a required reviewer under **Settings → Environments → release**.
 

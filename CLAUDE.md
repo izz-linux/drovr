@@ -22,7 +22,7 @@
 - **Core:** `crates/drovr-core`: SQLite state, the agent engine, the coordination MCP server, Jira/Confluence/Slack lookups, reports
 - **CLI:** `crates/drovr-cli`: the `drovr` binary. It's also each agent's MCP server and the hook headless runs call when they finish. It's bundled into the app as a sidecar.
 - **Package manager:** pnpm (`packageManager` in `app/package.json`)
-- **Target:** macOS (Apple Silicon). CI: `.github/workflows/ci.yml` runs checks on PRs (no bundle); `.github/workflows/release-please.yml` keeps a release PR on `main`; merging it tags the release and runs `.github/workflows/release.yml`, which builds a signed, notarized `.dmg`. That's the only way to release: a ruleset blocks pushing `v*` tags by hand.
+- **Target:** macOS (Apple Silicon). CI: `.github/workflows/ci.yml` runs checks on PRs (no bundle); `.github/workflows/release-please.yml` keeps a release PR on `main`; merging it tags the release and runs `.github/workflows/release.yml`, which builds a signed, notarized `.dmg`. That's the only way to release: pushing a `v*` tag by hand builds nothing, and the `release tags` ruleset stops anyone moving or deleting one.
 
 ## Commands
 
