@@ -1,14 +1,10 @@
 name: Release
 
 # Builds a signed, notarized drovr.app/.dmg and attaches it to the GitHub
-# Release for a version tag. Normally release-please.yml runs it when a
-# release PR is merged; pushing a tag by hand (git tag v0.2.0 && git push
-# origin v0.2.0) still works and makes a draft release. Signing works like
+# Release for a version tag. Only release-please.yml runs it, when a release
+# PR is merged; a tag pushed by hand builds nothing. Signing works like
 # scripts/build-signed.sh; see docs/signing.md for the secrets it needs.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_call:
     inputs:
       tag:
@@ -17,22 +13,22 @@ on:
         required: true
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 permissions:
-  contents: write # to create the draft release
+  contents: write # to attach the .dmg and set the title
 
 jobs:
   release:
     runs-on: macos-14
     environment: release
     env:
-      TAG: ${{ inputs.tag || github.ref_name }}
+      TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag }}
 
       - name: Check the tag matches the app version
         run: |
@@ -108,17 +104,13 @@ jobs:
           xcrun stapler validate "$app"
 
       # release-please has already created the release, with the CHANGELOG
-      # entry as its notes; a hand-pushed tag gets a draft to review.
+      # entry as its notes, and named it after the tag.
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" target/release/bundle/dmg/*.dmg --clobber
-          else
-            gh release create "$TAG" target/release/bundle/dmg/*.dmg \
-              --draft --generate-notes --title "drovr ${TAG#v}"
-          fi
+          gh release upload "$TAG" target/release/bundle/dmg/*.dmg --clobber
+          gh release edit "$TAG" --title "drovr-${TAG#v}"
 
       - name: Clean up signing material
         if: always()

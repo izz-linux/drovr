@@ -95,22 +95,17 @@ target/release/bundle/macos/drovr.app
 Releases come from [release-please](https://github.com/googleapis/release-please) (`.github/workflows/release-please.yml`):
 
 1. Merge work into `main` with Conventional Commit messages (`fix: …`, `feat: …`). Squash-merged PRs use the PR title, so title PRs that way.
-2. release-please opens or updates a PR named like `chore(main): release 1.1.0`, with the version bumped everywhere and the `CHANGELOG.md` entry.
-3. Merge that PR when you want to ship. release-please tags it and creates the GitHub Release, and `.github/workflows/release.yml` then builds the same signed, notarized bundle on GitHub and attaches the `.dmg` to that release.
+2. release-please opens or updates a PR named like `chore(main): release 0.6.0`, with the version bumped everywhere and the `CHANGELOG.md` entry.
+3. Merge that PR when you want to ship. release-please tags it and creates the GitHub Release, and `.github/workflows/release.yml` then builds the same signed, notarized bundle on GitHub, attaches the `.dmg` and titles the release `drovr-<version>`.
 
 One-time repository settings:
 
 - **Settings → Actions → General → Workflow permissions:** turn on **Allow GitHub Actions to create and approve pull requests**, so release-please can open its PR.
-- PRs opened with the built-in token don't trigger other workflows, so CI doesn't run on the release PR. That's fine unless branch protection requires CI to pass; if it does, give release-please a fine-grained token or a GitHub App token through the action's `token` input.
+- PRs opened with the built-in token don't trigger other workflows, and CI is a required check on `main`. So after updating the release PR, `release-please.yml` starts CI on its branch with `workflow_dispatch`, which the built-in token is allowed to trigger.
 
-You can still release by hand by pushing a version tag. That builds the bundle and attaches it to a **draft** GitHub Release, which you review and publish yourself:
+There's no releasing by hand: `release.yml` only runs when release-please calls it, so pushing a `v*` tag builds nothing. The **release tags** ruleset, which has no bypass, stops anyone moving or deleting a `v*` tag. It can't restrict creating them as well, because on a personal account's repo the built-in GitHub Actions app can't be a bypass actor, and release-please needs to create them.
 
-```bash
-# bump "version" in app/src-tauri/tauri.conf.json first; the tag must match it
-git tag v1.0.1 && git push origin v1.0.1
-```
-
-The job runs in a GitHub environment named `release`, which GitHub creates the first time the job runs. To make each release wait for your approval, add yourself as a required reviewer under **Settings → Environments → release**.
+The job runs in the GitHub environment `release`, which holds the signing secrets and only deploys from `main`, so a workflow on any other branch can't read them. To make each release wait for your approval, add yourself as a required reviewer under **Settings → Environments → release**.
 
 ### Secrets
 
@@ -139,7 +134,7 @@ What the job does:
 2. Imports the certificate into a temporary keychain, and checks that `APPLE_SIGNING_IDENTITY` is in it.
 3. Builds, signs and notarizes the app.
 4. Verifies the result with `codesign`, `spctl` and `stapler`.
-5. Creates the draft release.
+5. Attaches the `.dmg` to the release and titles it `drovr-<version>`.
 6. Deletes the keychain and the key file, even if an earlier step failed.
 
 Pull-request CI (`.github/workflows/ci.yml`) never signs and builds no bundle: it only runs the tests and the type-check.
