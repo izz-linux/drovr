@@ -33,7 +33,9 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   # release-please can't pick our packages out of Cargo.lock, so update their
-  # versions there on the release PR's branch.
+  # versions there on the release PR's branch. The commit goes through the API
+  # rather than git push, so GitHub signs it: main requires signed commits, and
+  # a personal account's rulesets can't exempt GitHub Actions.
   lockfile:
     needs: release-please
     if: needs.release-please.outputs.pr
@@ -46,13 +48,26 @@ jobs:
           ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
 
       - name: Update Cargo.lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
         run: |
           cargo update --workspace
           if git diff --quiet Cargo.lock; then exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: update Cargo.lock" Cargo.lock
-          git push
+          jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg branch "$BRANCH" \
+            --arg head "$(git rev-parse HEAD)" \
+            --rawfile lock <(base64 -w0 Cargo.lock) \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: { input: {
+                branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                expectedHeadOid: $head,
+                message: { headline: "chore: update Cargo.lock" },
+                fileChanges: { additions: [ { path: "Cargo.lock", contents: $lock } ] }
+              } }
+            }' | gh api graphql --input - --jq '.data.createCommitOnBranch.commit.oid'
 
   # CI is required, but the built-in token's pushes and PRs don't trigger
   # pull_request runs, so start CI on the release PR's branch directly.
