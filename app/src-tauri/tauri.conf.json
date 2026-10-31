@@ -65,6 +65,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "copyright": "Copyright © 2026 Izz Noland. MIT License.",
     "externalBin": [
       "binaries/drovr"
     ],

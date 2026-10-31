@@ -931,9 +931,7 @@ mod tests {
     fn web_links_leave_the_app() {
         let dev = Url::parse("http://localhost:1420").unwrap();
         let link = |s: &str| is_web_link(&Url::parse(s).unwrap(), Some(&dev));
-        assert!(link(
-            "https://github.com/izz-linux/agentic-workflow/pull/12"
-        ));
+        assert!(link("https://github.com/izz-linux/drovr/pull/12"));
         assert!(link("http://localhost:3000/"));
         assert!(link("mailto:izz@linux.com"));
         // drovr's own pages stay in drovr
