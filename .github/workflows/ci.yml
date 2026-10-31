@@ -8,7 +8,9 @@ name: CI
 # A docs-only PR skips it through `if:` (a skipped job reports success) rather
 # than `paths-ignore` (which would leave the check pending for ever).
 # release-please.yml dispatches this workflow on its release PR, because PRs
-# opened with the built-in token don't trigger pull_request runs.
+# opened with the built-in token don't trigger pull_request runs. That PR only
+# bumps versions and the changelog of code already tested on main, so `check`
+# is skipped there too.
 on:
   pull_request:
   workflow_dispatch:
@@ -35,7 +37,12 @@ jobs:
         id: filter
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
+          if [[ "$BRANCH" == release-please--* ]]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -z "$BASE" ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
             exit 0

@@ -101,7 +101,7 @@ Releases come from [release-please](https://github.com/googleapis/release-please
 One-time repository settings:
 
 - **Settings → Actions → General → Workflow permissions:** turn on **Allow GitHub Actions to create and approve pull requests**, so release-please can open its PR.
-- PRs opened with the built-in token don't trigger other workflows, and CI is a required check on `main`. So after updating the release PR, `release-please.yml` starts CI on its branch with `workflow_dispatch`, which the built-in token is allowed to trigger.
+- PRs opened with the built-in token don't trigger other workflows, and CI is a required check on `main`. So after updating the release PR, `release-please.yml` starts CI on its branch with `workflow_dispatch`, which the built-in token is allowed to trigger. CI skips its `check` job on release-please branches, so the required check passes in seconds: the PR only bumps versions and the changelog, and the release build still verifies the app after it merges.
 
 There's no releasing by hand: `release.yml` only runs when release-please calls it, so pushing a `v*` tag builds nothing. The **release tags** ruleset, which has no bypass, stops anyone moving or deleting a `v*` tag. It can't restrict creating them as well, because on a personal account's repo the built-in GitHub Actions app can't be a bypass actor, and release-please needs to create them.
 
