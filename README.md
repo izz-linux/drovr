@@ -70,10 +70,10 @@ drovr is at version 0.6.0. <!-- x-release-please-version -->
 - herdr (optional): `brew install herdr`
 - For the ticket workflow (optional): Atlassian's [twg](https://atlassian.github.io/twg-cli/) for Jira and Confluence, and the GitHub CLI (`gh`), both logged in
 
-**Run it:**
+**Run it** (or download the signed, notarized `.dmg` from [Releases](https://github.com/izz-linux/drovr/releases)):
 
 ```sh
-git clone https://github.com/izz-linux/agentic-workflow drovr && cd drovr
+git clone https://github.com/izz-linux/drovr && cd drovr
 mkdir -p ~/.config/drovr && cp config.example.toml ~/.config/drovr/config.toml
 # edit ~/.config/drovr/config.toml: at least defaults.cwd (where new agents start)
 cd app
@@ -719,4 +719,4 @@ Please report vulnerabilities privately, not in an issue: see [SECURITY.md](SECU
 
 [MIT](LICENSE) © 2026 Izz Noland
 
-**drovr → About drovr** shows the version and the copyright line, with the license. The copyright line is `bundle.copyright` in `app/src-tauri/tauri.conf.json`, and a test keeps it in step with `LICENSE`.
+**drovr → About drovr** shows the version and the copyright line, with the license. **Help → drovr on GitHub** opens this repository. The copyright line is `bundle.copyright` in `app/src-tauri/tauri.conf.json`, and a test keeps it in step with `LICENSE`.
