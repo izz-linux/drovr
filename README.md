@@ -718,3 +718,5 @@ Please report vulnerabilities privately, not in an issue: see [SECURITY.md](SECU
 ## License
 
 [MIT](LICENSE) © 2026 Izz Noland
+
+**drovr → About drovr** shows the version and the copyright line, with the license. The copyright line is `bundle.copyright` in `app/src-tauri/tauri.conf.json`, and a test keeps it in step with `LICENSE`.

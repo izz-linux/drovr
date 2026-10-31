@@ -4,7 +4,10 @@
 //! which the UI applies and saves through `save_theme`. The theme lives in the
 //! store plugin's `session.json`.
 
-use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, SubmenuBuilder};
+use tauri::image::Image;
+use tauri::menu::{
+    AboutMetadata, CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, SubmenuBuilder,
+};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 
@@ -61,18 +64,51 @@ pub async fn save_theme(app: AppHandle, theme: String) -> Result<(), String> {
     store.save().map_err(|e| e.to_string())
 }
 
+/// drovr > About drovr: the name, version, icon and copyright, as a standard
+/// Mac About panel shows them. The copyright (with the license) is
+/// `bundle.copyright` in tauri.conf.json, which also puts it in Info.plist.
+/// No credits: macOS shows them as plain, left-aligned body text.
+fn about<'a>(copyright: Option<String>, icon: Option<Image<'a>>) -> AboutMetadata<'a> {
+    AboutMetadata {
+        copyright,
+        icon,
+        ..Default::default()
+    }
+}
+
 pub fn build(app: &tauri::App) -> tauri::Result<()> {
     let handle = app.handle();
     let current = stored_theme(handle).unwrap_or_else(|| DEFAULT_THEME.to_string());
 
-    let app_menu = SubmenuBuilder::new(handle, "drovr")
-        .item(&PredefinedMenuItem::about(handle, None, None)?)
+    // Name the items ourselves: left to macOS, they use the process name,
+    // which is "drovr-app" when it isn't running from the bundle.
+    let name = handle
+        .config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| "drovr".into());
+    let about = about(
+        handle.config().bundle.copyright.clone(),
+        handle.default_window_icon().cloned(),
+    );
+    let app_menu = SubmenuBuilder::new(handle, &name)
+        .item(&PredefinedMenuItem::about(
+            handle,
+            Some(&format!("About {name}")),
+            Some(about),
+        )?)
         .separator()
-        .item(&PredefinedMenuItem::hide(handle, None)?)
+        .item(&PredefinedMenuItem::hide(
+            handle,
+            Some(&format!("Hide {name}")),
+        )?)
         .item(&PredefinedMenuItem::hide_others(handle, None)?)
         .item(&PredefinedMenuItem::show_all(handle, None)?)
         .separator()
-        .item(&PredefinedMenuItem::quit(handle, None)?)
+        .item(&PredefinedMenuItem::quit(
+            handle,
+            Some(&format!("Quit {name}")),
+        )?)
         .build()?;
 
     // Without an Edit menu, ⌘C / ⌘V / ⌘A don't work in macOS webviews.
@@ -159,6 +195,34 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::THEMES;
+
+    #[test]
+    fn about_shows_the_copyright_and_license() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let copyright = conf["bundle"]["copyright"].as_str().unwrap();
+        let about = super::about(Some(copyright.to_string()), None);
+        assert_eq!(about.copyright.as_deref(), Some(copyright));
+        assert!(about.credits.is_none());
+
+        // "Copyright © <year> <holder>. MIT License.", matching LICENSE.
+        let (holder, license_name) = copyright
+            .strip_prefix("Copyright © ")
+            .and_then(|s| s.split_once(". "))
+            .expect("Copyright © <year> <holder>. <license>.");
+        let license = include_str!("../../../LICENSE");
+        assert!(
+            license.starts_with(&format!(
+                "{} License",
+                license_name.trim_end_matches(" License.")
+            )),
+            "tauri.conf.json names {license_name} but LICENSE is something else"
+        );
+        assert!(
+            license.contains(&format!("Copyright (c) {holder}")),
+            "tauri.conf.json's copyright ({copyright}) doesn't match LICENSE"
+        );
+    }
 
     #[test]
     fn shortcuts_parse() {
