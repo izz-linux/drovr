@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/izz-linux/drovr/compare/v0.6.0...v0.7.0) (2026-10-31)
+
+
+### Features
+
+* show the copyright and license in About drovr, and link the repo from Help ([#11](https://github.com/izz-linux/drovr/issues/11)) ([050d09c](https://github.com/izz-linux/drovr/commit/050d09c7df71a400ed23d41690c53bdd5a5edfab))
+
 ## [0.6.0](https://github.com/izz-linux/drovr/compare/v0.5.0...v0.6.0) (2026-10-31)
 
 

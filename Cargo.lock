@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "drovr-app"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "drovr-core",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "drovr-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "drovr-core",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "drovr-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
