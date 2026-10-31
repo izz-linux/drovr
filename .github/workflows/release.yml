@@ -93,7 +93,37 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        run: pnpm tauri build --bundles app dmg
+        run: pnpm tauri build --bundles app
+
+      # Tauri staples right after Apple accepts the app, but the ticket can take
+      # a while to be downloadable, and Tauri ignores a failed staple. Retry it
+      # here, before the .dmg is made, so the app in the .dmg carries its ticket.
+      - name: Staple the notarization ticket
+        run: |
+          app="target/release/bundle/macos/drovr.app"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if xcrun stapler validate "$app" >/dev/null 2>&1 || xcrun stapler staple "$app"; then
+              exit 0
+            fi
+            echo "Ticket not available yet (attempt $attempt); retrying in 30s"
+            sleep 30
+          done
+          echo "::error::Couldn't staple the notarization ticket to drovr.app"
+          exit 1
+
+      # The .dmg Tauri would make (drovr.app beside an Applications shortcut),
+      # from the stapled app.
+      - name: Make the .dmg
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          dmg="target/release/bundle/dmg/drovr_${TAG#v}_aarch64.dmg"
+          staging="$RUNNER_TEMP/dmg"
+          mkdir -p "$staging" "$(dirname "$dmg")"
+          cp -R target/release/bundle/macos/drovr.app "$staging/"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname drovr -srcfolder "$staging" -ov -format UDZO "$dmg"
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
 
       - name: Verify signature and notarization
         run: |
@@ -102,6 +132,13 @@ jobs:
           codesign --verify --strict --verbose=2 "$app/Contents/MacOS/drovr"
           spctl -a -vvv -t install "$app"
           xcrun stapler validate "$app"
+          for dmg in target/release/bundle/dmg/*.dmg; do
+            codesign --verify --strict --verbose=2 "$dmg"
+            mnt=$(mktemp -d)
+            hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg" >/dev/null
+            xcrun stapler validate "$mnt/drovr.app"
+            hdiutil detach "$mnt" >/dev/null
+          done
 
       # release-please has already created the release, with the CHANGELOG
       # entry as its notes, and named it after the tag.

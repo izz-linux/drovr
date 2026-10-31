@@ -133,9 +133,11 @@ What the job does:
 1. Checks that the tag matches the app version.
 2. Imports the certificate into a temporary keychain, and checks that `APPLE_SIGNING_IDENTITY` is in it.
 3. Builds, signs and notarizes the app.
-4. Verifies the result with `codesign`, `spctl` and `stapler`.
-5. Attaches the `.dmg` to the release and titles it `drovr-<version>`.
-6. Deletes the keychain and the key file, even if an earlier step failed.
+4. Staples the notarization ticket to it, retrying for up to five minutes. Apple can take a while to make the ticket available, and Tauri doesn't fail when its own staple attempt does.
+5. Makes the `.dmg` from the stapled app (with an Applications shortcut) and signs it, so the app inside carries its ticket and opens offline too.
+6. Verifies the result with `codesign`, `spctl` and `stapler`, including the app inside the `.dmg`.
+7. Attaches the `.dmg` to the release and titles it `drovr-<version>`.
+8. Deletes the keychain and the key file, even if an earlier step failed.
 
 Pull-request CI (`.github/workflows/ci.yml`) never signs and builds no bundle: it only runs the tests and the type-check.
 
