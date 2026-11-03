@@ -125,18 +125,31 @@ jobs:
           hdiutil create -volname drovr -srcfolder "$staging" -ov -format UDZO "$dmg"
           codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
 
+      # stapler validate looks the ticket up with Apple, and a dropped
+      # connection fails it (error 68), so it gets a few tries.
       - name: Verify signature and notarization
         run: |
+          validate() {
+            for attempt in 1 2 3; do
+              if xcrun stapler validate "$1"; then
+                return 0
+              fi
+              echo "Couldn't validate the ticket on $1 (attempt $attempt); retrying in 15s"
+              sleep 15
+            done
+            echo "::error::Couldn't validate the notarization ticket on $1"
+            return 1
+          }
           app="target/release/bundle/macos/drovr.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --verify --strict --verbose=2 "$app/Contents/MacOS/drovr"
           spctl -a -vvv -t install "$app"
-          xcrun stapler validate "$app"
+          validate "$app"
           for dmg in target/release/bundle/dmg/*.dmg; do
             codesign --verify --strict --verbose=2 "$dmg"
             mnt=$(mktemp -d)
             hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg" >/dev/null
-            xcrun stapler validate "$mnt/drovr.app"
+            validate "$mnt/drovr.app"
             hdiutil detach "$mnt" >/dev/null
           done
 
