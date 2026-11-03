@@ -19,6 +19,7 @@
   let promptFile = $state("");
   let backend = $state("");
   let harness = $state("");
+  let model = $state("");
   let busy = $state(false);
 
   // Start from a new session, or continue an existing Claude Code session.
@@ -107,7 +108,7 @@
   async function go() {
     busy = true;
     const create = createTicket && !ticket.trim();
-    const spec = { name, group, cwd, ticket, task, backend, harness, resume_session: resuming ? sessionId.trim() : "", fork: resuming && fork,
+    const spec = { name, group, cwd, ticket, task, backend, harness, model: model.trim(), resume_session: resuming ? sessionId.trim() : "", fork: resuming && fork,
       create_ticket: create, ticket_notes: create ? ticketNotes : "" };
     const a = await act(() => api.newAgent(spec), resuming ? `${name} picked up the session` : `${name} started`);
     busy = false;
@@ -174,7 +175,7 @@
     <p class="muted small">The agent writes the ticket first{defaults?.ticket_skill ? ` with ${defaults.ticket_skill}` : ""}, and creates it once you allow the command. Its key becomes the agent's ticket.</p>
   {/if}
 
-  <RunDefaults {defaults} bind:backend bind:harness id="n-backend" claudeOnly={resuming} />
+  <RunDefaults {defaults} bind:backend bind:harness bind:model id="n-backend" claudeOnly={resuming} />
 
   {#snippet footer()}
     <button onclick={close}>Cancel</button>

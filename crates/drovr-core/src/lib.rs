@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod confluence;
+pub mod datadog;
 pub mod engine;
 pub mod harness;
 pub mod ledger;

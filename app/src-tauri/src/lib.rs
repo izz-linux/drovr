@@ -130,8 +130,15 @@ async fn create_group(spec: NewGroup) -> Res<Option<Agent>> {
 }
 
 #[tauri::command]
-async fn add_lead(group: String, goal: String, backend: String, harness: String) -> Res<Agent> {
-    blocking(move |e| e.add_lead(&group, &goal, &backend, &harness)).await
+async fn add_lead(
+    group: String,
+    goal: String,
+    backend: String,
+    harness: String,
+    model: Option<String>,
+) -> Res<Agent> {
+    let model = model.unwrap_or_default();
+    blocking(move |e| e.add_lead(&group, &goal, &backend, &harness, &model)).await
 }
 
 /// The values a new agent gets when a field is left alone.
@@ -141,6 +148,8 @@ struct Defaults {
     backend: String,
     harness: String,
     model: String,
+    /// Codex agents' default model (codex.model).
+    codex_model: String,
     permission_mode: String,
     worktrees: bool,
     plans_dir: String,
@@ -166,6 +175,7 @@ async fn defaults() -> Res<Defaults> {
             backend: d.backend.clone(),
             harness: d.harness.clone(),
             model: d.model.clone(),
+            codex_model: e.cfg.codex.model.clone(),
             permission_mode: d.permission_mode.clone(),
             worktrees: d.worktrees,
             plans_dir: e.cfg.reports.path().display().to_string(),
@@ -497,7 +507,9 @@ async fn dispatch_ticket(
     notes: String,
     group: String,
     target: String,
+    model: Option<String>,
 ) -> Res<Agent> {
+    let model = model.unwrap_or_default().trim().to_string();
     blocking(move |e| {
         let name = if name.trim().is_empty() {
             slug(&ticket.key)
@@ -516,6 +528,7 @@ async fn dispatch_ticket(
                 backend,
                 harness,
                 lead: true,
+                model,
                 ..NewGroup::default()
             };
             e.create_group(spec)?
@@ -528,6 +541,7 @@ async fn dispatch_ticket(
                 harness,
                 ticket: ticket.key.clone(),
                 task,
+                model,
                 ..NewAgent::default()
             })
         }?;

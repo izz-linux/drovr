@@ -17,8 +17,9 @@ drovr runs AI coding agents on your Mac with your permissions, so the places wor
 - **The coordination MCP server** (`drovr mcp`): a tool call doing more than its description says, or reaching another agent's data.
 - **Permission prompts:** a way to get a tool approved without you, or past `permissions.wait_seconds`.
 - **Rendered content:** reports, Confluence previews and diffs escaping their sandbox or the content security policy.
+- **Commands drovr approves:** a command that runs without asking under `datadog.pup` but does more than one read-only `pup` command.
 - **Commands drovr runs:** the `[herdr]`, `jira` and `confluence` command templates, where ticket or page text could inject shell.
 - **Secrets:** tokens leaking into the ledger, reports or logs past the redaction in `ledger.rs`.
 - **Release builds:** anything that would let someone other than the maintainer publish a signed release.
 
-Out of scope: what the agents themselves choose to do with the permissions you give them, and issues in Claude Code, Codex, herdr, twg or gh, which should go to those projects.
+Out of scope: what the agents themselves choose to do with the permissions you give them, and issues in Claude Code, Codex, herdr, twg, gh or pup, which should go to those projects.

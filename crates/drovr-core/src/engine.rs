@@ -80,6 +80,8 @@ pub struct NewGroup {
     pub plans_dir: String,
     /// Start a `<name>-lead` orchestrator.
     pub lead: bool,
+    /// The orchestrator's model; empty for the harness's default.
+    pub model: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,6 +89,39 @@ pub struct Line {
     /// run | prompt | text | tool | result | final | error | raw
     pub kind: String,
     pub text: String,
+}
+
+/// The model a new agent runs on: the one picked for it, else its stage's
+/// (`stages.models`), else empty for the harness's default.
+fn agent_model(cfg: &Config, picked: &str, stage: &str) -> String {
+    match (picked.trim(), stage) {
+        ("", "") => String::new(),
+        ("", stage) => cfg.stages.model(stage).to_string(),
+        (m, _) => m.to_string(),
+    }
+}
+
+/// The model a lead's new worker asks for. One the lead names wins. A worker
+/// that starts without your approval (`orchestrator.auto_spawn`) runs on the
+/// lead's model; a stage agent, or one you approve in the Inbox, gets its
+/// default unless you pick one there.
+fn worker_model(lead: &Agent, auto_spawn: bool, stage: &str, asked: &str) -> String {
+    let asked = asked.trim();
+    if !asked.is_empty() {
+        asked.to_string()
+    } else if auto_spawn && stage.is_empty() {
+        lead.model.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// The model in an approval like "Approve model=<name>", if one was typed.
+pub(crate) fn picked_model(answer: &str) -> Option<String> {
+    answer
+        .split_once("model=")
+        .map(|(_, m)| m.trim().to_string())
+        .filter(|m| !m.is_empty())
 }
 
 /// Find the `drovr` CLI that agents' MCP configs and run wrappers call.
@@ -468,7 +503,7 @@ impl Engine {
                 .to_string(),
             None => String::new(),
         };
-        let text = prompts::system_prompt(
+        let mut text = prompts::system_prompt(
             agent,
             group.as_ref(),
             &peers,
@@ -480,6 +515,9 @@ impl Engine {
                 .enabled
                 .then_some(self.cfg.stages.order.as_slice()),
         );
+        if self.cfg.datadog.pup {
+            text += &crate::config::personalize(crate::datadog::PROMPT, &self.cfg.your_name());
+        }
         let path = self.agent_dir(&agent.name).join("system.md");
         std::fs::write(&path, text)?;
         Ok(path)
@@ -555,11 +593,7 @@ impl Engine {
             ticket: spec.ticket.clone(),
             task: spec.task.clone(),
             stage: spec.stage.clone(),
-            model: match (spec.model.trim(), spec.stage.as_str()) {
-                ("", "") => String::new(),
-                ("", stage) => self.cfg.stages.model(stage).to_string(),
-                (m, _) => m.to_string(),
-            },
+            model: agent_model(&self.cfg, &spec.model, &spec.stage),
             ..Agent::default()
         };
         self.store.add_agent(&agent)?;
@@ -777,6 +811,7 @@ impl Engine {
             .current_dir(&agent.cwd)
             .env("DROVR_AGENT", &agent.name)
             .env("DROVR_HOME", home())
+            .envs(crate::datadog::env(&self.cfg))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1193,7 +1228,7 @@ impl Engine {
         if !spec.lead {
             return Ok(None);
         }
-        self.add_lead(name, &spec.goal, &spec.backend, &spec.harness)
+        self.add_lead(name, &spec.goal, &spec.backend, &spec.harness, &spec.model)
             .map(Some)
     }
 
@@ -1249,7 +1284,26 @@ impl Engine {
     }
 
     /// Start an orchestrator for an existing group.
-    pub fn add_lead(&self, group: &str, goal: &str, backend: &str, harness: &str) -> Result<Agent> {
+    pub fn add_lead(
+        &self,
+        group: &str,
+        goal: &str,
+        backend: &str,
+        harness: &str,
+        model: &str,
+    ) -> Result<Agent> {
+        self.start_agent(self.lead_spec(group, goal, backend, harness, model)?)
+    }
+
+    /// The orchestrator `add_lead` starts. An empty `model` is the default.
+    fn lead_spec(
+        &self,
+        group: &str,
+        goal: &str,
+        backend: &str,
+        harness: &str,
+        model: &str,
+    ) -> Result<NewAgent> {
         let g = self
             .store
             .group(group)?
@@ -1264,7 +1318,7 @@ impl Engine {
 
 Plan the work, spawn workers with spawn_worker (or coordinate the agents already in the group), and bring me decisions and commands through the drovr inbox."
         );
-        self.start_agent(NewAgent {
+        Ok(NewAgent {
             name: format!("{group}-lead"),
             group: group.into(),
             role: "orchestrator".into(),
@@ -1273,6 +1327,7 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             cwd: g.cwd,
             ticket: g.ticket,
             task,
+            model: model.trim().into(),
             ..NewAgent::default()
         })
     }
@@ -1468,20 +1523,29 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             ticket: lead.ticket.clone(),
             task: task.into(),
             stage: stage.into(),
-            model: model.into(),
+            model: worker_model(&lead, self.cfg.orchestrator.auto_spawn, stage, model),
             ..NewAgent::default()
         };
         if self.cfg.orchestrator.auto_spawn {
             let a = self.start_agent(spec)?;
             return Ok(json!({ "spawned": a.name, "cwd": a.cwd }));
         }
+        // What it runs on if you leave the Inbox's model box empty.
+        let mut payload = serde_json::to_value(&spec)?;
+        payload["default_model"] = match agent_model(&self.cfg, &spec.model, &spec.stage) {
+            m if m.is_empty() => crate::harness::named(&spec.harness)
+                .map(|h| h.model(&self.cfg).to_string())
+                .unwrap_or_default(),
+            m => m,
+        }
+        .into();
         let id = self.store.add_item(
             from,
             "spawn",
             &format!("Spawn worker {name}?"),
             task,
             &[],
-            &serde_json::to_value(&spec)?,
+            &payload,
         )?;
         self.record_item(id);
         Ok(json!({ "pending_approval": id, "name": name }))
@@ -1492,8 +1556,12 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
     pub fn answer(&self, id: i64, answer: &str) -> Result<()> {
         let item = self.pending_item(id)?;
         match item.kind.as_str() {
+            // "approve", maybe with "model=…" for the worker.
             "spawn" => {
-                let spec: NewAgent = serde_json::from_value(item.payload.clone())?;
+                let mut spec: NewAgent = serde_json::from_value(item.payload.clone())?;
+                if let Some(model) = picked_model(answer) {
+                    spec.model = model;
+                }
                 // Other workers may have started since the lead asked.
                 let workers = self
                     .store
@@ -2083,6 +2151,172 @@ fn rendered_log(path: &Path, harness: &dyn Harness) -> Arc<Vec<Rendered>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_runs_on_its_model_then_its_stages_then_the_default() {
+        let mut cfg = Config::default();
+        cfg.stages
+            .models
+            .insert("research".into(), "claude-haiku-5-5".into());
+        for (picked, stage, want) in [
+            ("", "", ""),
+            ("claude-opus-5-5", "", "claude-opus-5-5"),
+            ("", "research", "claude-haiku-5-5"),
+            ("claude-opus-5-5", "research", "claude-opus-5-5"),
+            ("  claude-opus-5-5 ", "research", "claude-opus-5-5"),
+            ("", "build", ""),
+            ("   ", "research", "claude-haiku-5-5"),
+        ] {
+            assert_eq!(
+                agent_model(&cfg, picked, stage),
+                want,
+                "{picked:?} {stage:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn workers_you_dont_approve_run_on_the_leads_model() {
+        let lead = |model: &str| Agent {
+            model: model.into(),
+            ..Agent::default()
+        };
+        for (lead_model, auto, stage, asked, want) in [
+            // Started without you: the lead's model, unless it names one.
+            ("claude-opus-5-5", true, "", "", "claude-opus-5-5"),
+            (
+                "claude-opus-5-5",
+                true,
+                "",
+                "claude-sonnet-5-5",
+                "claude-sonnet-5-5",
+            ),
+            ("", true, "", "", ""),
+            // A stage follows the handoff you approved: its own model or the default.
+            ("claude-opus-5-5", true, "research", "", ""),
+            (
+                "claude-opus-5-5",
+                true,
+                "research",
+                "claude-sonnet-5-5",
+                "claude-sonnet-5-5",
+            ),
+            // You approve it in the Inbox, where you can pick one.
+            ("claude-opus-5-5", false, "", "", ""),
+            (
+                "claude-opus-5-5",
+                false,
+                "",
+                "claude-sonnet-5-5",
+                "claude-sonnet-5-5",
+            ),
+        ] {
+            assert_eq!(
+                worker_model(&lead(lead_model), auto, stage, asked),
+                want,
+                "{lead_model:?} auto={auto} {stage:?} {asked:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn approving_a_worker_offers_its_default_model() {
+        let dir = std::env::temp_dir().join(format!("drovr-spawn-model-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::default();
+        cfg.orchestrator.auto_spawn = false;
+        cfg.defaults.auto_wake = false;
+        cfg.defaults.model = "claude-sonnet-5-5".into();
+        cfg.stages
+            .models
+            .insert("research".into(), "claude-haiku-5-5".into());
+        let engine = Engine::with(
+            Store::open(&dir.join("t.db")).unwrap(),
+            cfg,
+            PathBuf::from("drovr"),
+        );
+        engine
+            .store
+            .add_group("g", "", "", "/tmp", "", true)
+            .unwrap();
+        engine
+            .store
+            .add_agent(&Agent {
+                name: "g-lead".into(),
+                group_name: "g".into(),
+                role: "orchestrator".into(),
+                model: "claude-opus-5-5".into(),
+                run_state: "working".into(),
+                ..Agent::default()
+            })
+            .unwrap();
+        let offered = |name: &str, stage: &str| {
+            let r = engine
+                .spawn_worker("g-lead", name, "do it", "", stage, "")
+                .unwrap();
+            let item = engine
+                .store
+                .item(r["pending_approval"].as_i64().unwrap())
+                .unwrap()
+                .unwrap();
+            (
+                item.payload["model"].as_str().unwrap().to_string(),
+                item.payload["default_model"].as_str().unwrap().to_string(),
+            )
+        };
+        assert_eq!(offered("api", ""), ("".into(), "claude-sonnet-5-5".into()));
+        assert_eq!(
+            offered("", "research"),
+            ("".into(), "claude-haiku-5-5".into())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_model_you_type_when_approving() {
+        for (answer, want) in [
+            ("approve", None),
+            ("Approve", None),
+            ("approve model=claude-opus-5-5", Some("claude-opus-5-5")),
+            ("Approve model= claude-opus-5-5 ", Some("claude-opus-5-5")),
+            ("Approve model=  ", None),
+        ] {
+            assert_eq!(picked_model(answer).as_deref(), want, "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn a_lead_runs_on_the_model_you_pick() {
+        let dir = std::env::temp_dir().join(format!("drovr-lead-model-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine = Engine::with(
+            Store::open(&dir.join("t.db")).unwrap(),
+            Config::default(),
+            PathBuf::from("drovr"),
+        );
+        engine
+            .create_group(NewGroup {
+                name: "pay".into(),
+                goal: "ship refunds".into(),
+                cwd: "/tmp".into(),
+                ..NewGroup::default()
+            })
+            .unwrap();
+        let spec = engine
+            .lead_spec("pay", "", "headless", "", "claude-opus-5-5")
+            .unwrap();
+        assert_eq!(
+            (spec.name.as_str(), spec.role.as_str(), spec.model.as_str()),
+            ("pay-lead", "orchestrator", "claude-opus-5-5")
+        );
+        assert!(spec.task.starts_with("ship refunds"));
+        // Empty keeps the configured default.
+        assert_eq!(engine.lead_spec("pay", "", "", "", "").unwrap().model, "");
+        assert!(engine.lead_spec("nope", "", "", "", "").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn names_and_slugs() {

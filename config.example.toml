@@ -129,6 +129,11 @@ provider = "agent"
 # provider = "rest"
 # token_env = "SLACK_USER_TOKEN"   # search.messages needs a user token (xoxp-…)
 
+[datadog]
+pup = false                   # true: agents query Datadog with pup; read-only commands run without asking (drovr adds --read-only), writes come to you
+site = ""                     # your Datadog site if it isn't US1, e.g. "us5.datadoghq.com"; passed to agents as DD_SITE
+# To keep agents off a Datadog MCP too: [defaults] disallowed_tools = ["mcp__datadog__*"]
+
 [reports]
 dir = "~/.claude/plans"       # HTML reports; a group's go in <dir>/<group>/
 

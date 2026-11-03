@@ -21,7 +21,6 @@
     decision: "Decision", command: "Command", permission: "Permission", spawn: "Spawn", done: "Finished",
     watch: "Watcher", jira: "Jira draft", handoff: "Handoff", confluence: "Confluence",
   };
-  const order = ["permission", "decision", "handoff", "command", "spawn", "watch", "jira", "confluence", "done"];
   let models = $state<Record<number, string>>({});
 
   /** Approve a stage's handoff; the next stage runs on the model you leave in the box. */
@@ -35,7 +34,8 @@
     const text = drafts[item.id] ?? (item.payload.action === "comment" ? item.payload.body : item.payload.transition);
     return once(item.id, () => api.answer(item.id, text), item.payload.action === "comment" ? "Comment posted to Jira" : "Ticket moved in Jira");
   }
-  const items = $derived([...app.snap.inbox].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || a.id - b.id));
+  // Oldest first, whatever the kind, so a new item never jumps the queue.
+  const items = $derived([...app.snap.inbox].sort((a, b) => a.id - b.id));
 
   /** Type the command into the agent's terminal, for you to check and run. */
   function runInTerminal(item: Item) {
@@ -62,7 +62,11 @@
   // The answers the buttons and the keyboard share.
   const allow = (item: Item) => once(item.id, () => api.answer(item.id, "allow"));
   const deny = (item: Item) => once(item.id, () => api.answer(item.id, drafts[item.id] ? `deny: ${drafts[item.id]}` : "deny"));
-  const startWorker = (item: Item) => once(item.id, () => api.answer(item.id, "approve"), "Worker started");
+  /** Start a worker on the model in its box: the lead's pick, else its default. */
+  function startWorker(item: Item) {
+    const model = (models[item.id] ?? item.payload.model ?? "").trim();
+    return once(item.id, () => api.answer(item.id, model ? `approve model=${model}` : "approve"), "Worker started");
+  }
   const declineWorker = (item: Item) =>
     once(item.id, () => api.reject(item.id, `${app.you.charAt(0).toUpperCase()}${app.you.slice(1)} declined this worker.`));
   const pick = (item: Item, opt: string) => once(item.id, () => api.answer(item.id, opt), "Answer sent");
@@ -145,6 +149,8 @@
         <div class="md">{@html md(item.body)}</div>
         <div class="row actions">
           <button class="primary" onclick={() => startWorker(item)}>Start worker <span class="kbd">A</span></button>
+          <span class="muted small">on</span>
+          <input style="max-width: 200px" placeholder={item.payload.default_model || "the default model"} value={models[item.id] ?? item.payload.model ?? ""} oninput={(e) => (models[item.id] = e.currentTarget.value)} />
           <button class="danger" onclick={() => declineWorker(item)}>Decline <span class="kbd">D</span></button>
         </div>
       {:else if item.kind === "handoff"}

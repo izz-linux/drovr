@@ -4,9 +4,10 @@
 
   // What runs the agent (Claude Code or Codex) and where (headless or
   // herdr), preselected from the config.
-  // `claudeOnly`: picking up an existing Claude Code session.
-  let { defaults, backend = $bindable(), harness = $bindable(), id, claudeOnly = false }:
-    { defaults: Defaults | null; backend: string; harness: string; id: string; claudeOnly?: boolean } = $props();
+  // `claudeOnly`: picking up an existing Claude Code session. `model` is
+  // empty for the configured default.
+  let { defaults, backend = $bindable(), harness = $bindable(), model = $bindable(""), modelLabel = "Model", id, claudeOnly = false }:
+    { defaults: Defaults | null; backend: string; harness: string; model?: string; modelLabel?: string; id: string; claudeOnly?: boolean } = $props();
 
   $effect(() => {
     if (defaults && !backend) backend = defaults.backend;
@@ -18,6 +19,7 @@
     if (harness === "codex" && backend === "herdr") backend = "headless";
   });
   const codex = $derived(harness === "codex");
+  const defaultModel = $derived((codex ? defaults?.codex_model : defaults?.model) || (codex ? "Codex default" : "Claude Code default"));
 </script>
 
 <div class="two">
@@ -40,21 +42,25 @@
     </select>
   </div>
 </div>
+<div class="model">
+  <label for={`${id}-model`}>{modelLabel}</label>
+  <input id={`${id}-model`} bind:value={model} placeholder={defaultModel} spellcheck="false" autocomplete="off" />
+</div>
 {#if defaults}
   <p class="muted note">
     {#if codex}
       Codex runs in its own sandbox (<code>codex.sandbox</code>) with no permission prompts; anything outside it comes to your Inbox as a command to run.
     {:else}
-      Model: <code>{defaults.model || "Claude Code default"}</code> ·
       Permission mode: <code>{defaults.permission_mode}</code> ·
       Worktrees: {defaults.worktrees ? "on" : "off"}
     {/if}
-    <span class="hint">(change in Settings)</span>
+    <span class="hint">(change these in Settings; leave {modelLabel} empty for <code>{defaultModel}</code>)</span>
   </p>
 {/if}
 
 <style>
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .model { margin-top: 10px; }
   .note { font-size: 12px; margin: 6px 0 0; }
   .hint { opacity: 0.8; }
 </style>

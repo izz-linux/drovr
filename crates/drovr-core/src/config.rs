@@ -16,6 +16,7 @@ pub struct Config {
     pub jira: Source,
     pub confluence: Source,
     pub slack: Source,
+    pub datadog: Datadog,
     pub agent_queries: AgentQueries,
     pub reports: Reports,
     pub terminal: Terminal,
@@ -196,6 +197,18 @@ impl Default for Watch {
             dispatch_transition: String::new(),
         }
     }
+}
+
+/// Datadog through the `pup` CLI.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Datadog {
+    /// Agents query Datadog with pup: a read-only pup command runs without
+    /// asking (drovr adds `--read-only`), and writes come to you.
+    pub pup: bool,
+    /// Your Datadog site when it isn't US1, e.g. "us5.datadoghq.com". Passed
+    /// to agents as `DD_SITE`, which the app doesn't get from your shell.
+    pub site: String,
 }
 
 /// macOS notifications from the app.
@@ -460,6 +473,7 @@ impl Default for Config {
             reports: Reports::default(),
             terminal: Terminal::default(),
             notifications: Notifications::default(),
+            datadog: Datadog::default(),
             workflow: Workflow::default(),
             watch: Watch::default(),
             stages: Stages::default(),
