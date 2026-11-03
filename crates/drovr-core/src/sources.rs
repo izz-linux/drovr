@@ -423,6 +423,7 @@ impl<'a> Sources<'a> {
         let mut child = std::process::Command::new(&self.cfg.claude.command)
             .args(&args)
             .current_dir(&dir)
+            .envs(crate::datadog::env(self.cfg))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

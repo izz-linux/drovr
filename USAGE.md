@@ -93,7 +93,7 @@ drovr adopt 225e9ac0-9c9c-4f7c-927e-49054bff82a0 env-copy --fork "Now write the 
 
 ### Answer what agents need from you
 
-Everything waiting on you is in the **Inbox** (⌘2). An agent shows **blocked** while something of its is there.
+Everything waiting on you is in the **Inbox** (⌘2), oldest first: new items join the end. An agent shows **blocked** while something of its is there.
 
 - **Decision:** click an option or type an answer.
 - **Command:** edit if needed, then choose one:
@@ -103,7 +103,7 @@ Everything waiting on you is in the **Inbox** (⌘2). An agent shows **blocked**
   - **Copy** it to run anywhere, then **Mark as run**. Paste the output or a note in the box first, and the agent gets it.
   - **Reject** it.
 - **Permission:** **Allow**, or **Deny** with a reason.
-- **Spawn** (with `orchestrator.auto_spawn = false`): a lead wants to start a worker. **Start worker** or **Decline**.
+- **Spawn** (with `orchestrator.auto_spawn = false`): a lead wants to start a worker. **Start worker** or **Decline**. The box next to it is the model the worker runs on: the lead's pick if it made one, else empty for the default shown in it (a stage's `stages.models`, or `defaults.model`). Type another to override it.
 - **Finished:** read the summary, then **Review changes**.
 - **Watcher** (with `workflow.enabled`): something changed on a ticket or its PR (checks failed, a review, a conflict, ready to merge, merged or closed, or a Jira change) and its rule in `watch.rules` is `"ask"`. **Send to <agent>** passes it on with the details, or dismiss it.
 - **Confluence:** an agent wrote a page. Read the diff against the live draft and the full page, then **Save as draft in Confluence** or **Send back** with notes. drovr reads the page again before saving and shows you a new diff if it changed; it never publishes.
@@ -150,7 +150,7 @@ drovr msgs pay-api
 
 ### Review what agents produced
 
-- **Reports** (⌘3): HTML reports in `~/.claude/plans/`, grouped by folder, newest first, with new ones marked; if any are unread, the newest opens straight away. A revised report replaces the agent's earlier copy, and older copies with the same title fold under the newest as earlier versions. Open one, then send feedback to an agent from the bottom bar.
+- **Reports** (⌘3): HTML reports in `~/.claude/plans/`, grouped by folder, newest first, with new ones marked; if any are unread, the newest opens straight away. Folders collapse and expand with a click, and stay that way; a collapsed folder opens on its own when Reports takes you to an unread report in it. A revised report replaces the earlier copy, whichever agent published it, and older copies of the same title are deleted; an agent keeps earlier versions only when you ask it to, and those fold under the newest. Open one, then send feedback to an agent from the bottom bar.
 - **Code review** (⌘7): pick an agent to see each repo and worktree it worked in, with what changed on its branch (committed or not) and the diffs. It works when the agent started in a folder above your repos. Send feedback about a file. If your plans folder is in a git repo (say `~/.claude`), only the part this agent worked in is shown there.
 - **Agents:** each agent's full output, tool calls and cost. **Open in herdr** opens its session interactively, or **Copy attach cmd** for any terminal.
 - **Timeline:** with `workflow.enabled`, everything that happened on a ticket (see [Read a ticket's timeline](#read-a-tickets-timeline)).
@@ -167,6 +167,12 @@ drovr attach pay-api-lead          # prints: cd … && claude --resume …
 ```sh
 drovr ask "What did #sre decide about the payments API last week?"
 ```
+
+### Query Datadog with pup
+
+1. Install pup and log in once: `brew tap datadog-labs/pack && brew install datadog-labs/pack/pup`, then `pup auth login`.
+2. In Settings, set `datadog.pup = true`, and `datadog.site` if your Datadog isn't US1.
+3. Ask an agent to investigate ("correlate the checkout errors with latency since 14:00"). Its read-only `pup` queries (logs, metrics, dashboards, APM) run without asking. A write, `pup auth`, or a pup command piped into something else comes to the **Inbox** as a permission.
 
 ### Stop, resume and clean up
 
@@ -251,7 +257,7 @@ Turning it on doesn't change groups you already have: only groups created while 
 
 ### Choose models
 
-Claude Code agents use `defaults.model`, or your Claude Code default when it's empty; Codex agents use `codex.model`, or Codex's default. Lookups use `agent_queries.model`, which is `haiku` by default. With the ticket workflow, each stage can have its own (`stages.models.<stage>`, or the box on a handoff), and so can the retro (`retro.model`). To use Opus for the work and Haiku for searching, set this in **Settings**:
+Claude Code agents use `defaults.model`, or your Claude Code default when it's empty; Codex agents use `codex.model`, or Codex's default. To pick another for one agent, fill in **Model** in **New agent** or **Dispatch**, or **Lead's model** in **New group**. Workers a lead starts without asking run on the lead's model; workers you approve (the **Spawn** box) and stages (the handoff box) default to their configured model, and you can change it there. Lookups use `agent_queries.model`, which is `haiku` by default. With the ticket workflow, each stage can have its own (`stages.models.<stage>`, or the box on a handoff), and so can the retro (`retro.model`). To use Opus for the work and Haiku for searching, set this in **Settings**:
 
 ```toml
 [defaults]

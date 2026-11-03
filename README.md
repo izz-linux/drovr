@@ -69,6 +69,7 @@ drovr is at version 0.7.0. <!-- x-release-please-version -->
 - Claude Code (`claude`), logged in, with your Jira, Confluence and Slack MCP servers set up
 - herdr (optional): `brew install herdr`
 - For the ticket workflow (optional): Atlassian's [twg](https://atlassian.github.io/twg-cli/) for Jira and Confluence, and the GitHub CLI (`gh`), both logged in
+- For Datadog (optional): Datadog's [pup](https://github.com/datadog-labs/pup) CLI, logged in (see [Datadog](#datadog))
 
 **Run it** (or download the signed, notarized `.dmg` from [Releases](https://github.com/izz-linux/drovr/releases)):
 
@@ -157,13 +158,14 @@ The Agents view shows each agent's output as it runs: text, tool calls with thei
 
 ### Starting agents
 
-**New agent** (⌘/Ctrl+N) opens with your configured defaults filled in: the working directory, the backend (headless or herdr), and a line showing the model, permission mode and worktree setting from your config.
+**New agent** (⌘/Ctrl+N) opens with your configured defaults filled in: the working directory, the backend (headless or herdr), and a line showing the permission mode and worktree setting from your config.
 
 - **Name:** lowercase letters, digits, `-` and `_`, starting with a letter. What you type is lowercased and spaces become dashes as you type, so macOS capitalizing the first letter doesn't matter. Other characters are flagged rather than guessed at. The CLI does the same.
 - **Task:** the agent's first prompt. Type it, or pick a `.md` or `.txt` file under **Prompt from file** to load it into the box, where you can still edit it.
 - **Jira ticket:** the ticket the agent's work tracks. Or check **Create a Jira ticket for this**, with optional notes ("a bug, assigned to me, in the current sprint"): the agent first writes a ticket for its task, following `jira.ticket_skill` if set, and creates it. Its create command comes to the Inbox for you to allow like any other. It then calls `set_ticket`, and the new key becomes its ticket (and its group's, when it leads a group without one).
 - **Group:** putting the agent in a group means it coordinates with the group's other agents. Its prompt files and reports then come from the group's plans folder.
 - **Run with:** Claude Code, or Codex (experimental, when `codex` is installed). See [Harnesses](#harnesses-claude-code-and-codex).
+- **Model:** the model this agent runs on, e.g. `claude-opus-5-5`. Empty uses the default (`defaults.model`, or `codex.model` for Codex), shown as the placeholder. **New group** with a lead and **Dispatch** have the same box, as **Lead's model** when they start a group: it sets the lead's model. Workers that start without asking run on it too; workers you approve in the Inbox and stage agents get their own defaults, which you can change there.
 - **Closing the dialog:** once you've typed a task, Esc or a click outside asks first: do it again within a few seconds to discard the typing. **Cancel** and **✕** close it straight away.
 
 ### Starting from an existing Claude Code session
@@ -194,7 +196,7 @@ Every agent in the group knows its peers and its plans folder. They message each
 
 Check **Start an orchestrator** when you create a group, hand off a Jira ticket as a group, or click a group's **+ lead** button. The group then gets a `<group>-lead` agent that works toward the goal. The lead:
 
-1. Plans the work, then calls `spawn_worker` for each task. Workers are named `<group>-<task>`. There are at most `orchestrator.max_workers` of them, and they start without asking unless you set `orchestrator.auto_spawn = false`.
+1. Plans the work, then calls `spawn_worker` for each task. Workers are named `<group>-<task>`. There are at most `orchestrator.max_workers` of them, and they start without asking unless you set `orchestrator.auto_spawn = false`. A worker that starts without asking runs on the lead's model, unless the lead picks another. Stage agents run on the model from the handoff you approved (or `stages.models`).
 2. Coordinates them. Workers message each other and the lead, and claim files on the group's shared notes board, e.g. `owner:src/api.ts = sre-123-api`.
 3. Brings you decisions as options, commands to approve, and reports.
 4. Reviews the combined result when every worker has reported done.
@@ -203,12 +205,14 @@ When a worker reports done, the lead is woken automatically.
 
 ### Inbox
 
+Items are listed oldest first, whatever their kind, so new ones join the end of the queue.
+
 | Item | Your options |
 | --- | --- |
 | **Decision** | Click an option, or write your own answer |
 | **Command** | Edit it, then **Run & return output** (it runs in the agent's directory and the output goes back to the agent), **Run in terminal** (typed into the agent's terminal for you to check and run), **Run in herdr pane**, or **Copy** it. After running it yourself, **Mark as run** tells the agent, with your note or else the terminal's output. Or **Reject** with a reason. |
 | **Permission** | A headless agent wants a tool that isn't auto-allowed: **Allow**, or **Deny** with a reason |
-| **Spawn** | Approve or decline a new worker (only when `auto_spawn = false`). Approving checks `orchestrator.max_workers` again, in case others started meanwhile. |
+| **Spawn** | Approve or decline a new worker (only when `auto_spawn = false`), and pick its model: the box shows the lead's pick, or the default it gets if you leave it empty. Approving checks `orchestrator.max_workers` again, in case others started meanwhile. |
 | **Finished** | An agent's `report_done` summary, with a link to its code review |
 | **Watcher** | With `workflow.enabled`: something changed on a ticket or its PR, and `watch.rules` says to ask you. **Send to &lt;agent&gt;** passes it on with the details, or dismiss it |
 | **Jira draft** | With `workflow.enabled`: a comment or move drovr drafted (when a PR merges) or an agent drafted (`draft_jira_update`). Edit it, then **Post to Jira**, or **Discard**. Nothing is posted until you do |
@@ -225,9 +229,10 @@ Answering wakes the agent if it's idle.
 Reports are everything you need to look at and review, saved as HTML in `~/.claude/plans/` (change with `reports.dir`). Links in reports, agent output and the Inbox open in your default browser, never inside drovr.
 
 - **Where agents save:** agents publish with the `publish_report` tool. A group's reports go in `~/.claude/plans/<group>/`, so all the plans and designs for one piece of work stay together. A solo agent's go in the root folder.
-- **Revisions replace:** when an agent publishes a title it already published in that folder, the new version replaces its file and shows as unread again. Older copies with the same title, from before drovr did this, are folded under the newest one as **earlier versions**.
+- **Revisions replace:** when any agent publishes a title that's already in that folder, the new version replaces the newest copy's file and shows as unread again, and any older copies of it are deleted. Titles match ignoring case and punctuation, on the title they were published under or the page's `<title>`. Files you put in the folder yourself are never replaced. An agent keeps the earlier version (`keep_versions`) only when you ask it to; those copies fold under the newest one as **earlier versions**.
 - **Order:** newest first, in each folder and across folders.
 - **What the view lists:** every `.html` file in the folder and its subfolders, including ones you or other tools put there. They're grouped by folder, newest first.
+- **Folders:** click a folder to collapse or expand it; drovr remembers which are collapsed. When Reports opens an unread report in a collapsed folder, the folder opens to show it, without changing what's remembered.
 - **Unread:** a report an agent published shows a dot until you open it, and the sidebar shows an unread count. Opening Reports while there's an unread report opens the newest one. **Mark all read** clears them.
 - **On each report:** preview it, **Open in browser**, **Show folder** (in Finder), or send feedback to any agent.
 - **Previews run as the page would in a browser:** its scripts, theme and saved settings (`localStorage`) work, and its own images and stylesheets load from next to it. It can load files only from the plans folder and the repos you've opened in Code review. The same goes for HTML previews in Code review. See [Security](#security).
@@ -406,6 +411,28 @@ page_create_cmd = "twg confluence content create --space-id {space} --parent-id 
 
 `{id}` is the page's (or folder's) ID or URL; `{token}` comes from the read just before saving; `{space}` is the parent's space; `{file}` holds the page's HTML.
 
+### Datadog
+
+Agents query Datadog (logs, metrics, dashboards, APM services and traces, monitors, incidents) with Datadog's `pup` CLI, through Bash.
+
+1. **Install and log in once:** `brew tap datadog-labs/pack && brew install datadog-labs/pack/pup`, then `pup auth login` in a terminal. It's OAuth in your browser: you pick the org there, and the token goes in your macOS keychain. Agents run as you, so they use it. `pup auth status` shows what you're logged into.
+2. **Turn it on** in Settings:
+
+   ```toml
+   [datadog]
+   pup = true
+   site = "us5.datadoghq.com"   # only if your Datadog isn't US1 (app.datadoghq.com)
+   ```
+
+   drovr is a macOS app, so it doesn't get `DD_SITE` (or `DD_API_KEY`/`DD_APP_KEY`) from your shell's startup files. `site` passes `DD_SITE` to the agents and lookups drovr starts.
+
+What changes when it's on:
+
+- **Reads run without asking:** in a headless run, a Bash command that's a single `pup` command that only reads is approved, and drovr runs it with `--read-only` added, so pup itself refuses a write. Agents shape the output with pup's `--jq` and `-o` flags.
+- **Everything else comes to the Inbox:** a pup command with a write in it (create, update, delete, mute, post, run, …), `pup auth` (which can print your token), and any command with a pipe, redirect, `&&`, `;`, a `$` or backticks in it. A query value that happens to contain a write word is fine; one that looks like a command word only costs an approval.
+- **Agents are told** to use pup for Datadog rather than a Datadog MCP. To stop them reaching that MCP at all, block its tools: `defaults.disallowed_tools = ["mcp__datadog__*"]` (use the server's name from `claude mcp list`).
+- **herdr agents** get Claude Code's own permission prompts in their pane, so pup reads ask there as any command does.
+
 ### Code review
 
 For any agent, this lists every git repo and worktree it worked in, so it works when you start agents in a folder above your repos.
@@ -482,6 +509,7 @@ Agents read text other people write (tickets, pages, Slack messages), and that t
 - **Content security policy:** the window loads only drovr's own scripts and styles, and no remote images, so Markdown in agent output (`![](https://…?data=…)`) can't send what an agent read to someone else's server.
 - **Opening files:** **Open in browser** and **Show folder** open only HTML pages and plain folders in those places, never an app, a script or a `.command` file.
 - **Agents' tools:** `WebFetch` isn't auto-allowed: with `Read` also allowed, an agent could otherwise send any file anywhere without asking.
+- **Datadog reads:** with `datadog.pup` on, only a single plain `pup` command with no write words runs without asking, and always with `--read-only`. Anything that chains, pipes, redirects or substitutes comes to you.
 - **Lookups:** they run unattended, so they get only read-only tools that can't reach arbitrary web addresses: no fetchers, browsers or scrapers. `agent_queries.servers` can limit them further to named MCP servers.
 
 ### MCP tools agents get
@@ -497,7 +525,7 @@ Agents read text other people write (tickets, pages, Slack messages), and that t
 | `set_ticket` | Take the Jira ticket its work tracks, such as one it just created |
 | `ask_<your name>` (e.g. `ask_izz`), `check_answer` | A decision for you, with options. It's `ask_human` when drovr doesn't know your name, and agents started before the rename can still call `ask_human`. |
 | `propose_command` | A command for you to approve; returns its output |
-| `publish_report` | Save an HTML report to your plans folder; the same title again replaces it |
+| `publish_report` | Save an HTML report to your plans folder; the same title again replaces it (`keep_versions` keeps the old one, only when the human asks) |
 | `spawn_worker`, `stop_agent` | Orchestrators only. With `workflow.enabled`, in a group made with it on, `spawn_worker` takes a `stage` and a `model` |
 | `handoff` | A stage agent ends its stage; you approve it or send it back. Only with `workflow.enabled`, in a group made with it on |
 | `checkpoint` | The build stage writes where it is, to continue in a fresh session. Only with `workflow.enabled`, in a group made with it on |
@@ -554,6 +582,8 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `orchestrator.max_workers` | `6` | Maximum number of workers per group |
 | `commands.timeout_seconds` | `600` | Time limit for commands you approve |
 | `reports.dir` | `"~/.claude/plans"` | Where reports are saved and listed |
+| `datadog.pup` | `false` | Agents query Datadog with `pup`: read-only pup commands run without asking (with `--read-only` added), writes come to the Inbox (see [Datadog](#datadog)) |
+| `datadog.site` | `""` | Your Datadog site if it isn't US1, e.g. `"us5.datadoghq.com"`; passed to agents and lookups as `DD_SITE` |
 | `[herdr]` | herdr's documented CLI | The herdr command templates (see below) |
 | `jira`, `confluence`, `slack` | `provider = "agent"` | How lookups reach each service (see below) |
 | `jira.default_query` | your open tickets | The JQL the Jira view lists when its search box is empty. Jira only: Confluence and Slack don't use it |

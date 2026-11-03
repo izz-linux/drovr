@@ -124,7 +124,7 @@ fn base_tools() -> Value {
               "task": { "type": "string" },
               "cwd": { "type": "string", "description": "Defaults to your working directory." },
               "stage": { "type": "string", "description": "The workflow stage this agent runs (triage, research, blueprint, build, close). Names it after the stage unless you give a name, and runs it on the stage's model." },
-              "model": { "type": "string", "description": "The model for this agent, when the human chose one for its stage." } }), &["task"]) },
+              "model": { "type": "string", "description": "The model for this agent, when the human chose one for its stage or it needs a different one. Empty: a stage runs on its configured model; other workers run on your own model when they start straight away, or on the default when the human approves them." } }), &["task"]) },
         { "name": "handoff", "description": "Stage agents only: end your stage by handing off to the next. drovr saves it in the ticket's folder and the human approves it (or sends it back with notes). After calling it, end your turn.",
           "inputSchema": s(json!({
               "summary": { "type": "string", "description": "What this stage found or produced." },
@@ -140,12 +140,13 @@ fn base_tools() -> Value {
               "decisions": { "type": "string", "description": "Decisions made since the blueprint." } }), &["done", "left"]) },
         { "name": "stop_agent", "description": "Orchestrators only: stop a worker in your group.",
           "inputSchema": s(json!({ "name": { "type": "string" } }), &["name"]) },
-        { "name": "publish_report", "description": "Publish an HTML page for the human to review: findings, plans, designs, comparisons, summaries, anything richer than a short message. It is saved to their plans folder (in your group's subfolder) and shows up in drovr's Reports view. Pass either `html` (a complete, self-contained document with inline CSS) or `path` to an .html file you wrote, which is copied there. Publishing a title you published before replaces that report, so revise a plan or runbook under the same title rather than a new one.",
+        { "name": "publish_report", "description": "Publish an HTML page for the human to review: findings, plans, designs, comparisons, summaries, anything richer than a short message. It is saved to their plans folder (in your group's subfolder) and shows up in drovr's Reports view. Pass either `html` (a complete, self-contained document with inline CSS) or `path` to an .html file you wrote, which is copied there. Publishing a title that's already in the folder, whoever published it, replaces that report and deletes any older copies, so revise a plan or runbook under the same title rather than a new one. Set `keep_versions` only when the human explicitly asks you to keep the earlier version.",
           "inputSchema": s(json!({
               "title": { "type": "string" },
               "summary": { "type": "string", "description": "One or two sentences shown in the list." },
               "html": { "type": "string" },
-              "path": { "type": "string", "description": "Absolute, or relative to your working directory." } }), &["title"]) },
+              "path": { "type": "string", "description": "Absolute, or relative to your working directory." },
+              "keep_versions": { "type": "boolean", "description": "Add a new copy instead of replacing the report with this title. Only when the human explicitly asked to keep earlier versions." } }), &["title"]) },
         { "name": "report_done", "description": "Report that your task is finished, with a summary of what changed and what's left.",
           "inputSchema": s(json!({ "summary": { "type": "string" } }), &["summary"]) },
         { "name": "approve", "description": "Permission prompt used by drovr for headless runs.",
@@ -645,6 +646,7 @@ impl Server {
                     &title,
                     &s("summary"),
                     &html,
+                    a["keep_versions"].as_bool().unwrap_or(false),
                 )?;
                 Ok(json!({ "published": path }))
             }
@@ -787,6 +789,9 @@ impl Server {
                 let server = server.to_lowercase();
                 q.servers.iter().any(|s| server.contains(&s.to_lowercase()))
             });
+        if let Some(answer) = crate::datadog::approve(&self.engine.cfg, tool, &a["input"]) {
+            return answer;
+        }
         let allowed = q.auto_allow.iter().any(|p| matches(p, tool))
             || (read_only_tool(tool) && !web_tool(tool) && server_ok);
         if allowed {
@@ -812,6 +817,9 @@ impl Server {
             .any(|p| matches(p, tool))
         {
             return Ok(allow);
+        }
+        if let Some(answer) = crate::datadog::approve(&self.engine.cfg, tool, &input) {
+            return Ok(answer);
         }
         let summary = ["command", "file_path", "url", "pattern"]
             .iter()

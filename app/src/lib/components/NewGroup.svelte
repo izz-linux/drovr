@@ -17,6 +17,7 @@
   let goal = $state("");
   let backend = $state("");
   let harness = $state("");
+  let model = $state("");
   let busy = $state(false);
 
   const existing = $derived(folders.filter((f) => f.name));
@@ -41,7 +42,7 @@
 
   async function go() {
     busy = true;
-    const spec = { name, goal, ticket, cwd, backend, harness, plans_dir: plansDir, lead };
+    const spec = { name, goal, ticket, cwd, backend, harness, plans_dir: plansDir, lead, model: lead ? model.trim() : "" };
     const created = await act(async () => {
       const a = await api.createGroup(spec);
       return { a };
@@ -83,7 +84,7 @@
   <label for="g-goal">Goal{lead ? "" : " (optional)"} <span class="where">{lead ? "the orchestrator's task" : "shown to the group's agents"}</span></label>
   <textarea id="g-goal" rows="4" bind:value={goal} placeholder="What the group is working toward"></textarea>
 
-  {#if lead}<RunDefaults {defaults} bind:backend bind:harness id="g-backend" />{/if}
+  {#if lead}<RunDefaults {defaults} bind:backend bind:harness bind:model modelLabel="Lead's model" id="g-backend" />{/if}
 
   {#snippet footer()}
     <button onclick={close}>Cancel</button>

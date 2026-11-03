@@ -17,9 +17,9 @@ export type Group = {
   /** Created with the ticket workflow on: its lead runs the ticket in stages. */
   workflow: boolean;
 };
-export type NewGroup = { name: string; goal: string; ticket: string; cwd: string; backend: string; harness: string; plans_dir: string; lead: boolean };
+export type NewGroup = { name: string; goal: string; ticket: string; cwd: string; backend: string; harness: string; plans_dir: string; lead: boolean; model?: string };
 export type Defaults = {
-  cwd: string; backend: string; harness: string; model: string; permission_mode: string; worktrees: boolean; plans_dir: string; your_name: string;
+  cwd: string; backend: string; harness: string; model: string; codex_model: string; permission_mode: string; worktrees: boolean; plans_dir: string; your_name: string;
   notify: boolean; cost_warning_usd: number; copy_on_select: boolean;
   /** workflow.enabled: the ticket record and timeline are on. */
   workflow: boolean;
@@ -82,6 +82,8 @@ export type NewAgent = {
   create_ticket?: boolean;
   /** What you want in that ticket. */
   ticket_notes?: string;
+  /** The model to run on; empty for the configured default. */
+  model?: string;
 };
 export type ClaudeSession = { id: string; cwd: string; first_prompt: string; modified: number };
 
@@ -128,8 +130,8 @@ export const api = {
   send: (to: string, group: string, body: string) => invoke<void>("send_message", { to, group, body }),
   jiraSearch: (query: string) => invoke<Ticket[]>("jira_search", { query }),
   jiraGet: (key: string) => invoke<Ticket>("jira_get", { key }),
-  dispatch: (ticket: Ticket, mode: string, name: string, cwd: string, backend: string, harness: string, notes: string, group = "", target = "") =>
-    invoke<Agent>("dispatch_ticket", { ticket, mode, name, cwd, backend, harness, notes, group, target }),
+  dispatch: (ticket: Ticket, mode: string, name: string, cwd: string, backend: string, harness: string, notes: string, group = "", target = "", model = "") =>
+    invoke<Agent>("dispatch_ticket", { ticket, mode, name, cwd, backend, harness, notes, group, target, model }),
   confluenceSearch: (query: string) => invoke<Page[]>("confluence_search", { query }),
   confluenceGet: (id: string) => invoke<Page>("confluence_get", { id }),
   cancelLookups: () => invoke<number>("cancel_lookups"),

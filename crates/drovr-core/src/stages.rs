@@ -125,16 +125,12 @@ impl Engine {
         let p = &item.payload;
         let stage = p["stage"].as_str().unwrap_or("");
         let file = p["file"].as_str().unwrap_or("");
-        let model = answer
-            .split_once("model=")
-            .map(|(_, m)| m.trim().to_string())
-            .filter(|m| !m.is_empty())
-            .or_else(|| {
-                p["next_model"]
-                    .as_str()
-                    .filter(|m| !m.is_empty())
-                    .map(String::from)
-            });
+        let model = crate::engine::picked_model(answer).or_else(|| {
+            p["next_model"]
+                .as_str()
+                .filter(|m| !m.is_empty())
+                .map(String::from)
+        });
         let me = self.agent(&item.agent)?;
         let _ = self.stop(&me.name);
         self.record(
@@ -406,6 +402,11 @@ mod tests {
     /// An engine with a group on SRE-3229, its lead, and nothing that may
     /// start a run: every agent is "working", so prompts queue.
     fn setup(name: &str) -> (PathBuf, Engine, String) {
+        setup_with(name, |_| {})
+    }
+
+    /// `setup`, with changes to its config.
+    fn setup_with(name: &str, change: impl FnOnce(&mut Config)) -> (PathBuf, Engine, String) {
         let id = format!("{name}{}", std::process::id());
         let dir = std::env::temp_dir().join(format!("drovr-stages-{id}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -418,6 +419,7 @@ mod tests {
         cfg.stages
             .models
             .insert("research".into(), "claude-haiku-5-5".into());
+        change(&mut cfg);
         let engine = Engine::with(Store::open(&dir.join("t.db")).unwrap(), cfg, "drovr".into());
         engine
             .store
@@ -513,6 +515,56 @@ mod tests {
         assert!(engine
             .spawn_worker(&format!("lead-{id}"), "", "x", "", "deploy", "")
             .is_err());
+        cleanup(&dir, &engine);
+    }
+
+    /// The model drovr asks the lead to start the next stage on, from what
+    /// the lead was told when you approved the triage handoff with `answer`.
+    fn next_stage_model(engine: &Engine, id: &str, answer: &str) -> (String, Option<String>) {
+        let triage = stage_agent(engine, &format!("triage-{id}"), "triage");
+        let r = engine
+            .handoff(&triage, &json!({ "summary": "s", "next_inputs": "n" }))
+            .unwrap();
+        let item = engine
+            .store
+            .item(r["inbox"].as_i64().unwrap())
+            .unwrap()
+            .unwrap();
+        let offered = item.payload["next_model"].as_str().unwrap().to_string();
+        engine.answer(item.id, answer).unwrap();
+        let told = engine.store.queued(&format!("lead-{id}")).unwrap();
+        let body = &told.last().unwrap().body;
+        assert!(body.contains("Start the research stage now"), "{body}");
+        let model = body
+            .split_once("model \"")
+            .map(|(_, rest)| rest.split('"').next().unwrap().to_string());
+        (offered, model)
+    }
+
+    #[test]
+    fn a_handoff_uses_the_model_you_type_over_the_configured_one() {
+        let (dir, engine, id) = setup("override");
+        assert_eq!(
+            next_stage_model(&engine, &id, "Approve model=claude-opus-5-5"),
+            ("claude-haiku-5-5".into(), Some("claude-opus-5-5".into()))
+        );
+        // The record keeps the model you chose.
+        let approved = ledger::timeline(&engine.cfg, "SRE-3229")
+            .into_iter()
+            .find(|e| e["kind"] == "handoff_approved")
+            .unwrap();
+        assert_eq!(approved["model"], "claude-opus-5-5");
+        cleanup(&dir, &engine);
+    }
+
+    #[test]
+    fn a_handoff_with_no_stage_model_uses_the_default() {
+        let (dir, engine, id) = setup_with("default", |cfg| cfg.stages.models.clear());
+        // Nothing is offered or passed on, so the next stage runs on the default.
+        assert_eq!(
+            next_stage_model(&engine, &id, "Approve"),
+            (String::new(), None)
+        );
         cleanup(&dir, &engine);
     }
 

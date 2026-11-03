@@ -637,6 +637,13 @@ impl Store {
             })?)
     }
 
+    /// Drop what drovr knows about a report whose file is gone.
+    pub fn forget_report(&self, path: &str) -> Result<()> {
+        self.db
+            .execute("DELETE FROM report_meta WHERE path = ?1", [path])?;
+        Ok(())
+    }
+
     pub fn mark_report_seen(&self, path: &str) -> Result<()> {
         self.db.execute(
             "INSERT INTO report_meta (path, ts, seen) VALUES (?1, ?2, 1) ON CONFLICT(path) DO UPDATE SET seen = 1",

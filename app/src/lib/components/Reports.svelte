@@ -6,7 +6,11 @@
   let files = $state<ReportFile[]>([]);
   let current = $state<ReportFile | null>(null);
   let query = $state("");
-  let collapsed = $state<Record<string, boolean>>({});
+  // Collapsed folders, remembered in this browser profile. "" is the root.
+  const COLLAPSED_KEY = "drovr.collapsedReportFolders";
+  let collapsed = $state<Record<string, boolean>>(loadCollapsed());
+  // Folders opened for now to show a report you were taken to; not remembered.
+  let revealed = $state<Record<string, boolean>>({});
   let expanded = $state<Record<string, boolean>>({});
   let feedback = $state("");
   let target = $state("");
@@ -23,7 +27,10 @@
       if (!loaded) {
         loaded = true;
         const next = files.find((f) => !f.seen);
-        if (next && !current) open(next);
+        if (next && !current) {
+          revealed[next.folder] = true;
+          open(next);
+        }
       }
     } catch (e) { toast(String(e)); }
   }
@@ -34,7 +41,28 @@
     return () => clearInterval(t);
   });
 
-  // A report and the earlier copies of it: same folder, agent and title.
+  function loadCollapsed(): Record<string, boolean> {
+    try {
+      return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  }
+
+  const isCollapsed = (folder: string) => !!collapsed[folder] && !revealed[folder];
+
+  function toggle(folder: string) {
+    const next = { ...collapsed, [folder]: !isCollapsed(folder) };
+    delete revealed[folder];
+    collapsed = next;
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
+    } catch {}
+  }
+
+  // A report and the earlier copies of it: same folder and title, matched the
+  // way publishing matches them (ignoring case and punctuation).
+  const titleKey = (t: string) => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(" ");
   type Report = { key: string; f: ReportFile; older: ReportFile[] };
 
   // Root first, then subfolders by most recent activity. Files come newest
@@ -46,7 +74,7 @@
       if (q && !`${f.title} ${f.folder} ${f.agent} ${f.summary}`.toLowerCase().includes(q)) continue;
       if (!map.has(f.folder)) map.set(f.folder, new Map());
       const reports = map.get(f.folder)!;
-      const key = `${f.folder}\n${f.agent}\n${f.title}`;
+      const key = `${f.folder}\n${titleKey(f.title)}`;
       const r = reports.get(key);
       if (r) r.older.push(f);
       else reports.set(key, { key, f, older: [] });
@@ -102,13 +130,13 @@
     </div>
     <div class="scroll grow">
       {#each folders as [folder, list] (folder)}
-        <button class="folder" onclick={() => (collapsed[folder] = !collapsed[folder])}>
-          <span class="caret">{collapsed[folder] ? "▸" : "▾"}</span>
+        <button class="folder" onclick={() => toggle(folder)}>
+          <span class="caret">{isCollapsed(folder) ? "▸" : "▾"}</span>
           <span class="grow">{folder || "plans"}</span>
           {#if list.some(unseen)}<span class="dot"></span>{/if}
           <span class="muted small">{list.length}</span>
         </button>
-        {#if !collapsed[folder]}
+        {#if !isCollapsed(folder)}
           {#each list as r (r.key)}
             {@render item(r.f, false)}
             {#if r.older.length}

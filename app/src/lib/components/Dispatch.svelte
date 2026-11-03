@@ -24,6 +24,7 @@
   let cwd = $state("");
   let backend = $state("");
   let harness = $state("");
+  let model = $state("");
   let notes = $state("");
   let busy = $state(false);
 
@@ -35,7 +36,7 @@
   async function go() {
     busy = true;
     const a = await act(
-      () => api.dispatch(ticket, mode, name, cwd, backend, harness, notes, group, target),
+      () => api.dispatch(ticket, mode, name, cwd, backend, harness, notes, group, target, model.trim()),
       mode === "existing" ? `${ticket.key} sent to ${recipient}` : `${ticket.key} handed off`,
     );
     busy = false;
@@ -77,7 +78,7 @@
   <input id="d-name" value={name} oninput={(e) => (name = nameInput(e))} {...NAME_FIELD} />
   <label for="d-cwd">Working directory (repo)</label>
   <input id="d-cwd" bind:value={cwd} />
-  <RunDefaults {defaults} bind:backend bind:harness id="d-backend" />
+  <RunDefaults {defaults} bind:backend bind:harness bind:model modelLabel={mode === "group" ? "Lead's model" : "Model"} id="d-backend" />
   {/if}
   <label for="d-notes">Notes for the agent</label>
   <textarea id="d-notes" rows="4" bind:value={notes} placeholder="Constraints, approach, where to look, what not to touch…"></textarea>

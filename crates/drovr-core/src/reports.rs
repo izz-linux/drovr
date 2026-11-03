@@ -63,9 +63,13 @@ pub fn save(cfg: &Config, folder: &str, title: &str, html: &str) -> Result<PathB
     Ok(path)
 }
 
-/// Publish `agent`'s report into `folder` and mark it unread. Publishing a
-/// title the agent already published there replaces its newest copy, so a
-/// revised plan updates in place instead of piling up as `-2`, `-3`, ….
+/// Publish `agent`'s report into `folder` and mark it unread. A title that's
+/// already published there, by any agent, is replaced: the newest copy is
+/// overwritten and any older copies are deleted, so a revised plan never piles
+/// up as `-2`, `-3`, …. Titles match ignoring case and punctuation, on the
+/// title they were published under or the page's `<title>`. `keep_versions`
+/// adds a new copy instead, for when the human asks to keep earlier versions.
+#[allow(clippy::too_many_arguments)]
 pub fn publish(
     cfg: &Config,
     store: &Store,
@@ -74,29 +78,59 @@ pub fn publish(
     title: &str,
     summary: &str,
     html: &str,
+    keep_versions: bool,
 ) -> Result<PathBuf> {
     let dir = folder_path(cfg, folder)?;
-    let previous = store
-        .report_meta()?
-        .into_iter()
-        .filter(|m| m.agent == agent)
-        .map(|m| (PathBuf::from(&m.path), m.title))
-        .filter(|(p, t)| {
-            p.parent() == Some(dir.as_path())
-                && p.is_file()
-                // Reports from before titles were kept go by their <title>.
-                && if t.is_empty() { title_of(p) == title } else { t == title }
-        })
-        .max_by(|(a, _), (b, _)| modified(a).total_cmp(&modified(b)));
-    let path = match previous {
-        Some((path, _)) => {
-            std::fs::write(&path, html)?;
-            path
+    let path = if keep_versions {
+        save(cfg, folder, title, html)?
+    } else {
+        let keys: Vec<String> = [Some(title.to_string()), title_in(html)]
+            .into_iter()
+            .flatten()
+            .map(|t| title_key(&t))
+            .filter(|k| !k.is_empty())
+            .collect();
+        let mut copies: Vec<PathBuf> = store
+            .report_meta()?
+            .into_iter()
+            // Only what agents published: never a file you wrote yourself.
+            .filter(|m| !m.agent.is_empty())
+            .map(|m| (PathBuf::from(&m.path), m.title))
+            .filter(|(p, t)| {
+                p.parent() == Some(dir.as_path())
+                    && p.is_file()
+                    && [t.clone(), title_of(p)]
+                        .iter()
+                        .any(|t| keys.contains(&title_key(t)))
+            })
+            .map(|(p, _)| p)
+            .collect();
+        copies.sort_by(|a, b| modified(b).total_cmp(&modified(a)));
+        copies.dedup();
+        match copies.split_first() {
+            Some((newest, older)) => {
+                std::fs::write(newest, html)?;
+                for p in older {
+                    std::fs::remove_file(p)?;
+                    store.forget_report(&p.display().to_string())?;
+                }
+                newest.clone()
+            }
+            None => save(cfg, folder, title, html)?,
         }
-        None => save(cfg, folder, title, html)?,
     };
     store.publish_report(&path.display().to_string(), agent, title, summary)?;
     Ok(path)
+}
+
+/// A title for matching: lowercase words, ignoring punctuation and spacing.
+fn title_key(title: &str) -> String {
+    title
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn modified(p: &Path) -> f64 {
@@ -126,21 +160,22 @@ fn title_of(path: &Path) -> String {
     if let Ok(f) = std::fs::File::open(path) {
         let _ = f.take(16 * 1024).read_to_end(&mut bytes);
     }
-    let head = String::from_utf8_lossy(&bytes);
-    // ASCII lowercasing keeps byte offsets, so they index `head` too.
-    let lower = head.to_ascii_lowercase();
-    if let Some(a) = lower.find("<title>").map(|a| a + "<title>".len()) {
-        if let Some(len) = lower[a..].find("</title>") {
-            let t = head[a..a + len].trim();
-            if !t.is_empty() {
-                return t.to_string();
-            }
-        }
-    }
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .replace(['-', '_'], " ")
+    title_in(&String::from_utf8_lossy(&bytes)).unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .replace(['-', '_'], " ")
+    })
+}
+
+/// The `<title>` of an HTML page, if it has a non-empty one.
+fn title_in(html: &str) -> Option<String> {
+    // ASCII lowercasing keeps byte offsets, so they index `html` too.
+    let lower = html.to_ascii_lowercase();
+    let a = lower.find("<title>")? + "<title>".len();
+    let len = lower[a..].find("</title>")?;
+    let t = html[a..a + len].trim();
+    (!t.is_empty()).then(|| t.to_string())
 }
 
 pub fn list(cfg: &Config, store: &Store) -> Result<Vec<ReportFile>> {
@@ -321,23 +356,43 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store = Store::open(&dir.join("t.db")).unwrap();
         let publish = |agent: &str, title: &str, html: &str| {
-            publish(&cfg, &store, "sre-1", agent, title, "s", html).unwrap()
+            publish(&cfg, &store, "sre-1", agent, title, "s", html, false).unwrap()
         };
+        let read = |p: &PathBuf| std::fs::read_to_string(p).unwrap();
 
         let a = publish("lead", "Cutover runbook", "<p>v1</p>");
         store.mark_report_seen(&a.display().to_string()).unwrap();
-        // Same agent, same title: the same file, unread again.
+        // Same title: the same file, unread again.
         assert_eq!(publish("lead", "Cutover runbook", "<p>v2</p>"), a);
-        assert_eq!(std::fs::read_to_string(&a).unwrap(), "<p>v2</p>");
-        // Another agent's report of the same title, and another title, are new files.
-        let b = publish("worker", "Cutover runbook", "<p>w</p>");
+        assert_eq!(read(&a), "<p>v2</p>");
+        // Whichever agent publishes it, and however the title is cased or punctuated.
+        assert_eq!(publish("worker", "Cutover runbook", "<p>w</p>"), a);
+        assert_eq!(publish("lead-2", "cutover  Runbook!", "<p>v3</p>"), a);
+        assert_eq!(read(&a), "<p>v3</p>");
+        // A title argument that drifts still matches on the page's <title>.
+        assert_eq!(
+            publish(
+                "lead",
+                "Cutover runbook (revised)",
+                "<title>Cutover runbook</title>4"
+            ),
+            a
+        );
+        // Another title is another report, even one that shares a long prefix.
         let c = publish("lead", "Cutover runbook 2", "<p>c</p>");
-        assert!(b.ends_with("sre-1/cutover-runbook-2.html"));
-        assert!(c.ends_with("sre-1/cutover-runbook-2-2.html"));
-        assert_eq!(publish("lead", "Cutover runbook", "<p>v3</p>"), a);
-        assert_eq!(std::fs::read_to_string(&b).unwrap(), "<p>w</p>");
+        assert_ne!(c, a);
+        let long1 = publish("lead", "Payments API migration plan phase one", "<p>1</p>");
+        let long2 = publish("lead", "Payments API migration plan phase two", "<p>2</p>");
+        assert_ne!(long1, long2);
+        // A file you wrote yourself with the same <title> is never touched.
+        let mine = dir.join("sre-1/mine.html");
+        std::fs::write(&mine, "<title>Cutover runbook</title>mine").unwrap();
+        store.mark_report_seen(&mine.display().to_string()).unwrap();
+        assert_eq!(publish("lead", "Cutover runbook", "<p>v5</p>"), a);
+        assert_eq!(read(&mine), "<title>Cutover runbook</title>mine");
+
         let files = list(&cfg, &store).unwrap();
-        assert_eq!(files.len(), 3);
+        assert_eq!(files.len(), 5);
         assert!(
             !files
                 .iter()
@@ -345,11 +400,23 @@ mod tests {
                 .unwrap()
                 .seen
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
-        // Copies published before titles were kept match on their <title>,
-        // and the newest one is replaced.
+    #[test]
+    fn republishing_removes_older_copies() {
+        let dir = std::env::temp_dir().join(format!("drovr-copies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.display().to_string();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+
+        // Copies left over from before republishing replaced reports: one with
+        // no stored title, which goes by its <title>.
         let old1 = save(&cfg, "sre-1", "Old plan", "<title>Old plan</title>1").unwrap();
-        let old2 = save(&cfg, "sre-1", "Old plan", "<title>Old plan</title>2").unwrap();
+        let old2 = save(&cfg, "sre-1", "Old plan", "<p>2</p>").unwrap();
+        let old3 = save(&cfg, "sre-1", "Old plan", "<p>3</p>").unwrap();
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
             .write(true)
@@ -357,15 +424,61 @@ mod tests {
             .unwrap()
             .set_modified(later)
             .unwrap();
-        for p in [&old1, &old2] {
+        store
+            .publish_report(&old1.display().to_string(), "lead", "", "s")
+            .unwrap();
+        for p in [&old2, &old3] {
             store
-                .publish_report(&p.display().to_string(), "lead", "", "s")
+                .publish_report(&p.display().to_string(), "worker", "Old plan", "s")
                 .unwrap();
         }
+        // The same title in another folder is another report.
+        let elsewhere =
+            publish(&cfg, &store, "sre-2", "lead", "Old plan", "s", "x", false).unwrap();
+
+        let kept = publish(&cfg, &store, "sre-1", "lead", "Old plan", "s", "new", false).unwrap();
+        assert_eq!(kept, old2, "the newest copy is the one kept");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "new");
+        assert!(!old1.exists() && !old3.exists());
+        assert!(elsewhere.exists());
+        let paths: Vec<String> = store
+            .report_meta()
+            .unwrap()
+            .into_iter()
+            .map(|m| m.path)
+            .collect();
+        assert!(!paths.contains(&old1.display().to_string()));
+        assert!(!paths.contains(&old3.display().to_string()));
+        assert_eq!(list(&cfg, &store).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keep_versions_adds_a_copy() {
+        let dir = std::env::temp_dir().join(format!("drovr-versions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.display().to_string();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+
+        let a = publish(&cfg, &store, "", "solo", "Design", "s", "v1", false).unwrap();
+        let b = publish(&cfg, &store, "", "solo", "Design", "s", "v2", true).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "v1");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "v2");
+        // Without it, the next publish replaces the newest and clears the rest.
+        std::fs::File::options()
+            .write(true)
+            .open(&b)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
         assert_eq!(
-            publish("lead", "Old plan", "<title>Old plan</title>3"),
-            old2
+            publish(&cfg, &store, "", "solo", "Design", "s", "v3", false).unwrap(),
+            b
         );
+        assert!(!a.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
