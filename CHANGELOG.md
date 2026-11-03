@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/izz-linux/drovr/compare/v0.7.0...v0.8.0) (2026-11-03)
+
+
+### Features
+
+* agents query Datadog with pup, with read-only commands approved automatically ([106cb21](https://github.com/izz-linux/drovr/commit/106cb21e41be428745dc50601ab720f120a8442f))
+* pick the model when starting an agent, a group's lead or a dispatched ticket ([106cb21](https://github.com/izz-linux/drovr/commit/106cb21e41be428745dc50601ab720f120a8442f))
+* workers a lead starts without asking run on the lead's model, and the Spawn card takes a model ([106cb21](https://github.com/izz-linux/drovr/commit/106cb21e41be428745dc50601ab720f120a8442f))
+
+
+### Bug Fixes
+
+* republishing a report replaces every copy of it, whichever agent published it ([106cb21](https://github.com/izz-linux/drovr/commit/106cb21e41be428745dc50601ab720f120a8442f))
+* the Inbox lists items oldest first, so new ones don't jump the queue ([106cb21](https://github.com/izz-linux/drovr/commit/106cb21e41be428745dc50601ab720f120a8442f))
+* the Reports view remembers which folders are collapsed ([106cb21](https://github.com/izz-linux/drovr/commit/106cb21e41be428745dc50601ab720f120a8442f))
+
 ## [0.7.0](https://github.com/izz-linux/drovr/compare/v0.6.0...v0.7.0) (2026-10-31)
 
 
