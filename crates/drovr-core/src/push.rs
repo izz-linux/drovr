@@ -86,6 +86,8 @@ pub struct Preview {
     /// `a41f2c9 fix: subject`
     pub commits: Vec<String>,
     pub this_push: String,
+    /// Why `this_push` is empty; None when it isn't.
+    pub this_push_note: Option<String>,
     pub whole_branch: Option<WholeBranch>,
     pub uncommitted: Option<String>,
     pub uncommitted_note: Option<String>,
@@ -128,6 +130,22 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
         p.pr_summary = pr_summary(&parsed.body, &dir);
     }
     p
+}
+
+const DIFF_MISSING: &str =
+    "The diff couldn't be read, though the summary above reports changes.";
+
+/// What the card says when `this_push` has no text.
+fn this_push_note(commits: usize, files: usize, text: &str) -> Option<&'static str> {
+    if !text.trim().is_empty() {
+        None
+    } else if files > 0 {
+        Some(DIFF_MISSING)
+    } else if commits > 0 {
+        Some("These commits have no file changes.")
+    } else {
+        Some("Nothing new to push.")
+    }
 }
 
 const MAX_SUMMARY: u64 = 256 * 1024;
@@ -468,7 +486,8 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
     let name = Path::new(&root)
         .file_name()
         .map_or(root.clone(), |n| n.to_string_lossy().into_owned());
-    let summary_line = if commits.is_empty() && this_push.is_empty() {
+    let this_push_note = this_push_note(commits.len(), files, &this_push).map(str::to_string);
+    let summary_line = if commits.is_empty() && this_push.is_empty() && files == 0 {
         format!("{name} · {branch} · nothing to push")
     } else {
         format!(
@@ -509,6 +528,7 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
         summary_line,
         commits,
         this_push,
+        this_push_note,
         whole_branch,
         uncommitted: pending,
         uncommitted_note: pending_note,
@@ -2104,5 +2124,59 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
             std::fs::read_to_string(out).unwrap().trim(),
             "4|repos/{owner}/{repo}/git/ref/heads/a b"
         );
+    }
+
+    #[test]
+    fn invalid_utf8_keeps_the_diff() {
+        let f = Fixture::new("latin1");
+        f.sh("git checkout -q -b x && git push -q -u origin x");
+        f.commit("ok.txt", "visible\n", "feat: ok");
+        std::fs::write(f.work.join("latin1.txt"), b"caf\xe9 secret\n").unwrap();
+        f.sh("git add -A && git commit -q -m 'feat: latin1'");
+        let p = f.preview("git push");
+        assert!(p.this_push.contains("+visible"), "{p:?}");
+        assert!(p.this_push.contains("+caf\u{fffd} secret"), "{p:?}");
+        assert_eq!(p.this_push_note, None);
+        let w = p.whole_branch.unwrap();
+        assert!(w.text.contains("+visible"));
+    }
+
+    #[test]
+    fn empty_push_notes() {
+        let unreadable = Some(DIFF_MISSING);
+        for (commits, files, text, want) in [
+            (0, 0, "", Some("Nothing new to push.")),
+            (1, 0, "", Some("These commits have no file changes.")),
+            (2, 0, "\n", Some("These commits have no file changes.")),
+            (2, 2, "", unreadable),
+            (0, 1, "", unreadable),
+            (2, 2, "diff", None),
+        ] {
+            assert_eq!(
+                this_push_note(commits, files, text),
+                want,
+                "{commits} {files} {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_commit_says_so() {
+        let f = Fixture::new("emptycommit");
+        f.sh("git checkout -q -b x && git push -q -u origin x");
+        f.sh("git commit -q --allow-empty -m 'chore: empty'");
+        let p = f.preview("git push");
+        assert_eq!(
+            p.this_push_note.as_deref(),
+            Some("These commits have no file changes.")
+        );
+        assert!(p.summary_line.contains("1 commit, 0 files"), "{p:?}");
+    }
+
+    #[test]
+    fn nothing_new_says_so() {
+        let f = Fixture::new("nothingnew");
+        let p = f.preview("git push");
+        assert_eq!(p.this_push_note.as_deref(), Some("Nothing new to push."));
     }
 }

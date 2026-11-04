@@ -70,7 +70,7 @@ export type SlackMessage = { channel: string; user: string; ts: string; text: st
 export type Change = { path: string; status: string; uncommitted: boolean; is_html: boolean };
 export type PushPreview = {
   unavailable: string | null; pushes: boolean; root: string; branch: string; remote: string; remote_branch: string;
-  tracking: string | null; assumed_folder: boolean; notices: string[]; summary_line: string; commits: string[]; this_push: string;
+  tracking: string | null; assumed_folder: boolean; notices: string[]; summary_line: string; commits: string[]; this_push: string; this_push_note: string | null;
   whole_branch: { base: string; text: string; marked: number[]; commits: number; files: number } | null;
   uncommitted: string | null; uncommitted_note: string | null; pr_summary: { text: string | null; note: string | null } | null;
 };

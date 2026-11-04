@@ -90,14 +90,14 @@ pub fn sh(
     let mut out_pipe = child.stdout.take().unwrap();
     let mut err_pipe = child.stderr.take().unwrap();
     let out_t = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = out_pipe.read_to_string(&mut s);
-        s
+        let mut b = Vec::new();
+        let _ = out_pipe.read_to_end(&mut b);
+        String::from_utf8_lossy(&b).into_owned()
     });
     let err_t = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = err_pipe.read_to_string(&mut s);
-        s
+        let mut b = Vec::new();
+        let _ = err_pipe.read_to_end(&mut b);
+        String::from_utf8_lossy(&b).into_owned()
     });
     let start = Instant::now();
     let mut timed_out = false;
@@ -185,6 +185,19 @@ mod tests {
         assert!(o.timed_out);
         let o = sh("cat", None, Some("abc"), Duration::from_secs(5)).unwrap();
         assert_eq!(o.stdout, "abc");
+    }
+
+    #[test]
+    fn sh_keeps_output_that_isnt_utf8() {
+        let o = sh(
+            r"printf 'caf\351 out\n'; printf 'caf\351 err\n' >&2",
+            None,
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(o.stdout, "caf\u{fffd} out\n");
+        assert_eq!(o.stderr, "caf\u{fffd} err\n");
     }
 
     #[test]

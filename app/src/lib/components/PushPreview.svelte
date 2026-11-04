@@ -107,8 +107,8 @@
           {/if}
           {#if preview.this_push.trim()}
             <DiffLines text={preview.this_push} class="pp-diff" />
-          {:else}
-            <div class="muted small">Nothing new to push.</div>
+          {:else if preview.this_push_note}
+            <div class="muted small">{preview.this_push_note}</div>
           {/if}
           {#if preview.uncommitted}
             <div class="label">Not committed yet; the final commit may differ.</div>
