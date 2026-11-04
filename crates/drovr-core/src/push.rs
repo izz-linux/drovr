@@ -657,6 +657,12 @@ fn uncommitted(root: &str, add: &Add) -> Result<(String, usize)> {
 
 const MAX_DEPTH: usize = 4;
 
+const WRITES_BODY: &str = "The command writes this file first.";
+
+/// Starts a word `strip_redirects` leaves where an output redirect was: the
+/// file it writes.
+const WRITE_MARK: &str = "\0>";
+
 /// `gh pr` flags that take a value we don't read.
 const GH_SKIPPED: &[&str] = &[
     "--title",
@@ -700,6 +706,8 @@ struct Scan {
     committed: bool,
     add: Add,
     add_unknown: bool,
+    /// Files redirected or `tee`d to so far.
+    writes: HashSet<String>,
 }
 
 impl Scan {
@@ -717,7 +725,15 @@ impl Scan {
     }
 
     fn segment(&mut self, seg: &[String], depth: usize) {
-        let Some((prog, args)) = command(seg).split_first() else {
+        for target in seg.iter().filter_map(|w| w.strip_prefix(WRITE_MARK)) {
+            self.wrote(target);
+        }
+        let seg: Vec<String> = seg
+            .iter()
+            .filter(|w| !w.starts_with(WRITE_MARK))
+            .cloned()
+            .collect();
+        let Some((prog, args)) = command(&seg).split_first() else {
             return;
         };
         match prog.rsplit('/').next().unwrap_or(prog) {
@@ -730,10 +746,28 @@ impl Scan {
                 }
             }
             "cd" | "pushd" => self.cd(args),
+            "tee" => {
+                for target in args.iter().filter(|a| !a.starts_with('-')) {
+                    self.wrote(target);
+                }
+            }
             "git" => self.git(args),
             "gh" => self.gh(args),
             _ => {}
         }
+    }
+
+    /// A file's path as written in the command, from the shell's folder.
+    fn path(&self, file: &str) -> String {
+        join(
+            self.cwd.as_deref(),
+            file.strip_prefix("./").unwrap_or(file),
+        )
+    }
+
+    fn wrote(&mut self, file: &str) {
+        let path = self.path(file);
+        self.writes.insert(path);
     }
 
     fn cd(&mut self, args: &[String]) {
@@ -946,6 +980,8 @@ impl Scan {
                     Body::Unreadable("The body comes from standard input.".into())
                 } else if unknowable(v) {
                     Body::Unreadable("The body file is set by a shell variable.".into())
+                } else if self.writes.contains(&self.path(v)) {
+                    Body::Unreadable(WRITES_BODY.into())
                 } else if self.cwd_unknown && !is_absolute(v) {
                     Body::Unreadable("The body file's folder is set by a shell variable.".into())
                 } else {
@@ -1052,8 +1088,9 @@ fn join(cur: Option<&str>, d: &str) -> String {
 }
 
 /// Drop redirections (`> f`, `2>&1`, `<<EOF`) so they aren't read as
-/// arguments. A word after a flag that takes a value is left alone: it's
-/// the value (`--body '<b>x</b>'`).
+/// arguments, marking the files they write (see `WRITE_MARK`). A word after
+/// a flag that takes a value is left alone: it's the value
+/// (`--body '<b>x</b>'`).
 fn strip_redirects(words: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
@@ -1065,14 +1102,26 @@ fn strip_redirects(words: Vec<String>) -> Vec<String> {
         let op = w.trim_start_matches(|c: char| c.is_ascii_digit());
         if !after_flag && op.starts_with(['<', '>']) {
             let bare = op.chars().all(|c| c == '<' || c == '>');
-            if !bare {
+            let next = words.get(i + 1).map(String::as_str);
+            let target = if !bare {
                 i += 1;
-            } else if words.get(i + 1).map(String::as_str) == Some("&") {
+                Some(op.trim_start_matches('>'))
+            } else if next == Some("&") {
                 i += 3;
+                None
             } else {
                 i += 2;
+                next
+            };
+            if let Some(t) = target.filter(|_| op.starts_with('>')) {
+                out.push(format!("{WRITE_MARK}{t}"));
             }
             continue;
+        }
+        if !after_flag {
+            if let Some((_, t)) = w.split_once('>') {
+                out.push(format!("{WRITE_MARK}{t}"));
+            }
         }
         out.push(w.clone());
         i += 1;
@@ -1494,7 +1543,7 @@ mod tests {
             ),
             (
                 "cat > pr.md <<EOF\nbody\nEOF\ngh pr create --body-file pr.md",
-                |p| assert_eq!(p.body, Body::File("pr.md".into())),
+                |p| assert_eq!(p.body, Body::Unreadable(WRITES_BODY.into())),
             ),
             (
                 "cat <<-'EOF' > pr.md\n\tgit push origin nope\n\tEOF\ngit push origin a",
@@ -1691,6 +1740,42 @@ mod tests {
         assert_eq!(p.unpreviewable, None);
         unpreviewable("git add $F && git commit -m x && git push");
         unpreviewable("git add $F && git commit -m x && gh pr create");
+    }
+
+    #[test]
+    fn a_body_file_the_command_writes() {
+        for cmd in [
+            "cat > pr.md <<'EOF'\nfresh\nEOF\ngh pr edit --body-file pr.md",
+            "cat <<'EOF' > pr.md\nfresh\nEOF\ngh pr edit --body-file pr.md",
+            "echo fresh > pr.md && gh pr edit -F pr.md",
+            "echo fresh >pr.md && gh pr edit -F pr.md",
+            "echo fresh>pr.md && gh pr edit -F pr.md",
+            "echo fresh >> pr.md && gh pr edit -F pr.md",
+            "echo fresh 2> pr.md && gh pr edit -F pr.md",
+            "echo fresh > ./pr.md && gh pr edit -F pr.md",
+            "echo fresh > pr.md && gh pr edit -F ./pr.md",
+            "echo fresh | tee pr.md && gh pr edit -F pr.md",
+            "echo fresh | tee -a pr.md && gh pr edit -F pr.md",
+            "echo fresh | /usr/bin/tee a.md pr.md && gh pr edit -F pr.md",
+            "cd /a && echo fresh > pr.md && gh pr edit -F pr.md",
+            "echo fresh > /a/pr.md && cd /a && gh pr edit -F pr.md",
+            "bash -c 'echo fresh > pr.md' && gh pr edit -F pr.md",
+        ] {
+            let p = parse(cmd).unwrap();
+            assert_eq!(p.body, Body::Unreadable(WRITES_BODY.into()), "{cmd}");
+        }
+        for cmd in [
+            "echo fresh > other.md && gh pr edit -F pr.md",
+            "cat pr.md > out.md && gh pr edit -F pr.md",
+            "cat < pr.md && gh pr edit -F pr.md",
+            "cd /a && echo fresh > pr.md && cd /b && gh pr edit -F pr.md",
+            "gh pr edit -F pr.md && echo done > pr.md",
+            "gh pr edit --title '>' -F pr.md",
+            "git commit -m 'see > pr.md' && gh pr edit -F pr.md",
+        ] {
+            let p = parse(cmd).unwrap();
+            assert_eq!(p.body, Body::File("pr.md".into()), "{cmd}");
+        }
     }
 
     #[test]
@@ -2743,5 +2828,19 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         assert!(unavailable(&p).contains("shell variable"), "{p:?}");
         assert!(p.pr_summary.is_none(), "{p:?}");
         assert!(!p.pushes);
+    }
+
+    #[test]
+    fn stale_body_file_is_not_shown() {
+        let f = Fixture::new("i2");
+        std::fs::write(f.work.join("pr.md"), "stale").unwrap();
+        for cmd in [
+            "cat > pr.md <<'EOF'\nfresh\nEOF\ngh pr edit --body-file pr.md",
+            "echo fresh > pr.md && gh pr edit --body-file pr.md",
+        ] {
+            let s = f.preview(cmd).pr_summary.unwrap();
+            assert_eq!(s.text, None, "{cmd}");
+            assert_eq!(s.note.as_deref(), Some(WRITES_BODY), "{cmd}");
+        }
     }
 }
