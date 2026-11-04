@@ -601,6 +601,36 @@ async fn review_diff(root: String, path: String, scope: Vec<String>) -> Res<Stri
     blocking(move |_| review::diff(&root, &path, &scope)).await
 }
 
+#[tauri::command]
+async fn push_preview(
+    command: String,
+    cwd: String,
+    named_cwd: bool,
+) -> Res<drovr_core::push::Preview> {
+    tauri::async_runtime::spawn_blocking(move || {
+        drovr_core::push::preview(&command, &cwd, named_cwd)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn push_github_moved(
+    root: String,
+    branch: String,
+    tracking: Option<String>,
+) -> Res<Option<bool>> {
+    blocking(move |e| {
+        Ok(drovr_core::push::github_moved(
+            &e.cfg.watch.gh,
+            &root,
+            &branch,
+            tracking.as_deref(),
+        ))
+    })
+    .await
+}
+
 // -- the record ---------------------------------------------------------------
 
 /// Every ticket with a record, most recently updated first.
@@ -890,6 +920,8 @@ pub fn run() {
             ask,
             review,
             review_diff,
+            push_preview,
+            push_github_moved,
             config_info,
             save_config,
             reports,
