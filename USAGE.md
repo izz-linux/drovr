@@ -174,6 +174,12 @@ drovr ask "What did #sre decide about the payments API last week?"
 2. In Settings, set `datadog.pup = true`, and `datadog.site` if your Datadog isn't US1.
 3. Ask an agent to investigate ("correlate the checkout errors with latency since 14:00"). Its read-only `pup` queries (logs, metrics, dashboards, APM) run without asking. A write, `pup auth`, or a pup command piped into something else comes to the **Inbox** as a permission.
 
+### Share one memory across agents
+
+1. In Settings, set `memory.shared = true`. Agents use the memory Claude Code keeps for `defaults.cwd`; set `memory.dir` to use another folder.
+2. Agents pick it up on their next run, wherever they work. Leads and solo agents save to it. Workers send what they'd save to their lead ("For memory: …"), and the lead decides.
+3. Keep `MEMORY.md` under 200 lines; past that, Claude Code stops loading it.
+
 ### Stop, resume and clean up
 
 - **Stop:** **Stop** ends an agent's current run, and **Resume** continues the same conversation.

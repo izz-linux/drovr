@@ -518,6 +518,13 @@ impl Engine {
         if self.cfg.datadog.pup {
             text += &crate::config::personalize(crate::datadog::PROMPT, &self.cfg.your_name());
         }
+        // Only Claude Code has auto memory.
+        if harness::of(agent).name() == "claude" {
+            text += &crate::config::personalize(
+                &crate::memory::prompt(&self.cfg, agent),
+                &self.cfg.your_name(),
+            );
+        }
         let path = self.agent_dir(&agent.name).join("system.md");
         std::fs::write(&path, text)?;
         Ok(path)

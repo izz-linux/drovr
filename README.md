@@ -435,6 +435,17 @@ What changes when it's on:
 - **Agents are told** to use pup for Datadog rather than a Datadog MCP. To stop them reaching that MCP at all, block its tools: `defaults.disallowed_tools = ["mcp__datadog__*"]` (use the server's name from `claude mcp list`).
 - **herdr agents** get Claude Code's own permission prompts in their pane, so pup reads ask there as any command does.
 
+### Shared memory
+
+Claude Code keeps an auto memory for each project, in `~/.claude/projects/<project>/memory/`. It picks the project from the folder a session starts in: its git repo, or the folder itself outside one. So by default, a drovr agent working in one repo doesn't see what you saved while working in another, and a retro's agent, which starts in a new folder each time, sees nothing.
+
+With `memory.shared = true`, every Claude Code agent uses one memory instead: the one Claude Code keeps for `defaults.cwd`, or the folder in `memory.dir`. drovr passes it to each agent as Claude Code's `autoMemoryDirectory` setting (with `--settings`), so it loads that `MEMORY.md` wherever it works. Sessions and resuming still go by the agent's own folder.
+
+- **Who writes it:** leads and solo agents, retro agents included. Workers read it but don't write it: drovr denies their Write and Edit there. When a worker learns something worth keeping, it sends it to its lead with `send_message`, starting with "For memory:", and the lead decides what to save.
+- **Two leads at once** can still write it at the same time. They're told to read a file just before changing it and to edit rather than rewrite, and Claude Code refuses an edit to a file that changed since it was read.
+- **Keep the index short:** Claude Code loads only the first 200 lines (or 25 KB) of `MEMORY.md`, and with every agent saving into one, it fills up faster.
+- **Codex agents** have no auto memory, so this doesn't change them.
+
 ### Code review
 
 For any agent, this lists every git repo and worktree it worked in, so it works when you start agents in a folder above your repos.
@@ -585,6 +596,8 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `commands.timeout_seconds` | `600` | Time limit for commands you approve |
 | `reports.dir` | `"~/.claude/plans"` | Where reports are saved and listed |
 | `datadog.pup` | `false` | Agents query Datadog with `pup`: read-only pup commands run without asking (with `--read-only` added), writes come to the Inbox (see [Datadog](#datadog)) |
+| `memory.shared` | `false` | Every Claude Code agent reads one auto memory wherever it works; leads and solo agents write it, and workers send what's worth keeping to their lead (see [Shared memory](#shared-memory)) |
+| `memory.dir` | `""` | The shared memory folder; empty for the one Claude Code keeps for `defaults.cwd` (`~/.claude/projects/<defaults.cwd with / and . as ->/memory`) |
 | `datadog.site` | `""` | Your Datadog site if it isn't US1, e.g. `"us5.datadoghq.com"`; passed to agents and lookups as `DD_SITE` |
 | `[herdr]` | herdr's documented CLI | The herdr command templates (see below) |
 | `jira`, `confluence`, `slack` | `provider = "agent"` | How lookups reach each service (see below) |

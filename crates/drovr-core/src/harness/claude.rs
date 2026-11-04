@@ -145,6 +145,9 @@ fn claude_common(run: &Run) -> Vec<String> {
         args.push("--disallowedTools".into());
         args.push(cfg.defaults.disallowed_tools.join(","));
     }
+    if let Some(settings) = crate::memory::settings(cfg, run.agent) {
+        args.extend(["--settings".into(), settings]);
+    }
     args.extend(cfg.claude.extra_args.iter().cloned());
     args
 }
@@ -239,6 +242,7 @@ fn claude_event(v: &Value) -> Event {
 mod tests {
     use super::*;
     use crate::harness::testing::{agent, with};
+    use crate::store::Agent;
 
     #[test]
     fn claude_args_match_what_drovr_always_ran() {
@@ -261,6 +265,34 @@ mod tests {
         );
         let cmd = with(&a, Session::Resume, |r| Claude.attach_command(r).unwrap());
         assert!(cmd.starts_with("claude --resume s1 --mcp-config"), "{cmd}");
+    }
+
+    #[test]
+    fn agents_share_memory_when_asked() {
+        let mut cfg = Config::default();
+        let worker = Agent {
+            role: "worker".into(),
+            ..agent("s1")
+        };
+        let run = |cfg: &Config| {
+            claude_common(&Run {
+                cfg,
+                agent: &worker,
+                cli: "/opt/drovr".into(),
+                home: "/data/drovr".into(),
+                mcp_config: "/m.json".into(),
+                system_prompt: "/s.md".into(),
+                session: Session::New,
+            })
+        };
+        assert!(!run(&cfg).contains(&"--settings".to_string()));
+        cfg.memory.shared = true;
+        cfg.memory.dir = "/m/memory".into();
+        let args = run(&cfg);
+        let at = args.iter().position(|a| a == "--settings").unwrap();
+        let s: Value = serde_json::from_str(&args[at + 1]).unwrap();
+        assert_eq!(s["autoMemoryDirectory"], "/m/memory");
+        assert_eq!(s["permissions"]["deny"][0], "Write(//m/memory/**)");
     }
 
     #[test]
