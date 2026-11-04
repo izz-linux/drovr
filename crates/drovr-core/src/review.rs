@@ -323,7 +323,7 @@ pub fn diff(root: &str, path: &str, scope: &[String]) -> Result<String> {
     git(root, &format!("diff -M {since} -- {}", quote(path)))
 }
 
-fn new_file_diff(root: &str, path: &str) -> String {
+pub(crate) fn new_file_diff(root: &str, path: &str) -> String {
     let full = Path::new(root).join(path);
     match std::fs::read_to_string(&full) {
         Ok(text) => {

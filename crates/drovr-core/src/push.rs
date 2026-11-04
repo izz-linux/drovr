@@ -316,7 +316,12 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
         .ok()
         .map(|b| b.trim().to_string())
         .filter(|b| !b.is_empty());
-    let branch = match (&parsed.local, current) {
+    let on_head = |b: &str| current.as_deref() == Some(b);
+    let checked_out = match &parsed.local {
+        Some(l) => on_head(l),
+        None => current.is_some(),
+    };
+    let branch = match (&parsed.local, current.clone()) {
         (Some(l), _) => l.clone(),
         (None, Some(c)) => c,
         (None, None) => return Err("HEAD isn't on a branch, so there's nothing to compare.".into()),
@@ -411,6 +416,23 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
             plural(files, "file"),
         )
     };
+    let mut summary_line = summary_line;
+    let (mut pending, mut pending_note) = (None, None);
+    if parsed.commits_first && checked_out {
+        if repo_has_filter(&root) {
+            pending_note = Some(UNCOMMITTED_FILTERED.to_string());
+        } else {
+            match uncommitted(&root, &parsed.add) {
+                Ok((text, files)) if files > 0 => {
+                    summary_line +=
+                        &format!("; plus uncommitted changes in {}", plural(files, "file"));
+                    pending = Some(text);
+                }
+                Ok(_) => {}
+                Err(e) => pending_note = Some(format!("Uncommitted changes couldn't be read: {e}")),
+            }
+        }
+    }
     let whole_branch = if tracking.is_some() {
         whole_branch(&root, parsed, &remote, &local_ref, &this_push, &mut notices)
     } else {
@@ -427,6 +449,8 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
         commits,
         this_push,
         whole_branch,
+        uncommitted: pending,
+        uncommitted_note: pending_note,
         ..Preview::default()
     })
 }
@@ -465,6 +489,69 @@ fn whole_branch(
         commits,
         files: files as u32,
     })
+}
+
+const FILTER_CHECK: &str = "git config --local --includes --get-regexp '^filter\\.'";
+const FILTER_CHECK_WORKTREE: &str = "git config --worktree --includes --get-regexp '^filter\\.'";
+
+/// True when the repo's own config defines a content filter, or when that
+/// can't be told. Global and system config are not read: a global
+/// `filter.lfs` was set by the owner, not an agent. `--worktree` is asked
+/// only when `extensions.worktreeConfig` is on, because git errors on it
+/// otherwise in a repo with several worktrees.
+fn repo_has_filter(root: &str) -> bool {
+    let run = |cmd: &str| shell::sh(cmd, Some(Path::new(root)), None, Duration::from_secs(10));
+    let none = |cmd: &str| {
+        run(cmd).is_ok_and(|o| !o.timed_out && o.code == 1 && o.stdout.trim().is_empty())
+    };
+    if !none(FILTER_CHECK) {
+        return true;
+    }
+    let ext = run("git config --local --type=bool --get extensions.worktreeConfig");
+    match ext {
+        Ok(o) if !o.timed_out && o.code == 1 && o.stdout.trim().is_empty() => false,
+        Ok(o) if o.ok() && o.stdout.trim() == "false" => false,
+        Ok(o) if o.ok() && o.stdout.trim() == "true" => !none(FILTER_CHECK_WORKTREE),
+        _ => true,
+    }
+}
+
+const UNCOMMITTED_FILTERED: &str =
+    "Uncommitted changes can't be previewed in this repo because its git config defines content filters.";
+
+/// What the command's `git add` and `git commit` would include: `(text,
+/// files)`. Tracked changes come from `diff HEAD`; untracked files only
+/// when `add` names them.
+fn uncommitted(root: &str, add: &Add) -> Result<(String, usize)> {
+    let mut diff = vec!["diff"];
+    diff.extend(diff_args());
+    diff.extend(["HEAD", "--"]);
+    let mut pathspec: Vec<&str> = Vec::new();
+    if let Add::Paths(paths) = add {
+        pathspec.extend(paths.iter().map(String::as_str));
+        diff.extend(&pathspec);
+    }
+    let mut text = git(root, &diff)?;
+    if !matches!(add, Add::None) {
+        let mut ls = vec!["ls-files", "-z", "--others", "--exclude-standard", "--"];
+        ls.extend(&pathspec);
+        for path in git(root, &ls)?.split('\0').filter(|p| !p.is_empty()) {
+            let full = Path::new(root).join(path);
+            if full
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink())
+            {
+                text += &format!("diff --git a/{path} b/{path}\n(symlink)\n");
+            } else {
+                text += &review::new_file_diff(root, path);
+            }
+        }
+    }
+    let files = text
+        .lines()
+        .filter(|l| l.starts_with("diff --git "))
+        .count();
+    Ok((text, files))
 }
 
 const MAX_DEPTH: usize = 4;
@@ -1403,6 +1490,204 @@ mod tests {
         let p = f.preview("git push");
         assert!(p.this_push.contains("+changed"), "{p:?}");
         assert!(!marker.exists());
+    }
+
+    fn commit_push(f: &Fixture, edit: bool) {
+        f.sh("git checkout -q -b fix/x && git push -q -u origin fix/x");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.commit("b.txt", "b\n", "feat: b");
+        f.sh("git push -q origin fix/x");
+        if edit {
+            std::fs::write(f.work.join("a.txt"), "a2\n").unwrap();
+            std::fs::write(f.work.join("b.txt"), "b2\n").unwrap();
+            f.sh("git add a.txt");
+        }
+    }
+
+    #[test]
+    fn uncommitted_tracked() {
+        let f = Fixture::new("unc-tracked");
+        commit_push(&f, true);
+        let p = f.preview("git commit -am x && git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        let u = p.uncommitted.as_deref().unwrap_or_else(|| panic!("{p:?}"));
+        assert!(u.contains("+a2") && u.contains("+b2"), "{u}");
+        assert_eq!(p.uncommitted_note, None);
+        assert!(
+            p.summary_line
+                .ends_with("; plus uncommitted changes in 2 files"),
+            "{}",
+            p.summary_line
+        );
+    }
+
+    #[test]
+    fn uncommitted_one_file() {
+        let f = Fixture::new("unc-one");
+        commit_push(&f, false);
+        std::fs::write(f.work.join("a.txt"), "a2\n").unwrap();
+        let p = f.preview("git commit -am x && git push");
+        assert!(
+            p.summary_line
+                .ends_with("; plus uncommitted changes in 1 file"),
+            "{}",
+            p.summary_line
+        );
+    }
+
+    #[test]
+    fn add_all_untracked() {
+        let f = Fixture::new("unc-all");
+        commit_push(&f, false);
+        std::fs::write(f.work.join("new.txt"), "fresh\n").unwrap();
+        let p = f.preview("git add -A && git commit -m x && git push");
+        let u = p.uncommitted.as_deref().unwrap_or_else(|| panic!("{p:?}"));
+        assert!(u.contains("b/new.txt") && u.contains("+fresh"), "{u}");
+        assert!(u.contains("--- /dev/null"));
+        assert!(p.summary_line.ends_with("in 1 file"), "{}", p.summary_line);
+    }
+
+    #[test]
+    fn add_paths() {
+        let f = Fixture::new("unc-paths");
+        commit_push(&f, false);
+        std::fs::write(f.work.join("a.txt"), "a2\n").unwrap();
+        std::fs::write(f.work.join("b.txt"), "b2\n").unwrap();
+        std::fs::write(f.work.join("a-new.txt"), "n\n").unwrap();
+        std::fs::write(f.work.join("c-new.txt"), "n\n").unwrap();
+        let p = f.preview("git add a.txt a-new.txt && git commit -m x && git push");
+        let u = p.uncommitted.as_deref().unwrap_or_else(|| panic!("{p:?}"));
+        assert!(u.contains("+a2") && u.contains("a-new.txt"), "{u}");
+        assert!(!u.contains("b2") && !u.contains("c-new.txt"), "{u}");
+    }
+
+    #[test]
+    fn no_add_untracked_excluded() {
+        let f = Fixture::new("unc-noadd");
+        commit_push(&f, true);
+        std::fs::write(f.work.join("new.txt"), "fresh\n").unwrap();
+        let p = f.preview("git commit -am x && git push");
+        let u = p.uncommitted.as_deref().unwrap_or_else(|| panic!("{p:?}"));
+        assert!(!u.contains("new.txt"), "{u}");
+    }
+
+    #[test]
+    fn nothing_uncommitted() {
+        let f = Fixture::new("unc-none");
+        commit_push(&f, false);
+        let p = f.preview("git commit -am x && git push");
+        assert_eq!((p.uncommitted, p.uncommitted_note), (None, None));
+        assert!(!p.summary_line.contains("uncommitted"));
+    }
+
+    #[test]
+    fn no_commit_no_section() {
+        let f = Fixture::new("unc-nocommit");
+        commit_push(&f, true);
+        let p = f.preview("git push");
+        assert_eq!((p.uncommitted, p.uncommitted_note), (None, None));
+    }
+
+    #[test]
+    fn filter_refused() {
+        let f = Fixture::new("unc-filter");
+        let sentinel = f.dir.join("ran");
+        f.sh(&format!(
+            "git config filter.x.clean 'touch {}; cat'",
+            sentinel.display()
+        ));
+        std::fs::write(f.work.join(".gitattributes"), "*.txt filter=x\n").unwrap();
+        f.sh("git add .gitattributes && git commit -q -m attrs");
+        commit_push(&f, true);
+        f.commit("c.rs", "c\n", "feat: c");
+        let _ = std::fs::remove_file(&sentinel);
+        let p = f.preview("git commit -am x && git push");
+        assert_eq!(p.uncommitted, None);
+        assert!(
+            p.uncommitted_note
+                .as_deref()
+                .is_some_and(|n| n.contains("content filters")),
+            "{p:?}"
+        );
+        assert!(!sentinel.exists());
+        assert_eq!(p.commits.len(), 1, "{p:?}");
+        assert!(p.this_push.contains("+c"));
+        assert!(!p.summary_line.contains("uncommitted"));
+    }
+
+    #[test]
+    fn global_filter_allowed() {
+        let f = Fixture::new("unc-global");
+        let global = f.dir.join("gitconfig");
+        std::fs::write(&global, "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n").unwrap();
+        let run = |env: &str| {
+            shell::sh(
+                &format!("{env} {FILTER_CHECK}"),
+                Some(&f.work),
+                None,
+                Duration::from_secs(10),
+            )
+            .unwrap()
+        };
+        let o = run(&format!("GIT_CONFIG_GLOBAL={}", global.display()));
+        assert_eq!((o.code, o.stdout.trim()), (1, ""), "{}", o.stderr);
+        assert!(!repo_has_filter(&f.root()));
+        f.sh("git config filter.lfs.clean 'git-lfs clean -- %f'");
+        let o = run(&format!("GIT_CONFIG_GLOBAL={}", global.display()));
+        assert_eq!(o.code, 0);
+        assert!(repo_has_filter(&f.root()));
+    }
+
+    #[test]
+    fn linked_worktree_without_filter() {
+        let f = Fixture::new("unc-wt");
+        commit_push(&f, false);
+        f.sh("git worktree add -q ../wt -b other");
+        let wt = f.dir.join("wt");
+        std::fs::write(wt.join("a.txt"), "wt edit\n").unwrap();
+        let p = preview(
+            "git commit -am x && git push",
+            &wt.display().to_string(),
+            true,
+        );
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert_eq!(p.uncommitted_note, None, "{p:?}");
+        assert!(
+            p.uncommitted.as_deref().unwrap_or("").contains("+wt edit"),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn worktree_config_filter_refused() {
+        let f = Fixture::new("unc-wtcfg");
+        commit_push(&f, true);
+        f.sh("git config extensions.worktreeConfig true");
+        f.sh("git config --worktree filter.x.clean cat");
+        let p = f.preview("git commit -am x && git push");
+        assert_eq!(p.uncommitted, None);
+        assert!(p.uncommitted_note.is_some(), "{p:?}");
+    }
+
+    #[test]
+    fn whole_branch_with_uncommitted() {
+        let f = Fixture::new("unc-whole");
+        commit_push(&f, true);
+        let p = f.preview("git commit -am x && git push");
+        let w = p.whole_branch.as_ref().unwrap_or_else(|| panic!("{p:?}"));
+        assert!(!w.text.contains("a2") && !w.text.contains("b2"));
+        assert!(w.marked.is_empty());
+        assert!(p.uncommitted.is_some());
+    }
+
+    #[test]
+    fn not_on_named_branch() {
+        let f = Fixture::new("unc-other");
+        commit_push(&f, true);
+        f.sh("git branch other");
+        let p = f.preview("git commit -am x && git push origin other");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert_eq!((p.uncommitted, p.uncommitted_note), (None, None));
     }
 
     #[test]
