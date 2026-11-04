@@ -208,6 +208,11 @@ pub struct Base {
 /// The default branch (`origin/HEAD`, else `origin/main`, `origin/master`,
 /// `main`, `master`) and where this branch left it.
 pub fn base(root: &str) -> Base {
+    base_of(root, "HEAD")
+}
+
+/// Like `base`, for the branch at `rev` rather than `HEAD`.
+pub fn base_of(root: &str, rev: &str) -> Base {
     let head = Base {
         name: "HEAD".into(),
         commit: "HEAD".into(),
@@ -229,7 +234,7 @@ pub fn base(root: &str) -> Base {
     }) else {
         return head;
     };
-    match git(root, &format!("merge-base HEAD {}", quote(&name))) {
+    match git(root, &format!("merge-base {} {}", quote(rev), quote(&name))) {
         Ok(mb) if !mb.trim().is_empty() => Base {
             name,
             commit: mb.trim().to_string(),

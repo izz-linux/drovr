@@ -2,7 +2,12 @@
 //! `git push`, and the title and body of a `gh pr create` or `gh pr edit`.
 //! It only parses the text; nothing here runs the command.
 
-use crate::review::words;
+use crate::review::{self, words};
+use crate::shell::{self, quote};
+use anyhow::Result;
+use serde::Serialize;
+use std::path::Path;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Add {
@@ -45,6 +50,250 @@ pub fn parse(cmd: &str) -> Option<Parsed> {
     let mut scan = Scan::default();
     scan.run(cmd, 0);
     scan.found.then_some(scan.p)
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WholeBranch {
+    pub base: String,
+    pub text: String,
+    pub marked: Vec<u32>,
+    pub commits: u32,
+    pub files: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PrSummary {
+    pub text: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Preview {
+    /// Set: the card shows only this.
+    pub unavailable: Option<String>,
+    pub pushes: bool,
+    pub root: String,
+    pub branch: String,
+    pub remote: String,
+    pub remote_branch: String,
+    /// The tip we believe GitHub has; None: a new branch.
+    pub tracking: Option<String>,
+    pub assumed_folder: bool,
+    pub notices: Vec<String>,
+    /// `api · fix/x · 2 commits, 2 files, +14 −3`
+    pub summary_line: String,
+    /// `a41f2c9 fix: subject`
+    pub commits: Vec<String>,
+    pub this_push: String,
+    pub whole_branch: Option<WholeBranch>,
+    pub uncommitted: Option<String>,
+    pub uncommitted_note: Option<String>,
+    pub pr_summary: Option<PrSummary>,
+}
+
+/// What `command` would push, from local refs only: nothing is fetched and
+/// the command is never run. `named_cwd` is true when `cwd` is a folder the
+/// command was recorded with. Failures come back in `unavailable`.
+pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
+    let Some(parsed) = parse(command) else {
+        return Preview::unavailable("This command doesn't push.");
+    };
+    let assumed_folder = !named_cwd && parsed.dir.is_none();
+    let here = Path::new(cwd);
+    let dir = match &parsed.dir {
+        Some(d) => review::resolve(here, d),
+        None => here.to_path_buf(),
+    };
+    let mut p = if !parsed.pushes {
+        Preview {
+            root: if dir.is_dir() {
+                review::toplevel(&dir).unwrap_or_default()
+            } else {
+                String::new()
+            },
+            ..Preview::default()
+        }
+    } else if let Some(why) = &parsed.unpreviewable {
+        Preview::unavailable(why.clone())
+    } else {
+        match this_push(&parsed, &dir) {
+            Ok(p) => p,
+            Err(why) => Preview::unavailable(why),
+        }
+    };
+    p.pushes = parsed.pushes;
+    p.assumed_folder = assumed_folder;
+    p
+}
+
+impl Preview {
+    fn unavailable(why: impl Into<String>) -> Preview {
+        Preview {
+            unavailable: Some(why.into()),
+            ..Preview::default()
+        }
+    }
+}
+
+fn git(root: &str, args: &[&str]) -> Result<String> {
+    let args: Vec<String> = args.iter().map(|a| quote(a)).collect();
+    shell::sh(
+        &format!(
+            "git -c core.quotePath=false -c core.fsmonitor=false {}",
+            args.join(" ")
+        ),
+        Some(Path::new(root)),
+        None,
+        Duration::from_secs(30),
+    )?
+    .into_stdout("git")
+}
+
+/// Never runs a diff driver, a text conversion or a filter program from
+/// the repo's config.
+fn diff_args() -> [&'static str; 3] {
+    ["-M", "--no-ext-diff", "--no-textconv"]
+}
+
+fn plural(n: usize, one: &str) -> String {
+    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
+}
+
+/// `(files, added, removed)` from `git diff --shortstat`.
+fn shortstat(text: &str) -> (usize, usize, usize) {
+    let mut out = (0, 0, 0);
+    for part in text.split(',') {
+        let Some(n) = part.split_whitespace().next().and_then(|n| n.parse().ok()) else {
+            continue;
+        };
+        if part.contains("file") {
+            out.0 = n;
+        } else if part.contains("insertion") {
+            out.1 = n;
+        } else if part.contains("deletion") {
+            out.2 = n;
+        }
+    }
+    out
+}
+
+fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String> {
+    if !dir.is_dir() {
+        return Err(format!("The folder {} doesn't exist.", dir.display()));
+    }
+    let root = review::toplevel(dir)
+        .ok_or_else(|| format!("{} isn't in a git repository.", dir.display()))?;
+    let current = git(&root, &["symbolic-ref", "--short", "-q", "HEAD"])
+        .ok()
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty());
+    let branch = match (&parsed.local, current) {
+        (Some(l), _) => l.clone(),
+        (None, Some(c)) => c,
+        (None, None) => return Err("HEAD isn't on a branch, so there's nothing to compare.".into()),
+    };
+    let local_ref = format!("refs/heads/{branch}");
+    if branch.starts_with('-') || git(&root, &["rev-parse", "--verify", "-q", &local_ref]).is_err()
+    {
+        return Err(format!("{branch} isn't a local branch here."));
+    }
+    let remotes = git(&root, &["remote"]).unwrap_or_default();
+    let remote = match &parsed.remote {
+        Some(r) => r.clone(),
+        None => git(
+            &root,
+            &["config", "--get", &format!("branch.{branch}.remote")],
+        )
+        .map(|r| r.trim().to_string())
+        .ok()
+        .filter(|r| !r.is_empty() && r != ".")
+        .unwrap_or_else(|| "origin".into()),
+    };
+    if remote.starts_with('-') || !remotes.lines().any(|r| r == remote) {
+        return Err(format!("{remote} isn't a remote of this repository."));
+    }
+    let remote_branch = parsed
+        .remote_branch
+        .clone()
+        .unwrap_or_else(|| branch.clone());
+    if remote_branch.starts_with('-') {
+        return Err(format!("{remote_branch} isn't a usable branch name."));
+    }
+
+    let tracking = git(
+        &root,
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/remotes/{remote}/{remote_branch}"),
+        ],
+    )
+    .ok()
+    .map(|t| t.trim().to_string())
+    .filter(|t| !t.is_empty());
+    let start = match &tracking {
+        Some(t) => t.clone(),
+        None => {
+            let base = review::base_of(&root, &local_ref);
+            if base.name == "HEAD" {
+                return Err("There's no default branch to compare this new branch with.".into());
+            }
+            base.commit
+        }
+    };
+
+    let mut notices = Vec::new();
+    if let Some(t) = &tracking {
+        if git(&root, &["merge-base", "--is-ancestor", t, &local_ref]).is_err() {
+            notices.push(if parsed.force {
+                "History is being rewritten; this diff may include changes from main.".to_string()
+            } else {
+                format!(
+                    "GitHub's copy of {remote_branch} isn't an ancestor of {branch}; \
+                     a push without --force will be rejected."
+                )
+            });
+        }
+    }
+
+    let range = format!("{start}..{local_ref}");
+    let commits: Vec<String> = git(&root, &["log", "--format=%h %s", &range])
+        .map_err(|e| e.to_string())?
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let mut diff = vec!["diff"];
+    diff.extend(diff_args());
+    diff.extend([start.as_str(), local_ref.as_str(), "--"]);
+    let this_push = git(&root, &diff).map_err(|e| e.to_string())?;
+    diff.insert(1, "--shortstat");
+    let (files, added, removed) = shortstat(&git(&root, &diff).map_err(|e| e.to_string())?);
+
+    let name = Path::new(&root)
+        .file_name()
+        .map_or(root.clone(), |n| n.to_string_lossy().into_owned());
+    let summary_line = if commits.is_empty() && this_push.is_empty() {
+        format!("{name} · {branch} · nothing to push")
+    } else {
+        format!(
+            "{name} · {branch} · {}, {}, +{added} \u{2212}{removed}",
+            plural(commits.len(), "commit"),
+            plural(files, "file"),
+        )
+    };
+    Ok(Preview {
+        root,
+        branch,
+        remote,
+        remote_branch,
+        tracking,
+        notices,
+        summary_line,
+        commits,
+        this_push,
+        ..Preview::default()
+    })
 }
 
 const MAX_DEPTH: usize = 4;
@@ -724,5 +973,279 @@ mod tests {
         assert_eq!(p.dir, None);
         let p = parse("git push origin a && cd /late").unwrap();
         assert_eq!(p.dir, None);
+    }
+
+    struct Fixture {
+        dir: std::path::PathBuf,
+        work: std::path::PathBuf,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Fixture {
+            let dir =
+                std::env::temp_dir().join(format!("drovr-push-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let dir = dir.canonicalize().unwrap();
+            let f = Fixture {
+                work: dir.join("work"),
+                dir,
+            };
+            let run = |cmd: &str| f.run_in(&f.dir, cmd);
+            run("git init -q --bare -b main origin.git");
+            run("git clone -q origin.git work 2>/dev/null");
+            f.sh("git config user.name t && git config user.email t@example.com");
+            f.sh("git checkout -q -B main");
+            f.commit("base.txt", "base\n", "chore: base");
+            f.sh("git push -q -u origin main");
+            f
+        }
+
+        fn run_in(&self, dir: &Path, cmd: &str) {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{cmd}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        fn sh(&self, cmd: &str) {
+            self.run_in(&self.work, cmd);
+        }
+
+        fn commit(&self, file: &str, text: &str, msg: &str) {
+            std::fs::write(self.work.join(file), text).unwrap();
+            self.sh(&format!("git add {file} && git commit -q -m '{msg}'"));
+        }
+
+        fn root(&self) -> String {
+            self.work.display().to_string()
+        }
+
+        fn preview(&self, cmd: &str) -> Preview {
+            preview(cmd, &self.root(), true)
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn unavailable(p: &Preview) -> &str {
+        p.unavailable
+            .as_deref()
+            .unwrap_or_else(|| panic!("should be unavailable: {p:?}"))
+    }
+
+    #[test]
+    fn unpushed_commits_only() {
+        let f = Fixture::new("unpushed");
+        f.sh("git checkout -q -b fix/x && git push -q -u origin fix/x");
+        f.commit("new.txt", "fresh\n", "fix: new");
+        let p = f.preview("git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert!(p.pushes);
+        assert_eq!(p.commits.len(), 1);
+        assert!(p.commits[0].ends_with(" fix: new"));
+        assert!(p.this_push.contains("+fresh"));
+        assert!(!p.this_push.contains("base"));
+        assert_eq!(
+            p.summary_line,
+            "work \u{b7} fix/x \u{b7} 1 commit, 1 file, +1 \u{2212}0"
+        );
+        assert!(p.tracking.is_some());
+        assert_eq!((p.branch.as_str(), p.remote.as_str()), ("fix/x", "origin"));
+        assert_eq!(p.root, f.root());
+    }
+
+    #[test]
+    fn new_branch() {
+        let f = Fixture::new("newbranch");
+        f.sh("git checkout -q -b feat/y");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.commit("b.txt", "b\n", "feat: b");
+        let p = f.preview("git push -u origin feat/y");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert_eq!(p.tracking, None);
+        assert_eq!(p.commits.len(), 2);
+        assert!(p.summary_line.contains("2 commits, 2 files"));
+    }
+
+    #[test]
+    fn explicit_git_c() {
+        let f = Fixture::new("gitc");
+        let elsewhere = f.dir.display().to_string();
+        let p = preview(&format!("git -C {} push", f.root()), &elsewhere, false);
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert_eq!(p.root, f.root());
+        assert!(!p.assumed_folder);
+    }
+
+    #[test]
+    fn assumed_folder() {
+        let f = Fixture::new("assumed");
+        assert!(preview("git push", &f.root(), false).assumed_folder);
+        assert!(!preview("git push", &f.root(), true).assumed_folder);
+    }
+
+    #[test]
+    fn refspec() {
+        let f = Fixture::new("refspec");
+        f.sh("git checkout -q -b a");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.sh("git push -q origin a:b");
+        f.commit("a2.txt", "a2\n", "feat: a2");
+        let p = f.preview("git push origin a:b");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert_eq!((p.branch.as_str(), p.remote_branch.as_str()), ("a", "b"));
+        assert!(p.tracking.is_some());
+        assert_eq!(p.commits.len(), 1);
+    }
+
+    #[test]
+    fn nothing_to_push() {
+        let f = Fixture::new("nothing");
+        let p = f.preview("git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert!(p.this_push.is_empty());
+        assert!(p.summary_line.contains("nothing to push"));
+    }
+
+    fn amended(name: &str) -> Fixture {
+        let f = Fixture::new(name);
+        f.sh("git checkout -q -b f");
+        f.commit("f.txt", "one\n", "feat: f");
+        f.sh("git push -q -u origin f");
+        std::fs::write(f.work.join("f.txt"), "two\n").unwrap();
+        f.sh("git commit -q -a --amend -m 'feat: f2'");
+        f
+    }
+
+    #[test]
+    fn force_after_amend() {
+        let f = amended("force");
+        let p = f.preview("git push --force-with-lease");
+        assert_eq!(
+            p.notices,
+            ["History is being rewritten; this diff may include changes from main."]
+        );
+        assert!(p.this_push.contains("+two"), "{}", p.this_push);
+    }
+
+    #[test]
+    fn no_force_diverged() {
+        let f = amended("noforce");
+        let p = f.preview("git push");
+        assert_eq!(p.notices.len(), 1);
+        assert!(
+            p.notices[0].contains("isn't an ancestor"),
+            "{:?}",
+            p.notices
+        );
+    }
+
+    #[test]
+    fn tag_target() {
+        let f = Fixture::new("tag");
+        f.sh("git tag v1");
+        assert!(unavailable(&f.preview("git push origin v1")).contains("v1"));
+    }
+
+    #[test]
+    fn parsed_unpreviewable() {
+        let f = Fixture::new("tags");
+        let reason = parse("git push --tags").unwrap().unpreviewable;
+        assert_eq!(f.preview("git push --tags").unavailable, reason);
+        assert!(reason.is_some());
+    }
+
+    #[test]
+    fn missing_dir() {
+        let f = Fixture::new("missing");
+        f.sh("git worktree add -q wt -b w && rm -rf wt");
+        let p = f.preview("git -C wt push");
+        assert!(unavailable(&p).contains("doesn't exist"), "{p:?}");
+        assert!(p.root.is_empty());
+    }
+
+    #[test]
+    fn not_a_repo() {
+        let f = Fixture::new("notrepo");
+        let plain = f.dir.join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        let p = preview("git push", &plain.display().to_string(), true);
+        assert!(unavailable(&p).contains("git repository"));
+    }
+
+    #[test]
+    fn detached_head() {
+        let f = Fixture::new("detached");
+        f.sh("git checkout -q --detach");
+        assert!(unavailable(&f.preview("git push")).contains("HEAD"));
+    }
+
+    #[test]
+    fn no_remote() {
+        let f = Fixture::new("noremote");
+        f.sh("git remote remove origin");
+        assert!(unavailable(&f.preview("git push")).contains("isn't a remote"));
+    }
+
+    #[test]
+    fn option_like_refs_are_refused() {
+        let f = Fixture::new("dashref");
+        assert!(unavailable(&f.preview("git push origin main:-x")).contains("-x"));
+    }
+
+    #[test]
+    fn commands_that_do_not_push() {
+        let f = Fixture::new("nopush");
+        let p = f.preview("git stash push");
+        assert_eq!(p.unavailable.as_deref(), Some("This command doesn't push."));
+        let p = f.preview("gh pr edit 7 --body-file x");
+        assert!(p.unavailable.is_none() && !p.pushes);
+        assert_eq!(p.root, f.root());
+    }
+
+    #[test]
+    fn config_safety() {
+        let f = Fixture::new("safety");
+        let marker = f.dir.join("ran");
+        let script = f.dir.join("ext.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch {}\n", marker.display())).unwrap();
+        f.sh(&format!(
+            "chmod +x {0} && git config diff.external {0}",
+            script.display()
+        ));
+        f.sh("git checkout -q -b s && git push -q -u origin s");
+        f.commit("base.txt", "changed\n", "fix: change");
+        let p = f.preview("git push");
+        assert!(p.this_push.contains("+changed"), "{p:?}");
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn reads_shortstat() {
+        for (text, want) in [
+            (
+                " 2 files changed, 14 insertions(+), 3 deletions(-)\n",
+                (2, 14, 3),
+            ),
+            (" 1 file changed, 1 insertion(+)\n", (1, 1, 0)),
+            (" 1 file changed, 2 deletions(-)\n", (1, 0, 2)),
+            ("", (0, 0, 0)),
+        ] {
+            assert_eq!(shortstat(text), want, "{text}");
+        }
     }
 }
