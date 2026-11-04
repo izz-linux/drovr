@@ -219,7 +219,9 @@ fn git(root: &str, args: &[&str]) -> Result<String> {
     let args: Vec<String> = args.iter().map(|a| quote(a)).collect();
     shell::sh(
         &format!(
-            "git -c core.quotePath=false -c core.fsmonitor=false {}",
+            "GIT_NO_LAZY_FETCH=1 git -c core.quotePath=false -c core.fsmonitor=false \
+             -c log.showSignature=false -c core.hooksPath=/dev/null \
+             -c diff.autoRefreshIndex=false -c color.ui=false {}",
             args.join(" ")
         ),
         Some(Path::new(root)),
@@ -230,9 +232,17 @@ fn git(root: &str, args: &[&str]) -> Result<String> {
 }
 
 /// Never runs a diff driver, a text conversion or a filter program from
-/// the repo's config.
-fn diff_args() -> [&'static str; 3] {
-    ["-M", "--no-ext-diff", "--no-textconv"]
+/// the repo's config, or looks inside a submodule, whose own config could
+/// do the same. A submodule bump still shows as `Subproject commit` lines.
+fn diff_args() -> [&'static str; 6] {
+    [
+        "-M",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=dirty",
+        "--submodule=short",
+    ]
 }
 
 fn plural(n: usize, one: &str) -> String {
@@ -2178,5 +2188,132 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         let f = Fixture::new("nothingnew");
         let p = f.preview("git push");
         assert_eq!(p.this_push_note.as_deref(), Some("Nothing new to push."));
+    }
+
+    /// A program that leaves a marker if anything runs it.
+    fn tripwire(f: &Fixture) -> (String, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let marker = f.dir.join("ran");
+        let script = f.dir.join("tripwire.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (script.display().to_string(), marker)
+    }
+
+    #[test]
+    fn signature_check_runs_nothing() {
+        let f = Fixture::new("c2-sig");
+        let (script, marker) = tripwire(&f);
+        f.sh("git checkout -q -b x && git push -q -u origin x");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.sh(
+            "c=$(git cat-file commit HEAD | awk '/^committer/{print; \
+             print \"gpgsig -----BEGIN PGP SIGNATURE-----\"; print \" abc\"; \
+             print \" -----END PGP SIGNATURE-----\"; next} {print}' \
+             | git hash-object -t commit -w --stdin) && git update-ref refs/heads/x \"$c\"",
+        );
+        f.sh(&format!(
+            "git config gpg.program {script} && git config log.showSignature true"
+        ));
+        let p = f.preview("git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert!(!marker.exists(), "gpg.program ran");
+        assert_eq!(p.commits.len(), 1, "{p:?}");
+    }
+
+    #[test]
+    fn index_refresh_runs_no_hook_and_writes_nothing() {
+        let f = Fixture::new("c2-hook");
+        let (script, marker) = tripwire(&f);
+        f.sh("git checkout -q -b x && git push -q -u origin x");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.commit("b.txt", "b\n", "feat: b");
+        std::fs::copy(&script, f.work.join(".git/hooks/post-index-change")).unwrap();
+        f.sh("sleep 1; touch a.txt b.txt");
+        let index = std::fs::read(f.work.join(".git/index")).unwrap();
+        let p = f.preview("git commit -am x && git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert!(!marker.exists(), "post-index-change ran");
+        assert_eq!(std::fs::read(f.work.join(".git/index")).unwrap(), index);
+    }
+
+    #[test]
+    fn dirty_submodule_filter_does_not_run() {
+        let f = Fixture::new("c2-subfilter");
+        let (script, marker) = tripwire(&f);
+        f.sh("git checkout -q -b x && git push -q -u origin x");
+        f.sh(
+            "git init -q sub && cd sub && git config user.name t \
+             && git config user.email t@example.com && echo a > a.txt \
+             && echo '*.txt filter=x' > .gitattributes && git add -A && git commit -q -m s",
+        );
+        f.sh("git add sub 2>/dev/null; git commit -q -m 'chore: gitlink'");
+        f.sh(&format!(
+            "cd sub && git config filter.x.clean {script}; sleep 1; echo b > a.txt"
+        ));
+        let _ = std::fs::remove_file(&marker);
+        assert!(!repo_has_filter(&f.root()));
+        let p = f.preview("git commit -am x && git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert!(!marker.exists(), "the submodule's clean filter ran");
+    }
+
+    #[test]
+    fn submodule_bump_runs_nothing_and_still_shows() {
+        let f = Fixture::new("c2-subdiff");
+        let (script, marker) = tripwire(&f);
+        f.sh(
+            "git init -q sub && cd sub && git config user.name t \
+             && git config user.email t@example.com && echo a > a.txt \
+             && git add -A && git commit -q -m s",
+        );
+        f.sh(
+            "git add sub 2>/dev/null; git commit -q -m 'chore: gitlink'; \
+             git checkout -q -b x; git push -q -u origin x",
+        );
+        f.sh("cd sub && echo b > a.txt && git add -A && git commit -q -m s2");
+        f.sh("git add sub 2>/dev/null; git commit -q -m 'chore: bump'");
+        f.sh(&format!(
+            "git config diff.submodule diff; cd sub && git config diff.external {script}"
+        ));
+        let p = f.preview("git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert!(!marker.exists(), "the submodule's diff.external ran");
+        assert!(p.this_push.contains("+Subproject commit"), "{p:?}");
+    }
+
+    #[test]
+    fn missing_blob_is_not_fetched() {
+        let f = Fixture::new("c2-lazy");
+        let (script, marker) = tripwire(&f);
+        f.sh("git checkout -q -b x && git push -q -u origin x");
+        f.commit("a.txt", "missing blob\n", "feat: a");
+        f.sh("h=$(git rev-parse HEAD:a.txt); rm -f .git/objects/$(echo $h | cut -c1-2)/$(echo $h | cut -c3-)");
+        f.sh(&format!(
+            "git config core.repositoryformatversion 1 && git config extensions.partialClone origin \
+             && git config remote.origin.promisor true && git config remote.origin.uploadpack {script}"
+        ));
+        let p = f.preview("git push");
+        assert!(!marker.exists(), "a lazy fetch ran remote.origin.uploadpack");
+        assert!(p.unavailable.is_some(), "{p:?}");
+    }
+
+    #[test]
+    fn repo_colour_settings_do_not_reach_the_text() {
+        for setting in ["color.ui", "color.diff"] {
+            let f = Fixture::new(&format!("c2-{setting}"));
+            f.sh("git checkout -q -b x");
+            f.commit("a.txt", "a\n", "feat: a");
+            f.sh("git push -q -u origin x");
+            f.commit("a.txt", "a\nb\n", "feat: b");
+            f.sh(&format!("git config {setting} always"));
+            let p = f.preview("git push");
+            assert!(!p.this_push.contains('\u{1b}'), "{setting}: {p:?}");
+            assert_eq!(marked_text(&p), ["+b"], "{setting}");
+        }
     }
 }

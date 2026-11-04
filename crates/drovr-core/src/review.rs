@@ -52,7 +52,8 @@ fn git(cwd: &str, args: &str) -> Result<String> {
     shell::sh(
         // Unquoted paths: by default git escapes non-ASCII names ("caf\303\251"),
         // which then match no file.
-        &format!("git -c core.quotePath=false {args}"),
+        // A partial clone would otherwise fetch a missing object on its own.
+        &format!("GIT_NO_LAZY_FETCH=1 git -c core.quotePath=false {args}"),
         Some(Path::new(cwd)),
         None,
         Duration::from_secs(30),
@@ -537,6 +538,33 @@ pub(crate) fn words(cmd: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finding_the_base_fetches_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("drovr-review-lazy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let sh = |cwd: &Path, cmd: &str| {
+            let out = shell::sh(cmd, Some(cwd), None, Duration::from_secs(30)).unwrap();
+            assert!(out.ok(), "{cmd}: {}", out.stderr);
+        };
+        let marker = dir.join("ran");
+        let script = dir.join("tripwire.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()))
+            .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        sh(&dir, "git init -q --bare -b main o.git && git clone -q o.git w 2>/dev/null");
+        let w = dir.join("w");
+        sh(&w, "git checkout -q -B main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m one");
+        sh(&w, "git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two && git update-ref refs/remotes/origin/main HEAD && git reset -q --hard HEAD~1 && git reflog expire --expire=now --all");
+        sh(&w, "h=$(git rev-parse origin/main); rm -f .git/objects/$(echo $h | cut -c1-2)/$(echo $h | cut -c3-)");
+        sh(&w, &format!("git config core.repositoryformatversion 1 && git config extensions.partialClone origin && git config remote.origin.promisor true && git config remote.origin.uploadpack {}", script.display()));
+        let _ = base(&w.display().to_string());
+        assert!(!marker.exists(), "a lazy fetch ran remote.origin.uploadpack");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn splits_words_at_newlines() {
