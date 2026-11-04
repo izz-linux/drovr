@@ -124,7 +124,68 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
     };
     p.pushes = parsed.pushes;
     p.assumed_folder = assumed_folder;
+    if p.unavailable.is_none() {
+        p.pr_summary = pr_summary(&parsed.body, &dir);
+    }
     p
+}
+
+const MAX_SUMMARY: u64 = 256 * 1024;
+
+fn pr_summary(body: &Body, dir: &Path) -> Option<PrSummary> {
+    let (text, note) = match body {
+        Body::None => return None,
+        Body::Inline(t) => (Some(t.clone()), None),
+        Body::Unreadable(why) => (None, Some(why.clone())),
+        Body::File(f) => match read_summary(&review::resolve(dir, f)) {
+            Ok(t) => (Some(t), None),
+            Err(note) => (None, Some(note)),
+        },
+    };
+    Some(PrSummary { text, note })
+}
+
+/// Checks the file's type and size first, so a FIFO or a huge file is
+/// never read.
+fn read_summary(path: &Path) -> std::result::Result<String, String> {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("The body file doesn't exist yet.".into())
+        }
+        Err(e) => return Err(format!("Couldn't read the body file: {e}.")),
+    };
+    if !meta.is_file() {
+        return Err("The body file isn't a regular file.".into());
+    }
+    if meta.len() > MAX_SUMMARY {
+        return Err("The body file is too large to show.".into());
+    }
+    std::fs::read(path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .map_err(|e| format!("Couldn't read the body file: {e}."))
+}
+
+/// Whether GitHub's tip of `branch` differs from `tracking`, asking `gh`.
+/// None: couldn't tell.
+pub fn github_moved(gh: &str, root: &str, branch: &str, tracking: Option<&str>) -> Option<bool> {
+    let path = quote(&format!("repos/{{owner}}/{{repo}}/git/ref/heads/{branch}"));
+    let out = shell::sh(
+        &format!("{} api {path} --jq .object.sha", quote(gh)),
+        Some(Path::new(root)),
+        None,
+        Duration::from_secs(10),
+    )
+    .ok()?;
+    if out.timed_out {
+        return None;
+    }
+    if out.code == 0 {
+        let tip = out.stdout.trim();
+        return (!tip.is_empty()).then(|| Some(tip) != tracking);
+    }
+    (out.stderr.contains("Not Found") || out.stderr.contains("HTTP 404"))
+        .then(|| tracking.is_some())
 }
 
 impl Preview {
@@ -1926,5 +1987,114 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         assert!(w.text.contains("+o1") && w.text.contains("+o2"));
         assert!(!w.text.contains("m.txt") && !w.text.contains("x.txt"));
         assert_eq!(marked_text(&p), ["+o2"]);
+    }
+
+    fn fake_gh(f: &Fixture, script: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = f.dir.join("gh");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.display().to_string()
+    }
+
+    #[test]
+    fn summary_file_read() {
+        let f = Fixture::new("sum-file");
+        f.commit("a.txt", "a\n", "feat: a");
+        std::fs::write(f.work.join("pr.md"), "# Title\nbody").unwrap();
+        let p = f.preview("git push && gh pr create --body-file pr.md");
+        let s = p.pr_summary.unwrap();
+        assert_eq!(s.text.as_deref(), Some("# Title\nbody"));
+        assert_eq!(s.note, None);
+    }
+
+    #[test]
+    fn summary_only() {
+        let f = Fixture::new("sum-only");
+        std::fs::write(f.work.join("pr.md"), "x").unwrap();
+        let p = f.preview("gh pr edit --body-file pr.md");
+        assert!(!p.pushes && p.unavailable.is_none());
+        assert_eq!(p.pr_summary.unwrap().text.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn summary_inline() {
+        let f = Fixture::new("sum-inline");
+        let p = f.preview("gh pr edit --body 'hello'");
+        assert_eq!(p.pr_summary.unwrap().text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn summary_none_when_no_body_or_unavailable() {
+        let f = Fixture::new("sum-none");
+        assert!(f.preview("gh pr edit --title t").pr_summary.is_none());
+        let p = f.preview("git push nosuchremote && gh pr create --body hi");
+        assert!(p.unavailable.is_some() && p.pr_summary.is_none());
+    }
+
+    #[test]
+    fn summary_notes() {
+        let f = Fixture::new("sum-notes");
+        let w = &f.work;
+        std::fs::write(w.join("big.md"), vec![b'a'; MAX_SUMMARY as usize + 1]).unwrap();
+        std::fs::write(w.join("max.md"), vec![b'a'; MAX_SUMMARY as usize]).unwrap();
+        std::fs::create_dir(w.join("adir")).unwrap();
+        f.sh("mkfifo fifo");
+        for (cmd, note) in [
+            ("gh pr edit -F nope.md", "doesn't exist yet"),
+            ("gh pr edit -F big.md", "too large"),
+            ("gh pr edit -F adir", "isn't a regular file"),
+            ("gh pr edit -F fifo", "isn't a regular file"),
+            ("gh pr edit -F -", "standard input"),
+        ] {
+            let s = f.preview(cmd).pr_summary.unwrap();
+            assert_eq!(s.text, None, "{cmd}");
+            assert!(s.note.unwrap().contains(note), "{cmd}");
+        }
+        let s = f.preview("gh pr edit -F max.md").pr_summary.unwrap();
+        assert_eq!(s.text.map(|t| t.len()), Some(MAX_SUMMARY as usize));
+    }
+
+    #[test]
+    fn summary_unreadable() {
+        let s = pr_summary(&Body::Unreadable("why".into()), Path::new("/")).unwrap();
+        assert_eq!((s.text, s.note.as_deref()), (None, Some("why")));
+    }
+
+    #[test]
+    fn github_tip_check() {
+        let f = Fixture::new("moved");
+        let root = f.root();
+        let cases: [(&str, Option<&str>, Option<bool>); 7] = [
+            ("echo abc", Some("abc"), Some(false)),
+            ("echo abc", Some("def"), Some(true)),
+            ("echo abc", None, Some(true)),
+            (
+                "echo 'gh: Not Found (HTTP 404)' >&2; exit 1",
+                None,
+                Some(false),
+            ),
+            ("echo 'HTTP 404' >&2; exit 1", Some("abc"), Some(true)),
+            ("echo auth >&2; exit 1", Some("abc"), None),
+            ("exit 0", Some("abc"), None),
+        ];
+        for (script, tracking, want) in cases {
+            let gh = fake_gh(&f, script);
+            assert_eq!(github_moved(&gh, &root, "b", tracking), want, "{script}");
+        }
+        let missing = f.dir.join("nope").display().to_string();
+        assert_eq!(github_moved(&missing, &root, "b", Some("abc")), None);
+    }
+
+    #[test]
+    fn branch_is_quoted() {
+        let f = Fixture::new("quoted");
+        let out = f.dir.join("args");
+        let gh = fake_gh(&f, &format!("echo \"$#|$2\" > {}; echo abc", out.display()));
+        github_moved(&gh, &f.root(), "a b", Some("abc"));
+        assert_eq!(
+            std::fs::read_to_string(out).unwrap().trim(),
+            "4|repos/{owner}/{repo}/git/ref/heads/a b"
+        );
     }
 }
