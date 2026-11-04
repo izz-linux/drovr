@@ -324,19 +324,31 @@ pub fn diff(root: &str, path: &str, scope: &[String]) -> Result<String> {
     git(root, &format!("diff -M {since} -- {}", quote(path)))
 }
 
+/// A new file larger than this isn't read.
+const MAX_NEW_FILE: u64 = 1024 * 1024;
+const MAX_NEW_FILE_LINES: usize = 2000;
+
 pub(crate) fn new_file_diff(root: &str, path: &str) -> String {
     let full = Path::new(root).join(path);
-    match std::fs::read_to_string(&full) {
-        Ok(text) => {
-            let mut out =
-                format!("diff --git a/{path} b/{path}\nnew file\n--- /dev/null\n+++ b/{path}\n");
-            for line in text.lines().take(2000) {
-                out += &format!("+{line}\n");
-            }
-            out
-        }
-        Err(_) => format!("diff --git a/{path} b/{path}\n(binary or unreadable new file)\n"),
+    let unreadable = || format!("diff --git a/{path} b/{path}\n(binary or unreadable new file)\n");
+    let Some(meta) = std::fs::metadata(&full).ok().filter(|m| m.is_file()) else {
+        return unreadable();
+    };
+    if meta.len() > MAX_NEW_FILE {
+        return format!("diff --git a/{path} b/{path}\nnew file\n(too large to show)\n");
     }
+    let Ok(text) = std::fs::read_to_string(&full) else {
+        return unreadable();
+    };
+    let mut out = format!("diff --git a/{path} b/{path}\nnew file\n--- /dev/null\n+++ b/{path}\n");
+    let mut lines = text.lines();
+    for line in lines.by_ref().take(MAX_NEW_FILE_LINES) {
+        out += &format!("+{line}\n");
+    }
+    if lines.next().is_some() {
+        out += &format!("(truncated at {MAX_NEW_FILE_LINES} lines)\n");
+    }
+    out
 }
 
 /// Branch, commits ahead of the base, and the last commit.
@@ -538,6 +550,47 @@ pub(crate) fn words(cmd: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_file_diff_caps_what_it_reads() {
+        let dir = std::env::temp_dir().join(format!("drovr-review-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.display().to_string();
+        let sized = |name: &str, len: u64| {
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            f.set_len(len).unwrap();
+        };
+        sized("over.txt", MAX_NEW_FILE + 1);
+        sized("at.txt", MAX_NEW_FILE);
+        let d = new_file_diff(&root, "over.txt");
+        assert!(d.len() < 200, "{} bytes", d.len());
+        assert_eq!(
+            d,
+            "diff --git a/over.txt b/over.txt\nnew file\n(too large to show)\n"
+        );
+        assert!(!new_file_diff(&root, "at.txt").contains("too large"));
+
+        let lines = |n: usize| "x\n".repeat(n);
+        std::fs::write(dir.join("long.txt"), lines(2001)).unwrap();
+        std::fs::write(dir.join("exact.txt"), lines(2000)).unwrap();
+        let d = new_file_diff(&root, "long.txt");
+        assert!(d.ends_with("+x\n(truncated at 2000 lines)\n"), "{}", &d[d.len() - 40..]);
+        assert_eq!(d.matches("+x\n").count(), 2000);
+        let d = new_file_diff(&root, "exact.txt");
+        assert!(!d.contains("truncated"));
+        assert_eq!(d.matches("+x\n").count(), 2000);
+
+        std::fs::write(dir.join("short.txt"), "a\nb\n").unwrap();
+        assert_eq!(
+            new_file_diff(&root, "short.txt"),
+            "diff --git a/short.txt b/short.txt\nnew file\n--- /dev/null\n+++ b/short.txt\n+a\n+b\n"
+        );
+        assert!(new_file_diff(&root, "gone.txt").contains("unreadable"));
+        std::fs::create_dir(dir.join("adir")).unwrap();
+        assert!(new_file_diff(&root, "adir").contains("unreadable"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn finding_the_base_fetches_nothing() {
