@@ -1089,16 +1089,21 @@ fn join(cur: Option<&str>, d: &str) -> String {
 
 /// Drop redirections (`> f`, `2>&1`, `<<EOF`) so they aren't read as
 /// arguments, marking the files they write (see `WRITE_MARK`). A word after
-/// a flag that takes a value is left alone: it's the value
+/// a `gh` flag that takes a value, or `-m`, is left alone: it's the value
 /// (`--body '<b>x</b>'`).
 fn strip_redirects(words: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
     while i < words.len() {
         let w = &words[i];
-        let after_flag = out
-            .last()
-            .is_some_and(|p| GH_READ.contains(&p.as_str()) || GH_SKIPPED.contains(&p.as_str()));
+        let in_gh = out
+            .iter()
+            .rev()
+            .take_while(|p| !is_separator(p))
+            .any(|p| p == "gh");
+        let after_flag = out.last().is_some_and(|p| {
+            p == "-m" || in_gh && (GH_READ.contains(&p.as_str()) || GH_SKIPPED.contains(&p.as_str()))
+        });
         let op = w.trim_start_matches(|c: char| c.is_ascii_digit());
         if !after_flag && op.starts_with(['<', '>']) {
             let bare = op.chars().all(|c| c == '<' || c == '>');
@@ -1760,6 +1765,7 @@ mod tests {
             "cd /a && echo fresh > pr.md && gh pr edit -F pr.md",
             "echo fresh > /a/pr.md && cd /a && gh pr edit -F pr.md",
             "bash -c 'echo fresh > pr.md' && gh pr edit -F pr.md",
+            "sort -r notes > pr.md && gh pr edit -F pr.md",
         ] {
             let p = parse(cmd).unwrap();
             assert_eq!(p.body, Body::Unreadable(WRITES_BODY.into()), "{cmd}");
