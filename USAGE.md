@@ -251,9 +251,9 @@ Turning it on doesn't change groups you already have: only groups created while 
 
 ### Run a retro
 
-1. **Start it:** **Start retro** in a ticket's timeline, or **Retro…** in Pipeline for several tickets, with a note if there's something to look at in particular.
-2. A retro agent reads the records and the numbers drovr works out (cost by stage and model, rework, dismissals, misses) and proposes changes to stage models, checkpoint limits, wake rules, the process and your skills, each with its evidence.
-3. **Decide:** under **Retros** in Pipeline, approve or dismiss each, or **Approve all**. Approving applies it: a config change keeps your file's comments and saves the previous one as `config.toml.before-retro`; a skill is written to `retro.skills_dir`.
+1. **Start it:** **Start retro** in a ticket's timeline, or **Retro…** in Pipeline for several tickets, with a note if there's something to look at in particular. The picker shows when each ticket last had a retro. Tickets with nothing new since then are under **with nothing new since their retro**.
+2. A retro agent reads the records and the numbers drovr works out (cost by stage and model, rework, dismissals, misses) and proposes changes to stage models, checkpoint limits, wake rules, the process and your skills, each with its evidence. It's told what earlier retros proposed and what you decided, so it doesn't bring back what you dismissed without new evidence.
+3. **Decide:** under **Retros** in Pipeline, approve or dismiss each, or **Approve all**. Approving applies it: a config change keeps your file's comments and saves the previous one as `config.toml.before-retro`; a skill is written to `retro.skills_dir`. A retro you've decided all of folds away under **N finished retros**.
 
 ### Have an agent write a Confluence page
 

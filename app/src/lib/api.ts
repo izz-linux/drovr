@@ -36,7 +36,8 @@ export type ReportFile = { path: string; folder: string; title: string; modified
 export type Line = { kind: string; text: string };
 export type Message = { id: number; ts: number; sender: string; recipient: string; group_name: string; body: string };
 /** A ticket with a record (`ledger.jsonl`) in the plans folder. */
-export type TicketRecord = { ticket: string; folder: string; path: string; events: number; updated: number };
+/** A ticket's record: `last_retro` is when its last retro started (0 for never), `last_work` its latest event that isn't a retro's. */
+export type TicketRecord = { ticket: string; folder: string; path: string; events: number; updated: number; last_retro: number; last_work: number };
 /** One event in a ticket's record: `ts`, `at`, `ticket`, `kind`, `agent`, … */
 export type RecordEvent = { ts: number; at: string; ticket: string; kind: string; agent?: string; group?: string; role?: string; [k: string]: any };
 /** A ticket in your sprint, as the watcher last saw it. */

@@ -249,6 +249,7 @@ impl Engine {
         if tickets.is_empty() || records.is_empty() {
             bail!("pick tickets that have a record");
         }
+        let history = earlier_decisions(&self.retros());
         let now = crate::store::now();
         let stamp = ledger::iso(now)
             .replace([':', '-'], "")
@@ -289,6 +290,10 @@ drovr has already worked out the numbers from them: {dir}/evidence.json. Use tho
 
 The current setup: {setup}
 Skills in {skills_dir}: {skills}
+
+Earlier retros' proposals and what {you} decided:
+{history}
+Don't propose again what {you} dismissed unless the evidence is new, and say what's new. What {you} approved is already in the setup above. Leave out what an earlier retro proposed that {you} hasn't decided yet.
 {note}
 Look for rework (handoffs sent back, CI failures, changes requested), dismissals (Inbox items declined or dismissed, drafts discarded), misses (problems found late, PRs closed unmerged, decisions reversed), overrides (a stage's model changed at a handoff), and cost by stage and model. Then call `submit_proposals` with what you'd change, each with its evidence:
 - model: a stage's model, as {{"config": {{"key": "stages.models.<stage>", "value": "<model>"}}}}. A cheaper model where rework stays low, a stronger one where rework costs more than it saves.
@@ -452,6 +457,45 @@ Then publish a short report with `publish_report` (title "Retro: {tickets}"): wh
             );
         }
         Ok("Noted; this one is yours to carry out.".into())
+    }
+}
+
+/// The most earlier proposals a retro is told about.
+const HISTORY: usize = 50;
+
+/// Earlier retros' proposals and what you decided, newest first, one line
+/// each: so a retro doesn't bring back what you've already turned down.
+fn earlier_decisions(retros: &[Retro]) -> String {
+    let lines: Vec<String> = retros
+        .iter()
+        .flat_map(|r| {
+            r.proposals.iter().map(move |p| {
+                let status = match p.status.as_str() {
+                    "pending" | "" => "not decided yet",
+                    s => s,
+                };
+                let change = match p.change.get("config") {
+                    Some(c) => format!(": {} = {}", c["key"].as_str().unwrap_or(""), c["value"]),
+                    None => match p.change["skill"]["name"].as_str() {
+                        Some(name) => format!(": skill {name}"),
+                        None => String::new(),
+                    },
+                };
+                format!(
+                    "- {} ({}), {status}: {} {:?}{change}",
+                    &ledger::iso(r.started)[..10],
+                    r.tickets.join(", "),
+                    p.kind,
+                    p.title
+                )
+            })
+        })
+        .take(HISTORY)
+        .collect();
+    if lines.is_empty() {
+        "none".into()
+    } else {
+        lines.join("\n")
     }
 }
 
@@ -708,13 +752,75 @@ mod tests {
         let a = engine.start_retro(&["SRE-1".into()], "").unwrap();
         let me = engine.agent(&a.name).unwrap();
         assert!(me.cwd.starts_with(&engine.cfg.reports.dir), "{}", me.cwd);
-        assert_eq!(
-            engine
-                .submit_proposals(&me, &json!({ "proposals": [] }))
-                .unwrap()["saved"],
-            0
+        let good = json!({ "proposals": [
+            { "kind": "model", "title": "Triage on haiku", "evidence": ["SRE-1: 0 sent back"], "change": { "config": { "key": "stages.models.triage", "value": "claude-haiku-5-5" } } }
+        ] });
+        assert_eq!(engine.submit_proposals(&me, &good).unwrap()["saved"], 1);
+        engine
+            .decide_proposal(&engine.retros()[0].dir, "p1", false)
+            .unwrap();
+        // The next retro is told what you decided. (Retros' folders are by
+        // the second, and agents' names by the minute.)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        engine.store.remove_agent(&a.name).unwrap();
+        let next = engine.start_retro(&["SRE-1".into()], "").unwrap();
+        assert!(
+            next.task.contains("dismissed: model \"Triage on haiku\""),
+            "{}",
+            next.task
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_retro_hears_what_you_decided_before() {
+        let p = |kind: &str, title: &str, status: &str, change: Value| Proposal {
+            kind: kind.into(),
+            title: title.into(),
+            status: status.into(),
+            change,
+            ..Proposal::default()
+        };
+        let older = Retro {
+            tickets: vec!["SRE-1".into(), "SRE-2".into()],
+            started: 0.0,
+            proposals: vec![
+                p(
+                    "model",
+                    "Triage on haiku",
+                    "dismissed",
+                    json!({ "config": { "key": "stages.models.triage", "value": "claude-haiku-5-5" } }),
+                ),
+                p(
+                    "process",
+                    "Pair research with blueprint",
+                    "approved",
+                    json!({}),
+                ),
+            ],
+            ..Retro::default()
+        };
+        let newer = Retro {
+            tickets: vec!["SRE-3".into()],
+            started: 86_400.0,
+            proposals: vec![p(
+                "wake_rule",
+                "Ask on CI failures",
+                "pending",
+                json!({ "config": { "key": "watch.rules.ci_failed", "value": "ask" } }),
+            )],
+            ..Retro::default()
+        };
+        assert_eq!(
+            earlier_decisions(&[newer, older]),
+            [
+                r#"- 1970-01-02 (SRE-3), not decided yet: wake_rule "Ask on CI failures": watch.rules.ci_failed = "ask""#,
+                r#"- 1970-01-01 (SRE-1, SRE-2), dismissed: model "Triage on haiku": stages.models.triage = "claude-haiku-5-5""#,
+                r#"- 1970-01-01 (SRE-1, SRE-2), approved: process "Pair research with blueprint""#,
+            ]
+            .join("\n")
+        );
+        assert_eq!(earlier_decisions(&[]), "none");
     }
 
     #[test]

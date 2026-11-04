@@ -289,10 +289,10 @@ Part of the ticket workflow (`workflow.enabled`). A ticket goes through stages, 
 
 ### The retro
 
-Part of the ticket workflow (`workflow.enabled`), and it runs only when you start one: **Start retro** in a ticket's timeline, or **Retro…** in Pipeline to pick several tickets. Add a note if there's something to look at in particular.
+Part of the ticket workflow (`workflow.enabled`), and it runs only when you start one: **Start retro** in a ticket's timeline, or **Retro…** in Pipeline to pick several tickets. The picker shows when each ticket's last retro ran, and hides tickets with nothing new since their retro behind a toggle. Add a note if there's something to look at in particular.
 
 1. **The numbers:** drovr works them out from the tickets' records itself and saves them as `evidence.json` in the retro's folder (`~/.claude/plans/retros/<when>/`). They cover runs, cost and tokens by stage and model, rework (handoffs sent back, CI failures, changes requested), dismissals (Inbox items declined or dismissed), misses (PRs closed unmerged), overrides (a stage's model changed at a handoff), wakes, checkpoints, how long the Inbox waited on you, and your stops and **Send now**s.
-2. **The retro agent** (on `retro.model`) reads the records, the handoffs and those numbers. It gets your current stages, models, limits, rules and skills, and submits proposals, each with its evidence:
+2. **The retro agent** (on `retro.model`) reads the records, the handoffs and those numbers. It gets your current stages, models, limits, rules and skills, and the last 50 proposals from earlier retros with what you decided, so it doesn't bring back one you dismissed without new evidence. It submits proposals, each with its evidence:
    - **model:** a stage's model (`stages.models.<stage>`): cheaper where rework stays low, stronger where rework costs more than it saves.
    - **threshold:** the build checkpoint limits.
    - **wake_rule:** a `watch.rules` entry.
@@ -303,7 +303,9 @@ Part of the ticket workflow (`workflow.enabled`), and it runs only when you star
 3. **You decide:** proposals appear under **Retros** at the top of Pipeline. **Approve** one at a time, or **Approve all**, or **Dismiss**. Approving applies it:
    - **Config changes:** written to your `config.toml` with its comments and layout kept. The file before the change is saved beside it as `config.toml.before-retro`. drovr only changes the keys above.
    - **Skills:** written to `retro.skills_dir/<name>/SKILL.md` (`~/.claude/skills`), with the one it replaces kept beside it.
-   - **The record:** every approval and dismissal goes into the tickets' records, so the next retro sees what you accepted.
+   - **The record:** every approval and dismissal goes into the tickets' records and the retro's `decisions.jsonl`. Every later retro is told about them, whichever tickets it's on.
+
+   Once its agent has finished and you've decided every proposal, a retro folds away under **N finished retros** at the bottom of **Retros**, one line each with what you approved and dismissed; click one to see it again. Tickets aren't removed once they've had a retro. You can run another on them later, and it sees the earlier one in their records.
 
 ### Pipeline (the watcher)
 
