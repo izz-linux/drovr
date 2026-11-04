@@ -413,7 +413,7 @@ fn touched(transcript: &Path, cwd: &str, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn resolve(here: &Path, p: &str) -> PathBuf {
+pub(crate) fn resolve(here: &Path, p: &str) -> PathBuf {
     let p = if p == "~" {
         user_home()
     } else if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("$HOME/")) {
@@ -481,8 +481,9 @@ fn is_separator(w: &str) -> bool {
 }
 
 /// Split a command into words, roughly as a shell would: quotes group, and
-/// `&&`, `||`, `;` and `|` are words of their own.
-fn words(cmd: &str) -> Vec<String> {
+/// `&&`, `||`, `;` and `|` are words of their own. An unquoted newline is a
+/// `;`; a backslash before a newline joins the lines.
+pub(crate) fn words(cmd: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
@@ -499,9 +500,13 @@ fn words(cmd: &str) -> Vec<String> {
             None => match c {
                 '\'' | '"' => quote = Some(c),
                 '\\' => {
-                    if let Some(n) = chars.next() {
+                    if let Some(n) = chars.next().filter(|n| *n != '\n') {
                         cur.push(n);
                     }
+                }
+                '\n' => {
+                    flush(&mut cur, &mut out);
+                    out.push(";".into());
                 }
                 c if c.is_whitespace() => flush(&mut cur, &mut out),
                 ';' | '(' | ')' => {
@@ -527,6 +532,13 @@ fn words(cmd: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_words_at_newlines() {
+        assert_eq!(words("a\nb"), ["a", ";", "b"]);
+        assert_eq!(words("a \\\n b"), ["a", "b"]);
+        assert_eq!(words("'a\nb'"), ["a\nb"]);
+    }
 
     #[test]
     fn finds_folders_in_commands() {
