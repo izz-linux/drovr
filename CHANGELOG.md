@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/izz-linux/drovr/compare/v0.8.2...v0.9.0) (2026-11-04)
+
+
+### Features
+
+* share one Claude Code memory across agents, written by leads ([#24](https://github.com/izz-linux/drovr/issues/24)) ([ef9fbaa](https://github.com/izz-linux/drovr/commit/ef9fbaaa747aa0ee94a1ed093fd4a40489b3517f))
+* show retro history in the picker and tell each retro what you decided before ([#23](https://github.com/izz-linux/drovr/issues/23)) ([ef007c7](https://github.com/izz-linux/drovr/commit/ef007c7058bb2666e987157e07b00b8db2a21a73))
+
 ## [0.8.2](https://github.com/izz-linux/drovr/compare/v0.8.1...v0.8.2) (2026-11-04)
 
 
