@@ -40,6 +40,9 @@ pub struct Parsed {
     pub commits_first: bool,
     pub add: Add,
     pub body: Body,
+    /// The shell's folder when `gh` runs, which `git -C` doesn't change; a
+    /// relative body file is read from there. None: not named.
+    pub body_dir: Option<String>,
     pub base: Option<String>,
     /// The reason, shown to the owner.
     pub unpreviewable: Option<String>,
@@ -110,7 +113,9 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
         Some(d) => review::resolve(here, d),
         None => here.to_path_buf(),
     };
-    let mut p = if !parsed.pushes {
+    let mut p = if let Some(why) = &parsed.unpreviewable {
+        Preview::unavailable(why.clone())
+    } else if !parsed.pushes {
         Preview {
             root: if dir.is_dir() {
                 review::toplevel(&dir).unwrap_or_default()
@@ -119,8 +124,6 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
             },
             ..Preview::default()
         }
-    } else if let Some(why) = &parsed.unpreviewable {
-        Preview::unavailable(why.clone())
     } else {
         match this_push(&parsed, &dir) {
             Ok(p) => p,
@@ -130,7 +133,11 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
     p.pushes = parsed.pushes;
     p.assumed_folder = assumed_folder;
     if p.unavailable.is_none() {
-        p.pr_summary = pr_summary(&parsed.body, &dir);
+        let body_dir = match &parsed.body_dir {
+            Some(d) => review::resolve(here, d),
+            None => here.to_path_buf(),
+        };
+        p.pr_summary = pr_summary(&parsed.body, &body_dir);
     }
     p
 }
@@ -687,9 +694,12 @@ struct Scan {
     p: Parsed,
     found: bool,
     pushed: bool,
-    dir_unknown: bool,
+    /// The shell's folder, from `cd`. `git -C` doesn't change it.
+    cwd: Option<String>,
+    cwd_unknown: bool,
     committed: bool,
     add: Add,
+    add_unknown: bool,
 }
 
 impl Scan {
@@ -727,22 +737,22 @@ impl Scan {
     }
 
     fn cd(&mut self, args: &[String]) {
-        if self.found {
-            return;
-        }
         let Some(d) = args.iter().find(|a| !a.starts_with('-')) else {
             return;
         };
         if unknowable(d) {
-            self.dir_unknown = true;
-        } else {
-            self.p.dir = Some(join(self.p.dir.as_deref(), d));
+            self.cwd_unknown = true;
+            return;
         }
+        if is_absolute(d) {
+            self.cwd_unknown = false;
+        }
+        self.cwd = Some(join(self.cwd.as_deref(), d));
     }
 
     fn git(&mut self, args: &[String]) {
-        let mut dir = self.p.dir.clone();
-        let mut dir_unknown = self.dir_unknown;
+        let mut dir = self.cwd.clone();
+        let mut dir_unknown = self.cwd_unknown;
         let mut elsewhere = false;
         let mut i = 0;
         while let Some(a) = args.get(i) {
@@ -790,7 +800,7 @@ impl Scan {
             match a.as_str() {
                 "-A" | "--all" | "-u" | "--update" | "." => self.add = Add::All,
                 a if a.starts_with('-') => {}
-                a if unknowable(a) => self.refuse("This push follows a git add of unknown files."),
+                a if unknowable(a) => self.add_unknown = true,
                 a => paths.push(a.to_string()),
             }
         }
@@ -806,7 +816,7 @@ impl Scan {
 
     fn found(&mut self, dir_unknown: bool) {
         self.found = true;
-        if dir_unknown || self.dir_unknown {
+        if dir_unknown || self.cwd_unknown {
             self.refuse("The folder is set by a shell variable, so it can't be read.");
         }
     }
@@ -820,10 +830,7 @@ impl Scan {
         self.found(dir_unknown);
         self.p.pushes = true;
         self.p.dir = dir;
-        self.p.commits_first = self.committed;
-        if self.committed {
-            self.p.add = self.add.clone();
-        }
+        self.commits_first();
 
         let mut positional: Vec<&str> = Vec::new();
         let mut j = 0;
@@ -903,6 +910,16 @@ impl Scan {
         self.p.remote_branch = dst.map(branch);
     }
 
+    fn commits_first(&mut self) {
+        self.p.commits_first = self.committed;
+        if self.committed {
+            self.p.add = self.add.clone();
+            if self.add_unknown {
+                self.refuse("This push follows a git add of unknown files.");
+            }
+        }
+    }
+
     fn gh(&mut self, args: &[String]) {
         let [pr, action, rest @ ..] = args else {
             return;
@@ -911,14 +928,17 @@ impl Scan {
             return;
         }
         let create = action == "create";
-        self.found(false);
-        if create && !self.pushed {
-            self.p.pushes = true;
-            self.p.commits_first = self.committed;
-            if self.committed {
-                self.p.add = self.add.clone();
+        if self.pushed {
+            self.found = true;
+        } else {
+            self.found(false);
+            self.p.dir = self.cwd.clone();
+            if create {
+                self.p.pushes = true;
+                self.commits_first();
             }
         }
+        self.p.body_dir = self.cwd.clone();
         let mut j = 0;
         while j < rest.len() {
             if let Some(v) = value(rest, &mut j, &["--body-file", "-F"]) {
@@ -926,6 +946,8 @@ impl Scan {
                     Body::Unreadable("The body comes from standard input.".into())
                 } else if unknowable(v) {
                     Body::Unreadable("The body file is set by a shell variable.".into())
+                } else if self.cwd_unknown && !is_absolute(v) {
+                    Body::Unreadable("The body file's folder is set by a shell variable.".into())
                 } else {
                     Body::File(v.to_string())
                 };
@@ -1016,9 +1038,13 @@ fn unknowable(w: &str) -> bool {
     w.contains('$') || w.contains('`')
 }
 
+fn is_absolute(d: &str) -> bool {
+    d.starts_with('/') || d.starts_with('~')
+}
+
 fn join(cur: Option<&str>, d: &str) -> String {
     match cur {
-        Some(c) if !d.starts_with('/') && !d.starts_with('~') => {
+        Some(c) if !is_absolute(d) => {
             format!("{}/{d}", c.trim_end_matches('/'))
         }
         _ => d.to_string(),
@@ -1330,6 +1356,10 @@ mod tests {
         Some(v.to_string())
     }
 
+    fn s2(v: &str) -> Option<&str> {
+        Some(v)
+    }
+
     fn unpreviewable(cmd: &str) {
         let p = parse(cmd).unwrap_or_else(|| panic!("no parse: {cmd}"));
         assert!(p.unpreviewable.is_some(), "should refuse: {cmd}");
@@ -1623,6 +1653,44 @@ mod tests {
         unpreviewable("git push origin a; sudo git push origin b");
         assert!(parse("command -v git").is_none());
         assert!(parse("timeout").is_none());
+    }
+
+    #[test]
+    fn body_folder_follows_the_shell() {
+        type Row<'a> = (&'a str, Option<&'a str>, Option<&'a str>);
+        let rows: [Row; 6] = [
+            ("git -C /wt push origin a && gh pr create -F pr.md", s2("/wt"), None),
+            (
+                "cd /a && git push origin x && cd /b && gh pr edit -F pr.md",
+                s2("/a"),
+                s2("/b"),
+            ),
+            ("cd /a && git -C sub push && gh pr create -F pr.md", s2("/a/sub"), s2("/a")),
+            ("gh pr edit -F pr.md && git -C /wt push origin a", s2("/wt"), None),
+            ("cd /a && gh pr edit -F pr.md", s2("/a"), s2("/a")),
+            ("git -C /wt status && gh pr create -F pr.md", None, None),
+        ];
+        for (cmd, dir, body_dir) in rows {
+            let p = parse(cmd).unwrap();
+            assert_eq!(p.dir.as_deref(), dir, "{cmd}");
+            assert_eq!(p.body_dir.as_deref(), body_dir, "{cmd}");
+        }
+        let p = parse("git push origin a && cd \"$X\" && gh pr edit -F pr.md").unwrap();
+        assert_eq!(p.unpreviewable, None);
+        assert!(matches!(p.body, Body::Unreadable(_)), "{p:?}");
+        let p = parse("git push origin a && cd \"$X\" && gh pr edit -F /abs/pr.md").unwrap();
+        assert_eq!(p.body, Body::File("/abs/pr.md".into()));
+        let p = parse("cd $A && cd /b && git push").unwrap();
+        assert_eq!((p.dir.as_deref(), p.unpreviewable), (Some("/b"), None));
+    }
+
+    #[test]
+    fn an_unknown_git_add_only_matters_to_a_commit() {
+        assert_eq!(parse("git add $F && git push").unwrap().unpreviewable, None);
+        let p = parse("git add $F && gh pr edit --body hi").unwrap();
+        assert_eq!(p.unpreviewable, None);
+        unpreviewable("git add $F && git commit -m x && git push");
+        unpreviewable("git add $F && git commit -m x && gh pr create");
     }
 
     #[test]
@@ -2627,5 +2695,53 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
             assert!(!p.this_push.contains('\u{1b}'), "{setting}: {p:?}");
             assert_eq!(marked_text(&p), ["+b"], "{setting}");
         }
+    }
+
+    fn summary_text(p: &Preview) -> Option<&str> {
+        p.pr_summary.as_ref().and_then(|s| s.text.as_deref())
+    }
+
+    #[test]
+    fn body_file_is_read_from_the_shells_folder() {
+        let f = Fixture::new("i1");
+        let other = f.dir.join("other");
+        std::fs::create_dir(&other).unwrap();
+        let other_s = other.display().to_string();
+        std::fs::write(other.join("pr.md"), "from the shell's folder").unwrap();
+        std::fs::write(f.work.join("pr.md"), "from the worktree").unwrap();
+        let cmd = format!(
+            "git -C {} push origin main && gh pr create --body-file pr.md",
+            f.root()
+        );
+        let p = preview(&cmd, &other_s, true);
+        assert_eq!(p.root, f.root());
+        assert_eq!(summary_text(&p), Some("from the shell's folder"), "{p:?}");
+
+        let cmd = format!(
+            "cd {} && git push origin main && cd {other_s} && gh pr create --body-file pr.md",
+            f.root()
+        );
+        let p = preview(&cmd, &f.root(), true);
+        assert_eq!(p.root, f.root());
+        assert_eq!(summary_text(&p), Some("from the shell's folder"), "{p:?}");
+
+        std::fs::remove_file(other.join("pr.md")).unwrap();
+        let cmd = format!(
+            "git -C {} push origin main && gh pr create --body-file pr.md",
+            f.root()
+        );
+        let s = preview(&cmd, &other_s, true).pr_summary.unwrap();
+        assert_eq!(s.text, None);
+        assert!(s.note.unwrap().contains("doesn't exist"));
+    }
+
+    #[test]
+    fn summary_only_honors_a_refusal() {
+        let f = Fixture::new("i5");
+        std::fs::write(f.work.join("pr.md"), "wrong folder's file").unwrap();
+        let p = f.preview("cd \"$WT\" && gh pr edit --body-file pr.md");
+        assert!(unavailable(&p).contains("shell variable"), "{p:?}");
+        assert!(p.pr_summary.is_none(), "{p:?}");
+        assert!(!p.pushes);
     }
 }
