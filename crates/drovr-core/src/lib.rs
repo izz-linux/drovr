@@ -8,6 +8,7 @@ pub mod engine;
 pub mod harness;
 pub mod ledger;
 pub mod mcp;
+pub mod memory;
 pub mod prompts;
 pub mod reports;
 pub mod retro;

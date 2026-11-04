@@ -17,6 +17,7 @@ pub struct Config {
     pub confluence: Source,
     pub slack: Source,
     pub datadog: Datadog,
+    pub memory: Memory,
     pub agent_queries: AgentQueries,
     pub reports: Reports,
     pub terminal: Terminal,
@@ -197,6 +198,18 @@ impl Default for Watch {
             dispatch_transition: String::new(),
         }
     }
+}
+
+/// One auto memory for every Claude Code agent (see `memory.rs`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Memory {
+    /// Every Claude Code agent reads one memory, wherever it works; leads
+    /// and solo agents write it, and workers send it to their lead.
+    pub shared: bool,
+    /// The memory folder; empty for the one Claude Code keeps for
+    /// `defaults.cwd`.
+    pub dir: String,
 }
 
 /// Datadog through the `pup` CLI.
@@ -474,6 +487,7 @@ impl Default for Config {
             terminal: Terminal::default(),
             notifications: Notifications::default(),
             datadog: Datadog::default(),
+            memory: Memory::default(),
             workflow: Workflow::default(),
             watch: Watch::default(),
             stages: Stages::default(),

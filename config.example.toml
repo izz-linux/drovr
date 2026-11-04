@@ -134,6 +134,10 @@ pup = false                   # true: agents query Datadog with pup; read-only c
 site = ""                     # your Datadog site if it isn't US1, e.g. "us5.datadoghq.com"; passed to agents as DD_SITE
 # To keep agents off a Datadog MCP too: [defaults] disallowed_tools = ["mcp__datadog__*"]
 
+[memory]
+shared = false                # true: every Claude Code agent reads one auto memory wherever it works; leads and solo agents write it, workers send theirs to their lead
+dir = ""                      # that memory's folder; empty for the one Claude Code keeps for defaults.cwd
+
 [reports]
 dir = "~/.claude/plans"       # HTML reports; a group's go in <dir>/<group>/
 
