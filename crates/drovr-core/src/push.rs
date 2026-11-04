@@ -44,6 +44,8 @@ pub struct Parsed {
     /// relative body file is read from there. None: not named.
     pub body_dir: Option<String>,
     pub base: Option<String>,
+    /// The command changes the repo's branch or history before it pushes.
+    pub moves_head: bool,
     /// The reason, shown to the owner.
     pub unpreviewable: Option<String>,
 }
@@ -133,6 +135,9 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
     p.pushes = parsed.pushes;
     p.assumed_folder = assumed_folder;
     if p.unavailable.is_none() {
+        if parsed.pushes && parsed.moves_head {
+            p.notices.push(HEAD_MOVES.to_string());
+        }
         let body_dir = match &parsed.body_dir {
             Some(d) => review::resolve(here, d),
             None => here.to_path_buf(),
@@ -157,6 +162,8 @@ fn this_push_note(commits: usize, files: usize, text: &str) -> Option<&'static s
         Some("Nothing new to push.")
     }
 }
+
+const HEAD_MOVES: &str = "This shows the repo as it is now; the command changes it before pushing.";
 
 const MAX_SUMMARY: u64 = 256 * 1024;
 
@@ -708,6 +715,10 @@ struct Scan {
     add_unknown: bool,
     /// Files redirected or `tee`d to so far.
     writes: HashSet<String>,
+    /// Folders where a command moved the branch.
+    moved_in: Vec<Option<String>>,
+    /// One did, in a folder set by a shell variable.
+    moved_somewhere: bool,
 }
 
 impl Scan {
@@ -824,6 +835,14 @@ impl Scan {
             }
             "add" => self.add(rest),
             "commit" => self.committed = true,
+            "checkout" | "switch" | "rebase" | "merge" | "pull" | "reset" | "cherry-pick"
+            | "revert" | "am" => {
+                if dir_unknown {
+                    self.moved_somewhere = true;
+                } else {
+                    self.moved_in.push(dir);
+                }
+            }
             _ => {}
         }
     }
@@ -863,7 +882,10 @@ impl Scan {
         self.pushed = true;
         self.found(dir_unknown);
         self.p.pushes = true;
+        self.p.moves_head = self.moved_somewhere || self.moved_in.contains(&dir);
         self.p.dir = dir;
+        self.p.local = None;
+        self.p.remote_branch = None;
         self.commits_first();
 
         let mut positional: Vec<&str> = Vec::new();
@@ -969,6 +991,7 @@ impl Scan {
             self.p.dir = self.cwd.clone();
             if create {
                 self.p.pushes = true;
+                self.p.moves_head = self.moved_somewhere || self.moved_in.contains(&self.cwd);
                 self.commits_first();
             }
         }
@@ -1002,7 +1025,7 @@ impl Scan {
             } else if let Some(v) = value(rest, &mut j, &["--head", "-H"]) {
                 if unknowable(v) {
                     self.refuse("The head branch is set by a shell variable.");
-                } else if create && self.p.local.is_none() {
+                } else if create && !self.pushed {
                     self.p.local = Some(v.rsplit(':').next().unwrap_or(v).to_string());
                 }
             } else {
@@ -1765,7 +1788,7 @@ mod tests {
             "cd /a && echo fresh > pr.md && gh pr edit -F pr.md",
             "echo fresh > /a/pr.md && cd /a && gh pr edit -F pr.md",
             "bash -c 'echo fresh > pr.md' && gh pr edit -F pr.md",
-            "sort -r notes > pr.md && gh pr edit -F pr.md",
+            "sort -r > pr.md && gh pr edit -F pr.md",
         ] {
             let p = parse(cmd).unwrap();
             assert_eq!(p.body, Body::Unreadable(WRITES_BODY.into()), "{cmd}");
@@ -1782,6 +1805,55 @@ mod tests {
             let p = parse(cmd).unwrap();
             assert_eq!(p.body, Body::File("pr.md".into()), "{cmd}");
         }
+    }
+
+    #[test]
+    fn sees_what_moves_the_branch_before_a_push() {
+        for sub in [
+            "checkout y",
+            "switch y",
+            "rebase origin/main",
+            "merge y",
+            "pull",
+            "reset --hard y",
+            "cherry-pick y",
+            "revert y",
+            "am p.patch",
+        ] {
+            let cmd = format!("git {sub} && git push");
+            assert!(parse(&cmd).unwrap().moves_head, "{cmd}");
+        }
+        for cmd in [
+            "git -C /a checkout y && git -C /a push",
+            "cd /a && git checkout y && git -C /a push",
+            "git -C /a checkout y && cd /a && git push",
+            "git checkout y && gh pr create",
+            "git -C $X checkout y && git push",
+        ] {
+            assert!(parse(cmd).unwrap().moves_head, "{cmd}");
+        }
+        for cmd in [
+            "git status && git push",
+            "git fetch origin && git push",
+            "git push && git rebase y",
+            "git -C /other checkout y && git push",
+            "git -C /other checkout y && git -C /a push",
+            "git checkout y && gh pr edit -F pr.md",
+        ] {
+            assert!(!parse(cmd).unwrap().moves_head, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn gh_head_does_not_override_a_push() {
+        for cmd in [
+            "git push && gh pr create --head other",
+            "gh pr create --head other && git push",
+        ] {
+            assert_eq!(parse(cmd).unwrap().local, None, "{cmd}");
+        }
+        let p = parse("git push origin a && gh pr create --head other").unwrap();
+        assert_eq!(p.local, s("a"));
     }
 
     #[test]
@@ -2848,5 +2920,30 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
             assert_eq!(s.text, None, "{cmd}");
             assert_eq!(s.note.as_deref(), Some(WRITES_BODY), "{cmd}");
         }
+    }
+
+    #[test]
+    fn warns_when_the_command_moves_the_branch() {
+        let f = Fixture::new("i4");
+        f.sh("git checkout -q -b x && git push -q -u origin x");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.sh("git branch y main");
+        for cmd in [
+            "git checkout y && git push",
+            "git fetch origin && git rebase origin/main && git push --force-with-lease",
+        ] {
+            let p = f.preview(cmd);
+            assert!(p.unavailable.is_none(), "{cmd}: {p:?}");
+            assert!(p.notices.iter().any(|n| n == HEAD_MOVES), "{cmd}: {p:?}");
+        }
+        assert!(f.preview("git push").notices.is_empty());
+    }
+
+    #[test]
+    fn a_push_keeps_its_branch_beside_gh_head() {
+        let f = Fixture::new("i4-head");
+        f.sh("git branch other");
+        let p = f.preview("git push && gh pr create --head other");
+        assert_eq!(p.branch, "main", "{p:?}");
     }
 }
