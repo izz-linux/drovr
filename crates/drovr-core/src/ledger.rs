@@ -114,6 +114,15 @@ pub struct Record {
     pub path: String,
     pub events: usize,
     pub updated: f64,
+    /// When its last retro started; 0 if it's never had one.
+    pub last_retro: f64,
+    /// Its latest event that isn't a retro's own.
+    pub last_work: f64,
+}
+
+/// A retro's own events, which aren't work on the ticket.
+fn is_retro_event(kind: &str) -> bool {
+    kind.starts_with("retro_") || kind.starts_with("proposal_")
 }
 
 /// Every record in the plans folder, most recently updated first.
@@ -126,7 +135,21 @@ pub fn list(cfg: &Config) -> Vec<Record> {
             return;
         };
         let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let (mut last_retro, mut last_work) = (0.0f64, 0.0f64);
+        for e in text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        {
+            let ts = e["ts"].as_f64().unwrap_or(0.0);
+            match e["kind"].as_str().unwrap_or("") {
+                "retro_started" => last_retro = last_retro.max(ts),
+                k if is_retro_event(k) => {}
+                _ => last_work = last_work.max(ts),
+            }
+        }
         out.push(Record {
+            last_retro,
+            last_work,
             ticket: ticket.to_string(),
             folder: folder.to_string(),
             path: dir.display().to_string(),
@@ -320,6 +343,50 @@ mod tests {
         assert!(t[0]["at"].as_str().unwrap().ends_with('Z'));
         assert!(is_record(&dir.join("SRE-3180")));
         assert!(!is_record(&dir.join("sre-3229")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn knows_when_a_ticket_last_had_a_retro() {
+        let dir = std::env::temp_dir().join(format!("drovr-ledger-retro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.display().to_string();
+        let line = |ts: f64, kind: &str| json!({ "ts": ts, "kind": kind }).to_string();
+        let write = |ticket: &str, lines: &[String]| {
+            let d = dir.join(ticket);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(FILE), lines.join("\n") + "\n").unwrap();
+        };
+        // Reviewed, and nothing since but the retro's own events.
+        write(
+            "SRE-1",
+            &[
+                line(10.0, "run_end"),
+                line(20.0, "retro_started"),
+                line(30.0, "retro_proposals"),
+                line(40.0, "proposal_dismissed"),
+            ],
+        );
+        // Reviewed, then more work.
+        write(
+            "SRE-2",
+            &[
+                line(10.0, "run_end"),
+                line(20.0, "retro_started"),
+                line(50.0, "pr_status"),
+            ],
+        );
+        // Never reviewed.
+        write("SRE-3", &[line(10.0, "run_end")]);
+        let by: std::collections::BTreeMap<String, Record> = list(&cfg)
+            .into_iter()
+            .map(|r| (r.ticket.clone(), r))
+            .collect();
+        let got = |t: &str| (by[t].last_retro, by[t].last_work);
+        assert_eq!(got("SRE-1"), (20.0, 10.0));
+        assert_eq!(got("SRE-2"), (20.0, 50.0));
+        assert_eq!(got("SRE-3"), (0.0, 10.0));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
