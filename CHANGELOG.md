@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/izz-linux/drovr/compare/v0.8.1...v0.8.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* run a retro's agent in its own folder when worktrees are on ([#21](https://github.com/izz-linux/drovr/issues/21)) ([f348731](https://github.com/izz-linux/drovr/commit/f348731a5b67b6df36e5d4808169ebbabb19cb45))
+
 ## [0.8.1](https://github.com/izz-linux/drovr/compare/v0.8.0...v0.8.1) (2026-11-04)
 
 
