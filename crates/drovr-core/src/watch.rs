@@ -352,13 +352,17 @@ fn poll_github(engine: &Engine, state: &mut State) {
             }
         }
     }
-    // Open PRs that dropped out of the search window are still followed.
+    // Open PRs the search no longer returns (past its 100 results or its
+    // 30 days) are still followed, and looked at each time: without the
+    // search there's nothing to say they changed.
+    let mut unsearched = BTreeSet::new();
     for (url, old) in &state.prs {
         if !found.contains_key(url)
             && old.state == "OPEN"
             && old.tickets.iter().any(|k| keys.contains(k))
         {
             found.insert(url.clone(), old.clone());
+            unsearched.insert(url.clone());
         }
     }
     let mut now = BTreeMap::new();
@@ -370,7 +374,8 @@ fn poll_github(engine: &Engine, state: &mut State) {
                 // Checks finishing or re-running don't touch the PR's
                 // updatedAt, so open PRs whose checks aren't green are
                 // looked at every time.
-                b.updated != pr.updated
+                unsearched.contains(&url)
+                    || b.updated != pr.updated
                     || (b.state == "OPEN"
                         && (matches!(b.ci.as_str(), "pending" | "failure")
                             || b.mergeable == "UNKNOWN"))
@@ -688,6 +693,22 @@ mod tests {
         // And only once.
         poll_at(&engine, true, &file);
         assert_eq!(ledger::timeline(&engine.cfg, "SRE-3229").len(), 7);
+
+        // A busy project pushes the draft out of the search's 100 results,
+        // and then it's merged: drovr still looks at it and sees the merge.
+        write(
+            "search.json",
+            &format!("[{},{}]", pr(7, "open", false), pr(9, "merged", false)),
+        );
+        write(
+            "view-8.json",
+            r#"{"state":"MERGED","isDraft":false,"mergeable":"UNKNOWN","reviewDecision":"APPROVED","headRefOid":"b1","statusCheckRollup":[],"updatedAt":"p2"}"#,
+        );
+        let s = poll_at(&engine, true, &file);
+        assert_eq!(s.prs["https://github.com/o/r/pull/8"].state, "MERGED");
+        assert!(ledger::timeline(&engine.cfg, "SRE-3229")
+            .iter()
+            .any(|e| e["kind"] == "pr_merged" && e["number"] == 8));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
