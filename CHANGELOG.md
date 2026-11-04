@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/izz-linux/drovr/compare/v0.9.0...v0.9.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* share memory only from a folder you set in memory.dir ([#26](https://github.com/izz-linux/drovr/issues/26)) ([0c6e9d1](https://github.com/izz-linux/drovr/commit/0c6e9d1a3649305aff77da4726d056509ad77b77))
+
 ## [0.9.0](https://github.com/izz-linux/drovr/compare/v0.8.2...v0.9.0) (2026-11-04)
 
 
