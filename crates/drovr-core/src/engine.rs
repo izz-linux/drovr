@@ -569,7 +569,8 @@ impl Engine {
         if !Path::new(&cwd).is_dir() {
             bail!("working directory {cwd} does not exist");
         }
-        if self.cfg.defaults.worktrees && resumed.is_none() {
+        // A retro works in its own folder under the plans, never a worktree.
+        if self.cfg.defaults.worktrees && resumed.is_none() && spec.stage != "retro" {
             cwd = self.make_worktree(&cwd, &spec.name)?;
         }
         let agent = Agent {
