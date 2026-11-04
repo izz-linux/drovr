@@ -575,7 +575,11 @@ mod tests {
         std::fs::write(dir.join("long.txt"), lines(2001)).unwrap();
         std::fs::write(dir.join("exact.txt"), lines(2000)).unwrap();
         let d = new_file_diff(&root, "long.txt");
-        assert!(d.ends_with("+x\n(truncated at 2000 lines)\n"), "{}", &d[d.len() - 40..]);
+        assert!(
+            d.ends_with("+x\n(truncated at 2000 lines)\n"),
+            "{}",
+            &d[d.len() - 40..]
+        );
         assert_eq!(d.matches("+x\n").count(), 2000);
         let d = new_file_diff(&root, "exact.txt");
         assert!(!d.contains("truncated"));
@@ -605,17 +609,26 @@ mod tests {
         };
         let marker = dir.join("ran");
         let script = dir.join("tripwire.sh");
-        std::fs::write(&script, format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()))
-            .unwrap();
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+        )
+        .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        sh(&dir, "git init -q --bare -b main o.git && git clone -q o.git w 2>/dev/null");
+        sh(
+            &dir,
+            "git init -q --bare -b main o.git && git clone -q o.git w 2>/dev/null",
+        );
         let w = dir.join("w");
         sh(&w, "git checkout -q -B main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m one");
         sh(&w, "git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two && git update-ref refs/remotes/origin/main HEAD && git reset -q --hard HEAD~1 && git reflog expire --expire=now --all");
         sh(&w, "h=$(git rev-parse origin/main); rm -f .git/objects/$(echo $h | cut -c1-2)/$(echo $h | cut -c3-)");
         sh(&w, &format!("git config core.repositoryformatversion 1 && git config extensions.partialClone origin && git config remote.origin.promisor true && git config remote.origin.uploadpack {}", script.display()));
         let _ = base(&w.display().to_string());
-        assert!(!marker.exists(), "a lazy fetch ran remote.origin.uploadpack");
+        assert!(
+            !marker.exists(),
+            "a lazy fetch ran remote.origin.uploadpack"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

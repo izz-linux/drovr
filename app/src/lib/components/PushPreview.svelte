@@ -78,9 +78,10 @@
   </button>
   {#if open}
     <div class="body">
-      {#if stale}
-        <div class="notice row"><span class="grow">Command changed</span><button onclick={() => load(false)}>Refresh</button></div>
-      {/if}
+      <div class="row" class:notice={stale}>
+        <span class="grow">{stale ? "Command changed" : ""}</span>
+        <button disabled={loading} onclick={() => load(false)}>Refresh</button>
+      </div>
       {#if loading && !preview}
         <div class="muted small">Loading…</div>
       {:else if error}
@@ -90,7 +91,7 @@
       {:else if preview}
         {#if preview.summary_line}<div class="sum">{preview.summary_line}</div>{/if}
         {#if preview.assumed_folder}
-          <div class="notice">Assumed folder: the command doesn't name one, so this uses the agent's working folder, which may not be where it runs.</div>
+          <div class="notice">Assumed folder: the command doesn't give a full path, so this starts from the agent's working folder, which may not be where it runs.</div>
         {/if}
         {#each preview.notices as n}<div class="notice">{n}</div>{/each}
         {#if moved}<div class="notice warn">GitHub has moved since this repo last fetched; this diff may be out of date.</div>{/if}

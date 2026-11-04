@@ -111,7 +111,7 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
              That doesn't mean it won't push.",
         );
     };
-    let assumed_folder = !named_cwd && parsed.dir.is_none();
+    let assumed_folder = !named_cwd && !parsed.dir.as_deref().is_some_and(is_absolute);
     let here = Path::new(cwd);
     let dir = match &parsed.dir {
         Some(d) => review::resolve(here, d),
@@ -121,7 +121,7 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
         Preview::unavailable(why.clone())
     } else if !parsed.pushes {
         Preview {
-            root: if dir.is_dir() {
+            root: if dir.is_absolute() && dir.is_dir() {
                 review::toplevel(&dir).unwrap_or_default()
             } else {
                 String::new()
@@ -149,8 +149,7 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
     p
 }
 
-const DIFF_MISSING: &str =
-    "The diff couldn't be read, though the summary above reports changes.";
+const DIFF_MISSING: &str = "The diff couldn't be read, though the summary above reports changes.";
 
 /// What the card says when `this_push` has no text.
 fn this_push_note(commits: usize, files: usize, text: &str) -> Option<&'static str> {
@@ -165,6 +164,8 @@ fn this_push_note(commits: usize, files: usize, text: &str) -> Option<&'static s
     }
 }
 
+const NO_FOLDER: &str = "There's no folder to look in.";
+
 const HEAD_MOVES: &str = "This shows the repo as it is now; the command changes it before pushing.";
 
 const MAX_SUMMARY: u64 = 256 * 1024;
@@ -174,10 +175,17 @@ fn pr_summary(body: &Body, dir: &Path) -> Option<PrSummary> {
         Body::None => return None,
         Body::Inline(t) => (Some(t.clone()), None),
         Body::Unreadable(why) => (None, Some(why.clone())),
-        Body::File(f) => match read_summary(&review::resolve(dir, f)) {
-            Ok(t) => (Some(t), None),
-            Err(note) => (None, Some(note)),
-        },
+        Body::File(f) => {
+            let path = review::resolve(dir, f);
+            if !path.is_absolute() {
+                (None, Some(NO_FOLDER.to_string()))
+            } else {
+                match read_summary(&path) {
+                    Ok(t) => (Some(t), None),
+                    Err(note) => (None, Some(note)),
+                }
+            }
+        }
     };
     Some(PrSummary { text, note })
 }
@@ -415,6 +423,9 @@ fn branch_base(
 }
 
 fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Preview, String> {
+    if !dir.is_absolute() {
+        return Err(NO_FOLDER.into());
+    }
     if !dir.is_dir() {
         return Err(format!("The folder {} doesn't exist.", dir.display()));
     }
@@ -480,6 +491,12 @@ fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Pr
             let base = review::base_of(&root, &local_ref);
             if base.name == "HEAD" {
                 return Err("There's no default branch to compare this new branch with.".into());
+            }
+            if base.name == branch {
+                return Err(format!(
+                    "{branch} is new on {remote} and is itself the default branch, \
+                     so there's nothing to compare it with."
+                ));
             }
             base.commit
         }
@@ -633,12 +650,7 @@ const UNCOMMITTED_FILTERED: &str =
 /// files)`. Staged changes always; every tracked change with `all_tracked`
 /// or no `git add`; otherwise the paths added, from `here`. Untracked files
 /// only when `add` names them.
-fn uncommitted(
-    root: &str,
-    add: &Add,
-    all_tracked: bool,
-    here: &Path,
-) -> Result<(String, usize)> {
+fn uncommitted(root: &str, add: &Add, all_tracked: bool, here: &Path) -> Result<(String, usize)> {
     let paths: Vec<String> = match add {
         Add::Paths(paths) => paths
             .iter()
@@ -808,10 +820,7 @@ impl Scan {
 
     /// A file's path as written in the command, from the shell's folder.
     fn path(&self, file: &str) -> String {
-        join(
-            self.cwd.as_deref(),
-            file.strip_prefix("./").unwrap_or(file),
-        )
+        join(self.cwd.as_deref(), file.strip_prefix("./").unwrap_or(file))
     }
 
     fn wrote(&mut self, file: &str) {
@@ -961,7 +970,8 @@ impl Scan {
         while let Some(a) = args.get(j) {
             let a = a.as_str();
             match a {
-                "--tags" | "--all" | "--mirror" | "--delete" | "-d" => {
+                "--tags" | "--all" | "--mirror" | "--delete" | "-d" | "--prune"
+                | "--follow-tags" => {
                     self.refuse(format!("git push {a} isn't previewed."));
                 }
                 "-f" | "--force" | "--force-with-lease" | "--force-if-includes" => {
@@ -1194,7 +1204,8 @@ fn strip_redirects(words: Vec<String>) -> Vec<String> {
             .take_while(|p| !is_separator(p))
             .any(|p| p == "gh");
         let after_flag = out.last().is_some_and(|p| {
-            p == "-m" || in_gh && (GH_READ.contains(&p.as_str()) || GH_SKIPPED.contains(&p.as_str()))
+            p == "-m"
+                || in_gh && (GH_READ.contains(&p.as_str()) || GH_SKIPPED.contains(&p.as_str()))
         });
         let op = w.trim_start_matches(|c: char| c.is_ascii_digit());
         if !after_flag && op.starts_with(['<', '>']) {
@@ -1632,9 +1643,10 @@ mod tests {
                 assert_eq!(p.add, Add::Paths(vec!["a".into()]));
                 assert!(p.all_tracked);
             }),
-            ("cd sub && git add a.txt && git commit -m x && git push", |p| {
-                assert_eq!(p.add, Add::Paths(vec!["sub/a.txt".into()]))
-            }),
+            (
+                "cd sub && git add a.txt && git commit -m x && git push",
+                |p| assert_eq!(p.add, Add::Paths(vec!["sub/a.txt".into()])),
+            ),
             ("git -C sub add a.txt && git commit -m x && git push", |p| {
                 assert_eq!(p.add, Add::Paths(vec!["sub/a.txt".into()]))
             }),
@@ -1684,6 +1696,8 @@ mod tests {
             "git push --tags",
             "git push --all",
             "git push --mirror",
+            "git push --prune origin a",
+            "git push --follow-tags origin a",
             "git push --delete origin x",
             "git push -d origin x",
             "git push origin :x",
@@ -1771,7 +1785,8 @@ mod tests {
 
     #[test]
     fn unfinished_commands_do_not_panic() {
-        let cmd = "git commit -m \"$(cat <<-'EOF' # c\n\tx\n\tEOF\n)\" && echo `a\\b` 'c' ${d} \\\n\
+        let cmd =
+            "git commit -m \"$(cat <<-'EOF' # c\n\tx\n\tEOF\n)\" && echo `a\\b` 'c' ${d} \\\n\
                    \"e\\\"f\" \\g && git push origin a # end";
         for (i, _) in cmd.char_indices() {
             let _ = parse(&cmd[..i]);
@@ -1826,14 +1841,26 @@ mod tests {
     fn body_folder_follows_the_shell() {
         type Row<'a> = (&'a str, Option<&'a str>, Option<&'a str>);
         let rows: [Row; 6] = [
-            ("git -C /wt push origin a && gh pr create -F pr.md", s2("/wt"), None),
+            (
+                "git -C /wt push origin a && gh pr create -F pr.md",
+                s2("/wt"),
+                None,
+            ),
             (
                 "cd /a && git push origin x && cd /b && gh pr edit -F pr.md",
                 s2("/a"),
                 s2("/b"),
             ),
-            ("cd /a && git -C sub push && gh pr create -F pr.md", s2("/a/sub"), s2("/a")),
-            ("gh pr edit -F pr.md && git -C /wt push origin a", s2("/wt"), None),
+            (
+                "cd /a && git -C sub push && gh pr create -F pr.md",
+                s2("/a/sub"),
+                s2("/a"),
+            ),
+            (
+                "gh pr edit -F pr.md && git -C /wt push origin a",
+                s2("/wt"),
+                None,
+            ),
             ("cd /a && gh pr edit -F pr.md", s2("/a"), s2("/a")),
             ("git -C /wt status && gh pr create -F pr.md", None, None),
         ];
@@ -2101,8 +2128,21 @@ mod tests {
     #[test]
     fn assumed_folder() {
         let f = Fixture::new("assumed");
-        assert!(preview("git push", &f.root(), false).assumed_folder);
-        assert!(!preview("git push", &f.root(), true).assumed_folder);
+        let root = f.root();
+        let abs = format!("git -C {root} push");
+        for (cmd, named_cwd, want) in [
+            ("git push", false, true),
+            ("git push", true, false),
+            ("git -C . push", false, true),
+            ("git -C . push", true, false),
+            ("cd . && git push", false, true),
+            ("cd . && git push", true, false),
+            (abs.as_str(), false, false),
+            (abs.as_str(), true, false),
+        ] {
+            let p = preview(cmd, &root, named_cwd);
+            assert_eq!(p.assumed_folder, want, "{cmd} {named_cwd}");
+        }
     }
 
     #[test]
@@ -2198,8 +2238,22 @@ mod tests {
     fn empty_cwd_cannot_preview() {
         for cmd in ["git push", "git push origin main", "gh pr create --title t"] {
             let p = preview(cmd, "", false);
-            assert!(unavailable(&p).contains("doesn't exist"), "{cmd}: {p:?}");
+            assert_eq!(unavailable(&p), NO_FOLDER, "{cmd}: {p:?}");
         }
+        let p = preview("git -C drovr-no-such-folder push", "", false);
+        assert_eq!(unavailable(&p), NO_FOLDER);
+    }
+
+    #[test]
+    fn empty_cwd_summary() {
+        let s = preview("gh pr edit -F Cargo.toml", "", false)
+            .pr_summary
+            .unwrap();
+        assert_eq!((s.text, s.note.as_deref()), (None, Some(NO_FOLDER)));
+        let s = preview("gh pr edit --body hi", "", false)
+            .pr_summary
+            .unwrap();
+        assert_eq!(s.text.as_deref(), Some("hi"));
     }
 
     #[test]
@@ -2871,12 +2925,10 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         let (script, marker) = tripwire(&f);
         f.sh("git checkout -q -b x && git push -q -u origin x");
         f.commit("a.txt", "a\n", "feat: a");
-        f.sh(
-            "c=$(git cat-file commit HEAD | awk '/^committer/{print; \
+        f.sh("c=$(git cat-file commit HEAD | awk '/^committer/{print; \
              print \"gpgsig -----BEGIN PGP SIGNATURE-----\"; print \" abc\"; \
              print \" -----END PGP SIGNATURE-----\"; next} {print}' \
-             | git hash-object -t commit -w --stdin) && git update-ref refs/heads/x \"$c\"",
-        );
+             | git hash-object -t commit -w --stdin) && git update-ref refs/heads/x \"$c\"");
         f.sh(&format!(
             "git config gpg.program {script} && git config log.showSignature true"
         ));
@@ -2907,11 +2959,9 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         let f = Fixture::new("c2-subfilter");
         let (script, marker) = tripwire(&f);
         f.sh("git checkout -q -b x && git push -q -u origin x");
-        f.sh(
-            "git init -q sub && cd sub && git config user.name t \
+        f.sh("git init -q sub && cd sub && git config user.name t \
              && git config user.email t@example.com && echo a > a.txt \
-             && echo '*.txt filter=x' > .gitattributes && git add -A && git commit -q -m s",
-        );
+             && echo '*.txt filter=x' > .gitattributes && git add -A && git commit -q -m s");
         f.sh("git add sub 2>/dev/null; git commit -q -m 'chore: gitlink'");
         f.sh(&format!(
             "cd sub && git config filter.x.clean {script}; sleep 1; echo b > a.txt"
@@ -2927,11 +2977,9 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
     fn submodule_bump_runs_nothing_and_still_shows() {
         let f = Fixture::new("c2-subdiff");
         let (script, marker) = tripwire(&f);
-        f.sh(
-            "git init -q sub && cd sub && git config user.name t \
+        f.sh("git init -q sub && cd sub && git config user.name t \
              && git config user.email t@example.com && echo a > a.txt \
-             && git add -A && git commit -q -m s",
-        );
+             && git add -A && git commit -q -m s");
         f.sh(
             "git add sub 2>/dev/null; git commit -q -m 'chore: gitlink'; \
              git checkout -q -b x; git push -q -u origin x",
@@ -2959,7 +3007,10 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
              && git config remote.origin.promisor true && git config remote.origin.uploadpack {script}"
         ));
         let p = f.preview("git push");
-        assert!(!marker.exists(), "a lazy fetch ran remote.origin.uploadpack");
+        assert!(
+            !marker.exists(),
+            "a lazy fetch ran remote.origin.uploadpack"
+        );
         assert!(p.unavailable.is_some(), "{p:?}");
     }
 
@@ -3127,7 +3178,10 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         write(&f, "stray.txt", "stray\n");
         let p = f.preview("git add new.txt && git commit -am x && git push");
         let u = pending(&p);
-        assert!(u.contains("+a2") && u.contains("+b2") && u.contains("+named"), "{u}");
+        assert!(
+            u.contains("+a2") && u.contains("+b2") && u.contains("+named"),
+            "{u}"
+        );
         assert!(!u.contains("stray"), "{u}");
     }
 
@@ -3175,7 +3229,10 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         ] {
             let p = f.preview(cmd);
             let u = pending(&p);
-            assert!(u.contains("+sub a2") && u.contains("+sub new"), "{cmd}: {u}");
+            assert!(
+                u.contains("+sub a2") && u.contains("+sub new"),
+                "{cmd}: {u}"
+            );
             assert!(u.contains("b/sub/new.txt"), "{cmd}: {u}");
             assert!(!u.contains("root"), "{cmd}: {u}");
         }
@@ -3221,5 +3278,30 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         let u = pending(&p);
         assert!(u.contains("+root a2") && u.contains("+staged"), "{u}");
         assert!(!u.contains("sub a2"), "{u}");
+    }
+
+    #[test]
+    fn new_default_branch_has_nothing_to_compare() {
+        let f = Fixture::new("d1");
+        f.sh("git update-ref -d refs/remotes/origin/main");
+        for cmd in [
+            "git push -u origin main",
+            "git push",
+            "git push origin main:other",
+        ] {
+            let p = f.preview(cmd);
+            assert!(unavailable(&p).contains("default branch"), "{cmd}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn new_branch_beside_a_local_default_still_compares() {
+        let f = Fixture::new("d1-other");
+        f.sh("git update-ref -d refs/remotes/origin/main");
+        f.sh("git checkout -q -b x");
+        f.commit("a.txt", "a\n", "feat: a");
+        let p = f.preview("git push -u origin x");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert_eq!(p.commits.len(), 1);
     }
 }
