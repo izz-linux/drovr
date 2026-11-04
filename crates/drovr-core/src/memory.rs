@@ -1,56 +1,18 @@
-//! Shared memory (`memory.shared`): every Claude Code agent reads one auto
-//! memory, the one Claude Code keeps for `defaults.cwd` (or `memory.dir`),
-//! wherever the agent works. Leads and solo agents write it; workers send
-//! what's worth keeping to their lead, so several agents don't rewrite the
-//! same files at once.
+//! Shared memory (`memory.dir`): every Claude Code agent reads the auto
+//! memory in that folder, wherever the agent works. Leads and solo agents
+//! write it; workers send what's worth keeping to their lead, so several
+//! agents don't rewrite the same files at once.
 
 use crate::config::{expand_tilde, Config};
 use crate::store::Agent;
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The shared memory folder, or None when agents keep Claude Code's own
-/// memory per folder.
+/// memory per project.
 pub fn dir(cfg: &Config) -> Option<PathBuf> {
-    if !cfg.memory.shared {
-        return None;
-    }
     let dir = cfg.memory.dir.trim();
-    if !dir.is_empty() {
-        return Some(PathBuf::from(expand_tilde(dir)));
-    }
-    let cwd = PathBuf::from(cfg.default_cwd());
-    let root = repo_root(&cwd).unwrap_or(cwd);
-    Some(
-        crate::config::user_home()
-            .join(".claude/projects")
-            .join(project_key(&root))
-            .join("memory"),
-    )
-}
-
-/// The folder name Claude Code gives a project under `~/.claude/projects`:
-/// its path with everything but letters and digits turned into `-`.
-pub fn project_key(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-/// The git repo `dir` is in, which Claude Code keys memory by.
-fn repo_root(dir: &Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let common = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-    common.parent().map(Path::to_path_buf)
+    (!dir.is_empty()).then(|| PathBuf::from(expand_tilde(dir)))
 }
 
 /// Whether the agent writes the shared memory: leads and solo agents do,
@@ -106,66 +68,23 @@ mod tests {
     }
 
     #[test]
-    fn names_projects_as_claude_code_does() {
-        assert_eq!(
-            project_key(Path::new(
-                "/Users/Izz.Noland/develop/tools/src/github.com/stord"
-            )),
-            "-Users-Izz-Noland-develop-tools-src-github-com-stord"
-        );
-        assert_eq!(
-            project_key(Path::new(
-                "/Users/izz/Dropbox/develop/tools/src/github.com/izz-linux"
-            )),
-            "-Users-izz-Dropbox-develop-tools-src-github-com-izz-linux"
-        );
-    }
-
-    #[test]
-    fn off_unless_shared() {
-        let cfg = Config::default();
+    fn off_unless_a_folder_is_set() {
+        let mut cfg = Config::default();
         assert_eq!(dir(&cfg), None);
         assert_eq!(settings(&cfg, &agent("worker")), None);
         assert_eq!(prompt(&cfg, &agent("orchestrator")), "");
-    }
-
-    #[test]
-    fn shares_the_memory_of_the_default_folder() {
-        let base = std::env::temp_dir().join(format!("drovr-memory-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let plain = base.join("stord");
-        std::fs::create_dir_all(plain.join("api/src")).unwrap();
-        let mut cfg = Config::default();
-        cfg.memory.shared = true;
-        cfg.defaults.cwd = plain.display().to_string();
-        let home = crate::config::user_home().join(".claude/projects");
+        cfg.memory.dir = "  ".into();
+        assert_eq!(dir(&cfg), None);
+        cfg.memory.dir = "~/team-memory".into();
         assert_eq!(
             dir(&cfg),
-            Some(home.join(project_key(&plain)).join("memory"))
+            Some(crate::config::user_home().join("team-memory"))
         );
-        // In a repo, Claude Code keys it by the repo.
-        let repo = plain.join("api");
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&repo)
-            .status()
-            .unwrap();
-        cfg.defaults.cwd = repo.join("src").display().to_string();
-        let root = std::fs::canonicalize(&repo).unwrap();
-        assert_eq!(
-            dir(&cfg),
-            Some(home.join(project_key(&root)).join("memory"))
-        );
-        // Or name the folder yourself.
-        cfg.memory.dir = "/m/memory".into();
-        assert_eq!(dir(&cfg), Some(PathBuf::from("/m/memory")));
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn only_leads_and_solo_agents_write_it() {
         let mut cfg = Config::default();
-        cfg.memory.shared = true;
         cfg.memory.dir = "/m/memory".into();
         let parse =
             |s: Option<String>| serde_json::from_str::<serde_json::Value>(&s.unwrap()).unwrap();

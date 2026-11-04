@@ -439,7 +439,7 @@ What changes when it's on:
 
 Claude Code keeps an auto memory for each project, in `~/.claude/projects/<project>/memory/`. It picks the project from the folder a session starts in: its git repo, or the folder itself outside one. So by default, a drovr agent working in one repo doesn't see what you saved while working in another, and a retro's agent, which starts in a new folder each time, sees nothing.
 
-With `memory.shared = true`, every Claude Code agent uses one memory instead: the one Claude Code keeps for `defaults.cwd`, or the folder in `memory.dir`. drovr passes it to each agent as Claude Code's `autoMemoryDirectory` setting (with `--settings`), so it loads that `MEMORY.md` wherever it works. Sessions and resuming still go by the agent's own folder.
+Set `memory.dir` to a memory folder, and every Claude Code agent uses that one instead. It can be one Claude Code already keeps, such as `~/.claude/projects/<project>/memory` for the folder you start agents in (`ls ~/.claude/projects` shows them), or any folder of your own. drovr passes it to each agent as Claude Code's `autoMemoryDirectory` setting (with `--settings`), so it loads that `MEMORY.md` wherever it works. Sessions and resuming still go by the agent's own folder.
 
 - **Who writes it:** leads and solo agents, retro agents included. Workers read it but don't write it: drovr denies their Write and Edit there. When a worker learns something worth keeping, it sends it to its lead with `send_message`, starting with "For memory:", and the lead decides what to save.
 - **Two leads at once** can still write it at the same time. They're told to read a file just before changing it and to edit rather than rewrite, and Claude Code refuses an edit to a file that changed since it was read.
@@ -596,9 +596,8 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `commands.timeout_seconds` | `600` | Time limit for commands you approve |
 | `reports.dir` | `"~/.claude/plans"` | Where reports are saved and listed |
 | `datadog.pup` | `false` | Agents query Datadog with `pup`: read-only pup commands run without asking (with `--read-only` added), writes come to the Inbox (see [Datadog](#datadog)) |
-| `memory.shared` | `false` | Every Claude Code agent reads one auto memory wherever it works; leads and solo agents write it, and workers send what's worth keeping to their lead (see [Shared memory](#shared-memory)) |
-| `memory.dir` | `""` | The shared memory folder; empty for the one Claude Code keeps for `defaults.cwd` (`~/.claude/projects/<defaults.cwd with / and . as ->/memory`) |
 | `datadog.site` | `""` | Your Datadog site if it isn't US1, e.g. `"us5.datadoghq.com"`; passed to agents and lookups as `DD_SITE` |
+| `memory.dir` | `""` | An auto memory folder every Claude Code agent reads, wherever it works; leads and solo agents write it, and workers send what's worth keeping to their lead (see [Shared memory](#shared-memory)). Empty: Claude Code's own memory per project |
 | `[herdr]` | herdr's documented CLI | The herdr command templates (see below) |
 | `jira`, `confluence`, `slack` | `provider = "agent"` | How lookups reach each service (see below) |
 | `jira.default_query` | your open tickets | The JQL the Jira view lists when its search box is empty. Jira only: Confluence and Slack don't use it |

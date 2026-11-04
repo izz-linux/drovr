@@ -176,7 +176,7 @@ drovr ask "What did #sre decide about the payments API last week?"
 
 ### Share one memory across agents
 
-1. In Settings, set `memory.shared = true`. Agents use the memory Claude Code keeps for `defaults.cwd`; set `memory.dir` to use another folder.
+1. In Settings, set `memory.dir` to the memory folder to share, e.g. `~/.claude/projects/<project>/memory` for one Claude Code already keeps (`ls ~/.claude/projects`).
 2. Agents pick it up on their next run, wherever they work. Leads and solo agents save to it. Workers send what they'd save to their lead ("For memory: …"), and the lead decides.
 3. Keep `MEMORY.md` under 200 lines; past that, Claude Code stops loading it.
 

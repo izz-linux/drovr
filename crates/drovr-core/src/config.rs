@@ -204,11 +204,9 @@ impl Default for Watch {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Memory {
-    /// Every Claude Code agent reads one memory, wherever it works; leads
-    /// and solo agents write it, and workers send it to their lead.
-    pub shared: bool,
-    /// The memory folder; empty for the one Claude Code keeps for
-    /// `defaults.cwd`.
+    /// The auto memory folder every Claude Code agent reads, wherever it
+    /// works; leads and solo agents write it, and workers send theirs to
+    /// their lead. Empty: Claude Code's own memory per project.
     pub dir: String,
 }
 

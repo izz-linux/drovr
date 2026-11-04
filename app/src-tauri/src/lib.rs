@@ -947,12 +947,12 @@ mod tests {
         let link = |s: &str| is_web_link(&Url::parse(s).unwrap(), Some(&dev));
         assert!(link("https://github.com/izz-linux/drovr/pull/12"));
         assert!(link("http://localhost:3000/"));
-        assert!(link("mailto:izz@linux.com"));
+        assert!(link("mailto:you@example.com"));
         // drovr's own pages stay in drovr
         assert!(!link("http://localhost:1420/"));
         assert!(!link("tauri://localhost/"));
         assert!(!link(
-            "asset://localhost/Users/izz/.claude/plans/report.html"
+            "asset://localhost/Users/you/.claude/plans/report.html"
         ));
         assert!(!link("http://asset.localhost/report.html"));
         assert!(!link("http://tauri.localhost/"));
