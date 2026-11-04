@@ -548,7 +548,7 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `defaults.cwd` | home folder | Where new agents start when you don't give a directory |
 | `defaults.model` | your Claude Code default | Model for agents |
 | `defaults.permission_mode` | `"acceptEdits"` | Claude Code permission mode for agents |
-| `defaults.worktrees` | `false` | Give each agent its own `git worktree` on a `drovr/<name>` branch. Only when the working directory is a git repo; an agent started above your repos makes its own. |
+| `defaults.worktrees` | `false` | Give each agent its own `git worktree` on a `drovr/<name>` branch. Only when the working directory is a git repo; an agent started above your repos makes its own. A retro's agent always works in its retro's folder. |
 | `defaults.auto_wake` | `true` | Re-prompt idle agents when a message or answer arrives |
 | `defaults.max_budget_usd` | `0` (no cap) | Cost cap for each headless run |
 | `defaults.auto_resume` | `false` | Resume headless runs a reboot or crash interrupted, as soon as drovr notices, instead of waiting for you |

@@ -672,6 +672,52 @@ mod tests {
     }
 
     #[test]
+    fn a_retro_works_in_its_folder_even_with_worktrees() {
+        // Plans inside a git repo (a dotfiles repo, say) with worktrees on.
+        let dir = std::env::temp_dir().join(format!("drovr-retro-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &str| {
+            std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    &format!("git -c user.name=t -c user.email=t@t {args}"),
+                ])
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+        };
+        git("init -q");
+        git("commit -q --allow-empty -m x");
+        let mut cfg = crate::config::Config::default();
+        cfg.workflow.enabled = true;
+        cfg.defaults.worktrees = true;
+        cfg.claude.command = "true".into();
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        let engine = Engine::with(
+            crate::store::Store::open(&dir.join("t.db")).unwrap(),
+            cfg,
+            "drovr".into(),
+        );
+        engine
+            .store
+            .add_group("g", "", "SRE-1", "/tmp", "", false)
+            .unwrap();
+        ledger::append(&engine.cfg, "g", "SRE-1", &json!({ "kind": "status" })).unwrap();
+
+        let a = engine.start_retro(&["SRE-1".into()], "").unwrap();
+        let me = engine.agent(&a.name).unwrap();
+        assert!(me.cwd.starts_with(&engine.cfg.reports.dir), "{}", me.cwd);
+        assert_eq!(
+            engine
+                .submit_proposals(&me, &json!({ "proposals": [] }))
+                .unwrap()["saved"],
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn takes_proposals_and_your_decisions() {
         let dir = std::env::temp_dir().join(format!("drovr-retro-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
