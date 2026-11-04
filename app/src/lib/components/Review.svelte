@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type Repo } from "#lib/api.ts";
   import { app, act, toast } from "#lib/state.svelte.ts";
+  import DiffLines from "./DiffLines.svelte";
 
   let info = $state<{ cwd: string; repos: Repo[] } | null>(null);
   let root = $state("");
@@ -48,30 +49,6 @@
   }
 
   $effect(() => { app.selected; load(); });
-
-  // Big diffs (a lockfile, generated code) have tens of thousands of lines:
-  // only the ones in view, plus a margin, are in the page.
-  const ROW = 18;
-  let diffEl: HTMLDivElement | undefined = $state();
-  let scrollTop = $state(0);
-  let viewH = $state(600);
-  const diffLines = $derived(diff.split("\n"));
-  const widest = $derived(diffLines.reduce((m, l) => Math.max(m, l.length + 7 * (l.split("\t").length - 1)), 0));
-  const first = $derived(Math.max(0, Math.floor(scrollTop / ROW) - 30));
-  const last = $derived(Math.min(diffLines.length, Math.ceil((scrollTop + viewH) / ROW) + 30));
-  $effect(() => {
-    diff;
-    if (diffEl) diffEl.scrollTop = scrollTop = 0;
-  });
-
-  function cls(line: string) {
-    if (line.startsWith("+++") || line.startsWith("---")) return "meta";
-    if (line.startsWith("+")) return "add";
-    if (line.startsWith("-")) return "del";
-    if (line.startsWith("@@")) return "hunk";
-    if (line.startsWith("diff ")) return "file";
-    return "";
-  }
 
   async function sendFeedback() {
     if (!agent || !feedback.trim()) return;
@@ -140,15 +117,11 @@
       </div>
       {#key frameKey}<iframe title={file} src={api.fileSrc(full(file))}></iframe>{/key}
     {:else}
-      <div class="scroll grow diff" bind:this={diffEl} bind:clientHeight={viewH} onscroll={() => diffEl && (scrollTop = diffEl.scrollTop)}>
-        {#if diff.trim()}
-          <div class="rows" style="height: {diffLines.length * ROW}px; width: calc({widest}ch + 28px)">
-            <div style="transform: translateY({first * ROW}px)">
-              {#each diffLines.slice(first, last) as l, i (first + i)}<div class="l {cls(l)}">{l || " "}</div>{/each}
-            </div>
-          </div>
-        {:else}<div class="empty">{!info ? "Select an agent." : repo ? `No changes in ${repo.label}${repo.base !== "HEAD" ? ` since ${repo.base}` : ""}.` : ""}</div>{/if}
-      </div>
+      {#if diff.trim()}
+        <DiffLines text={diff} class="grow" />
+      {:else}
+        <div class="scroll grow diff"><div class="empty">{!info ? "Select an agent." : repo ? `No changes in ${repo.label}${repo.base !== "HEAD" ? ` since ${repo.base}` : ""}.` : ""}</div></div>
+      {/if}
     {/if}
     {#if agent}
       <form class="row bar" onsubmit={(e) => { e.preventDefault(); sendFeedback(); }}>
@@ -180,12 +153,5 @@
   .bar { padding: 8px 12px; border-bottom: 1px solid var(--border); }
   form.bar { border-top: 1px solid var(--border); border-bottom: none; }
   iframe { flex: 1; border: 0; background: #fff; }
-  .diff { flex: 1; font-family: var(--mono); font-size: 12px; padding: 8px 0; min-height: 0; }
-  .rows { min-width: 100%; }
-  .l { white-space: pre; padding: 0 14px; height: 18px; line-height: 18px; overflow: hidden; }
-  .add { background: color-mix(in srgb, var(--green) 14%, transparent); }
-  .del { background: color-mix(in srgb, var(--red) 14%, transparent); }
-  .hunk { color: var(--cyan); }
-  .file { color: var(--purple); font-weight: 600; border-top: 1px solid var(--border); }
-  .meta { color: var(--muted); }
+  .diff { flex: 1; padding: 8px 0; min-height: 0; }
 </style>

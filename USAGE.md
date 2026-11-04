@@ -102,7 +102,8 @@ Everything waiting on you is in the **Inbox** (⌘2), oldest first: new items jo
   - **Run in herdr pane** runs it in herdr.
   - **Copy** it to run anywhere, then **Mark as run**. Paste the output or a note in the box first, and the agent gets it.
   - **Reject** it.
-- **Permission:** **Allow**, or **Deny** with a reason.
+  - **View push** (when it runs `git push`, `gh pr create` or `gh pr edit`) opens what the push adds inside the card: **This push** (the commits GitHub doesn't have yet, and their diff), **Whole branch** (the branch against its base, with this push's lines highlighted; hidden on a new branch) and **PR summary** (the `--body-file` or `--body` text). It reads the text currently in the box, so an edited command previews as edited; if you edit it while the preview is open, **Refresh** updates it. Nothing is run or fetched.
+- **Permission:** **Allow**, or **Deny** with a reason. A Bash command that pushes has the same **View push**. The command doesn't say which folder it runs in, so drovr uses the agent's working folder and says so; check the repo and branch on the summary line.
 - **Spawn** (with `orchestrator.auto_spawn = false`): a lead wants to start a worker. **Start worker** or **Decline**. The box next to it is the model the worker runs on: the lead's pick if it made one, else empty for the default shown in it (a stage's `stages.models`, or `defaults.model`). Type another to override it.
 - **Finished:** read the summary, then **Review changes**.
 - **Watcher** (with `workflow.enabled`): something changed on a ticket or its PR (checks failed, a review, a conflict, ready to merge, merged or closed, or a Jira change) and its rule in `watch.rules` is `"ask"`. **Send to <agent>** passes it on with the details, or dismiss it.

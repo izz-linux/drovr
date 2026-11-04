@@ -1507,6 +1507,14 @@ mod tests {
     }
 
     #[test]
+    fn empty_cwd_cannot_preview() {
+        for cmd in ["git push", "git push origin main", "gh pr create --title t"] {
+            let p = preview(cmd, "", false);
+            assert!(unavailable(&p).contains("doesn't exist"), "{cmd}: {p:?}");
+        }
+    }
+
+    #[test]
     fn detached_head() {
         let f = Fixture::new("detached");
         f.sh("git checkout -q --detach");

@@ -210,8 +210,8 @@ Items are listed oldest first, whatever their kind, so new ones join the end of 
 | Item | Your options |
 | --- | --- |
 | **Decision** | Click an option, or write your own answer |
-| **Command** | Edit it, then **Run & return output** (it runs in the agent's directory and the output goes back to the agent), **Run in terminal** (typed into the agent's terminal for you to check and run), **Run in herdr pane**, or **Copy** it. After running it yourself, **Mark as run** tells the agent, with your note or else the terminal's output. Or **Reject** with a reason. |
-| **Permission** | A headless agent wants a tool that isn't auto-allowed: **Allow**, or **Deny** with a reason |
+| **Command** | Edit it, then **Run & return output** (it runs in the agent's directory and the output goes back to the agent), **Run in terminal** (typed into the agent's terminal for you to check and run), **Run in herdr pane**, or **Copy** it. After running it yourself, **Mark as run** tells the agent, with your note or else the terminal's output. Or **Reject** with a reason. A command that pushes or edits a PR also has **View push** (see below). |
+| **Permission** | A headless agent wants a tool that isn't auto-allowed: **Allow**, or **Deny** with a reason. A Bash command that pushes or edits a PR also has **View push** |
 | **Spawn** | Approve or decline a new worker (only when `auto_spawn = false`), and pick its model: the box shows the lead's pick, or the default it gets if you leave it empty. Approving checks `orchestrator.max_workers` again, in case others started meanwhile. |
 | **Finished** | An agent's `report_done` summary, with a link to its code review |
 | **Watcher** | With `workflow.enabled`: something changed on a ticket or its PR, and `watch.rules` says to ask you. **Send to &lt;agent&gt;** passes it on with the details, or dismiss it |
@@ -220,6 +220,13 @@ Items are listed oldest first, whatever their kind, so new ones join the end of 
 | **Confluence** | An agent wrote a page (`publish_confluence`): the diff against the live draft and the full page. **Save as draft in Confluence** or **Send back** with notes. It never publishes; see [Pages agents write](#pages-agents-write) |
 
 Answering wakes the agent if it's idle.
+
+**Reviewing a push:** a Command or Bash Permission item whose command runs `git push`, `gh pr create` or `gh pr edit` has a **View push** button (**View PR summary** if it only edits a PR). It opens inside the card and shows:
+
+- **This push:** the commits GitHub doesn't have yet and their combined diff, plus any uncommitted changes the command would commit first.
+- **Whole branch:** the branch against its base (`--base` from the command, else the default branch), with this push's lines highlighted and earlier work dimmed. It's hidden on a new branch.
+- **PR summary:** the `--body-file` or `--body` text, rendered.
+- **How it's read:** drovr only parses the command and compares local refs; it never runs the command and never fetches. For a Permission item the command doesn't say where it runs, so the agent's working folder is assumed and the card says so. The card warns if GitHub has moved since the last fetch. Run, Allow and the other buttons work with it open or closed.
 
 - **Keyboard:** ↓↑ (or J K) move between items, 1–9 pick a decision's option (or a Watcher item's **Send to**), A allows a permission or starts a worker, and D denies or declines one, with the reason typed in its box. Keys don't fire while you're typing in a box.
 - **Notifications:** when something new lands in the Inbox while you're in another app, drovr sends a macOS notification (turn it off with `notifications.enabled = false`). The Dock icon's badge shows how many items are waiting.
