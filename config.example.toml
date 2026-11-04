@@ -135,8 +135,7 @@ site = ""                     # your Datadog site if it isn't US1, e.g. "us5.dat
 # To keep agents off a Datadog MCP too: [defaults] disallowed_tools = ["mcp__datadog__*"]
 
 [memory]
-shared = false                # true: every Claude Code agent reads one auto memory wherever it works; leads and solo agents write it, workers send theirs to their lead
-dir = ""                      # that memory's folder; empty for the one Claude Code keeps for defaults.cwd
+dir = ""                      # an auto memory folder every Claude Code agent reads, e.g. "~/.claude/projects/<project>/memory"; leads and solo agents write it, workers send theirs to their lead. Empty: Claude Code's own per project
 
 [reports]
 dir = "~/.claude/plans"       # HTML reports; a group's go in <dir>/<group>/

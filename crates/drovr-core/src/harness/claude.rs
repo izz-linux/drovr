@@ -286,7 +286,6 @@ mod tests {
             })
         };
         assert!(!run(&cfg).contains(&"--settings".to_string()));
-        cfg.memory.shared = true;
         cfg.memory.dir = "/m/memory".into();
         let args = run(&cfg);
         let at = args.iter().position(|a| a == "--settings").unwrap();
