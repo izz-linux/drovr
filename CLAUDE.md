@@ -11,8 +11,6 @@
 
   Resolve the SHA with `git ls-remote --tags https://github.com/<owner>/<repo>`, and use the peeled `^{}` commit for annotated tags. If an action takes its behavior from the ref name, as `dtolnay/rust-toolchain` does, pass the setting as an input (`toolchain: stable`).
 
-- **Commit as the owner, with no trailers.** Author and commit as `Izz Noland <izz@linux.com>` (`git config user.name "Izz Noland"` and `git config user.email "izz@linux.com"` in the clone). Don't add `Co-Authored-By`, `Claude-Session` or any other trailer to commit messages, and don't end PR descriptions with a "Generated with Claude Code" line or a session link.
-
 - **Write commit messages and PR titles as Conventional Commits** (`fix: …`, `feat: …`, `docs: …`, `feat!: …` for breaking changes). release-please reads them from `main` to pick the next version and write the changelog, so don't bump versions by hand.
 - **Keep `README.md` and `USAGE.md` up to date with the code.** Any change to behavior, CLI commands, configuration keys, defaults or the UI updates them in the same pull request. `README.md` covers what drovr is, setup, configuration and architecture; `USAGE.md` covers keyboard shortcuts, workflows and the full CLI reference.
 
