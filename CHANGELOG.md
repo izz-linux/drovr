@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/izz-linux/drovr/compare/v0.8.0...v0.8.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* keep checking open PRs the GitHub search stops returning ([#19](https://github.com/izz-linux/drovr/issues/19)) ([8c62ca4](https://github.com/izz-linux/drovr/commit/8c62ca4ee915efea5b50ddd7c7baedf517dcd57e))
+
 ## [0.8.0](https://github.com/izz-linux/drovr/compare/v0.7.0...v0.8.0) (2026-11-03)
 
 
