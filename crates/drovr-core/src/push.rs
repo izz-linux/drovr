@@ -2,7 +2,7 @@
 //! `git push`, and the title and body of a `gh pr create` or `gh pr edit`.
 //! It only parses the text; nothing here runs the command.
 
-use crate::review::{self, words};
+use crate::review;
 use crate::shell::{self, quote};
 use anyhow::Result;
 use serde::Serialize;
@@ -99,7 +99,10 @@ pub struct Preview {
 /// command was recorded with. Failures come back in `unavailable`.
 pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
     let Some(parsed) = parse(command) else {
-        return Preview::unavailable("This command doesn't push.");
+        return Preview::unavailable(
+            "drovr couldn't find a push it can preview in this command. \
+             That doesn't mean it won't push.",
+        );
     };
     let assumed_folder = !named_cwd && parsed.dir.is_none();
     let here = Path::new(cwd);
@@ -697,16 +700,14 @@ impl Scan {
     }
 
     fn run(&mut self, cmd: &str, depth: usize) {
-        let text = strip_heredocs(cmd);
-        let words = strip_redirects(words(&text));
+        let words = strip_redirects(tokens(cmd));
         for seg in words.split(|w| is_separator(w)) {
             self.segment(seg, depth);
         }
     }
 
     fn segment(&mut self, seg: &[String], depth: usize) {
-        let skip = seg.iter().take_while(|w| is_assignment(w)).count();
-        let Some((prog, args)) = seg[skip..].split_first() else {
+        let Some((prog, args)) = command(seg).split_first() else {
             return;
         };
         match prog.rsplit('/').next().unwrap_or(prog) {
@@ -985,6 +986,31 @@ fn is_assignment(w: &str) -> bool {
     })
 }
 
+/// The command a segment runs, past assignments and simple prefixes. A
+/// prefix with its own flags (`sudo -u x`) isn't read through.
+fn command(seg: &[String]) -> &[String] {
+    let mut rest = seg;
+    loop {
+        rest = &rest[rest.iter().take_while(|w| is_assignment(w)).count()..];
+        let Some(first) = rest.first() else {
+            return rest;
+        };
+        let skip = match first.rsplit('/').next().unwrap_or(first) {
+            "then" | "do" | "else" | "if" | "elif" | "while" | "until" | "!" | "{" | "time"
+            | "command" | "sudo" | "env" => 1,
+            "timeout"
+                if rest
+                    .get(1)
+                    .is_some_and(|d| d.starts_with(|c: char| c.is_ascii_digit())) =>
+            {
+                2
+            }
+            _ => return rest,
+        };
+        rest = &rest[skip..];
+    }
+}
+
 /// Words that need the shell to expand them.
 fn unknowable(w: &str) -> bool {
     w.contains('$') || w.contains('`')
@@ -1028,52 +1054,235 @@ fn strip_redirects(words: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Remove heredoc bodies, line by line: after a line with an unquoted
-/// `<<[-]['"]?DELIM`, drop the lines through the one equal to `DELIM`. A
-/// `<<` inside quotes is left alone.
-fn strip_heredocs(cmd: &str) -> String {
-    let mut out: Vec<&str> = Vec::new();
-    let mut quote: Option<char> = None;
-    let mut lines = cmd.split('\n');
-    while let Some(line) = lines.next() {
-        out.push(line);
-        let cs: Vec<char> = line.chars().collect();
-        let mut pending: Vec<(String, bool)> = Vec::new();
-        let mut k = 0;
-        while k < cs.len() {
-            let c = cs[k];
-            match quote {
-                Some(q) if c == q => quote = None,
-                Some('"') if c == '\\' => k += 1,
-                Some(_) => {}
-                None => match c {
-                    '\'' | '"' => quote = Some(c),
-                    '\\' => k += 1,
-                    '<' if cs.get(k + 1) == Some(&'<') => {
-                        if cs.get(k + 2) == Some(&'<') {
-                            k += 2;
-                        } else if let Some((delim, dash, end)) = heredoc_delim(&cs, k + 2) {
-                            pending.push((delim, dash));
-                            k = end;
-                        } else {
-                            k += 1;
-                        }
-                    }
-                    _ => {}
-                },
-            }
-            k += 1;
+/// Split a command into words as a shell would. Unlike `review::words`, this
+/// understands what can hide a quote or a command: backslashes and `$(…)`
+/// inside double quotes, backticks, comments, and heredoc bodies, which are
+/// dropped. A `$(…)` stays in its word, so the word reads as `unknowable`.
+fn tokens(cmd: &str) -> Vec<String> {
+    let cs: Vec<char> = cmd.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut pending: Vec<(String, bool)> = Vec::new();
+    let flush = |cur: &mut String, in_word: &mut bool, out: &mut Vec<String>| {
+        if *in_word || !cur.is_empty() {
+            out.push(std::mem::take(cur));
         }
-        for (delim, dash) in pending {
-            for l in lines.by_ref() {
-                let l = if dash { l.trim_start_matches('\t') } else { l };
-                if l == delim {
-                    break;
+        *in_word = false;
+    };
+    let mut i = 0;
+    while let Some(&c) = cs.get(i) {
+        let next = cs.get(i + 1).copied();
+        match c {
+            '\'' => {
+                let end = closing(&cs, i + 1, '\'');
+                cur.extend(&cs[i + 1..end]);
+                in_word = true;
+                i = end + 1;
+            }
+            '"' => {
+                i = double_quoted(&cs, i + 1, &mut cur);
+                in_word = true;
+            }
+            '\\' => {
+                if let Some(n) = next.filter(|n| *n != '\n') {
+                    cur.push(n);
+                    in_word = true;
                 }
+                i += 2;
+            }
+            '$' if next == Some('(') => {
+                let end = substitution(&cs, i + 2);
+                cur.extend(&cs[i..end]);
+                in_word = true;
+                i = end;
+            }
+            '$' if next == Some('{') => {
+                let end = (closing(&cs, i + 2, '}') + 1).min(cs.len());
+                cur.extend(&cs[i..end]);
+                in_word = true;
+                i = end;
+            }
+            '`' => {
+                let end = backticks(&cs, i + 1);
+                cur.extend(&cs[i..end]);
+                in_word = true;
+                i = end;
+            }
+            '#' if !in_word && cur.is_empty() => i = line_end(&cs, i),
+            '\n' => {
+                flush(&mut cur, &mut in_word, &mut out);
+                out.push(";".into());
+                i += 1;
+                for (delim, dash) in pending.drain(..) {
+                    i = past_heredoc(&cs, i, &delim, dash);
+                }
+            }
+            c if c.is_whitespace() => {
+                flush(&mut cur, &mut in_word, &mut out);
+                i += 1;
+            }
+            ';' | '(' | ')' => {
+                flush(&mut cur, &mut in_word, &mut out);
+                out.push(";".into());
+                i += 1;
+            }
+            '&' | '|' => {
+                flush(&mut cur, &mut in_word, &mut out);
+                if next == Some(c) {
+                    out.push(format!("{c}{c}"));
+                    i += 2;
+                } else {
+                    out.push(c.to_string());
+                    i += 1;
+                }
+            }
+            '<' if next == Some('<') => {
+                if cs.get(i + 2) == Some(&'<') {
+                    cur.push_str("<<<");
+                    i += 3;
+                } else if let Some((delim, dash, end)) = heredoc_delim(&cs, i + 2) {
+                    flush(&mut cur, &mut in_word, &mut out);
+                    out.push(format!("<<{delim}"));
+                    pending.push((delim, dash));
+                    i = end + 1;
+                } else {
+                    cur.push_str("<<");
+                    i += 2;
+                }
+            }
+            c => {
+                cur.push(c);
+                i += 1;
             }
         }
     }
-    out.join("\n")
+    flush(&mut cur, &mut in_word, &mut out);
+    out
+}
+
+/// The index of the next `close` from `i`, or the end.
+fn closing(cs: &[char], i: usize, close: char) -> usize {
+    cs[i.min(cs.len())..]
+        .iter()
+        .position(|c| *c == close)
+        .map_or(cs.len(), |n| i + n)
+}
+
+fn line_end(cs: &[char], i: usize) -> usize {
+    closing(cs, i, '\n')
+}
+
+/// Reads a double-quoted string from just after its `"` into `cur`, and
+/// returns the index after the closing `"`.
+fn double_quoted(cs: &[char], mut i: usize, cur: &mut String) -> usize {
+    while let Some(&c) = cs.get(i) {
+        match c {
+            '"' => return i + 1,
+            '\\' => {
+                match cs.get(i + 1) {
+                    Some('\n') | None => {}
+                    Some(n @ ('"' | '\\' | '$' | '`')) => cur.push(*n),
+                    Some(n) => {
+                        cur.push('\\');
+                        cur.push(*n);
+                    }
+                }
+                i += 2;
+            }
+            '$' if cs.get(i + 1) == Some(&'(') => {
+                let end = substitution(cs, i + 2);
+                cur.extend(&cs[i..end]);
+                i = end;
+            }
+            '`' => {
+                let end = backticks(cs, i + 1);
+                cur.extend(&cs[i..end]);
+                i = end;
+            }
+            c => {
+                cur.push(c);
+                i += 1;
+            }
+        }
+    }
+    cs.len()
+}
+
+/// The index after the backtick closing one opened just before `i`.
+fn backticks(cs: &[char], mut i: usize) -> usize {
+    while let Some(&c) = cs.get(i) {
+        match c {
+            '\\' => i += 2,
+            '`' => return i + 1,
+            _ => i += 1,
+        }
+    }
+    cs.len()
+}
+
+/// The index after the `)` closing a `$(` opened just before `i`. Quoting
+/// starts afresh inside, and a heredoc's body can hold anything.
+fn substitution(cs: &[char], mut i: usize) -> usize {
+    let mut depth = 1;
+    let mut pending: Vec<(String, bool)> = Vec::new();
+    while let Some(&c) = cs.get(i) {
+        match c {
+            '\'' => i = closing(cs, i + 1, '\'') + 1,
+            '"' => i = double_quoted(cs, i + 1, &mut String::new()),
+            '\\' => i += 2,
+            '`' => i = backticks(cs, i + 1),
+            '(' => {
+                depth += 1;
+                i += 1;
+            }
+            ')' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            '#' if cs[i - 1].is_whitespace() => i = line_end(cs, i),
+            '\n' => {
+                i += 1;
+                for (delim, dash) in pending.drain(..) {
+                    i = past_heredoc(cs, i, &delim, dash);
+                }
+            }
+            '<' if cs.get(i + 1) == Some(&'<') => {
+                if cs.get(i + 2) == Some(&'<') {
+                    i += 3;
+                } else if let Some((delim, dash, end)) = heredoc_delim(cs, i + 2) {
+                    pending.push((delim, dash));
+                    i = end + 1;
+                } else {
+                    i += 2;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    cs.len()
+}
+
+/// The index after the line equal to `delim`, reading from the start of a
+/// line. With `dash` (`<<-`), leading tabs don't count.
+fn past_heredoc(cs: &[char], mut i: usize, delim: &str, dash: bool) -> usize {
+    while i < cs.len() {
+        let end = line_end(cs, i);
+        let line: String = cs[i..end].iter().collect();
+        let line = if dash {
+            line.trim_start_matches('\t')
+        } else {
+            &line
+        };
+        i = end + 1;
+        if line == delim {
+            return i.min(cs.len());
+        }
+    }
+    cs.len()
 }
 
 /// The delimiter after `<<` starting at `cs[m]`, if any, whether it was
@@ -1314,6 +1523,106 @@ mod tests {
         ] {
             assert!(parse(cmd).is_none(), "should be None: {cmd}");
         }
+    }
+
+    #[test]
+    fn reads_quotes_as_a_shell_does() {
+        type Check = fn(&Parsed) -> bool;
+        let rows: [(&str, Check); 11] = [
+            (
+                "gh pr create --title t --body \"$(cat <<'EOF'\n## Summary\n- plain\nEOF\n)\"",
+                |p| p.pushes && matches!(p.body, Body::Unreadable(_)),
+            ),
+            (
+                "git commit -m \"$(cat <<'EOF'\nfeat: x\n\nuses \"even\" quotes\nEOF\n)\" && git push -u origin a && gh pr create --title t --body \"$(cat <<'EOF'\n- plain\nEOF\n)\"",
+                |p| p.commits_first && p.local == s("a") && matches!(p.body, Body::Unreadable(_)),
+            ),
+            (
+                "git commit -m \"$(cat <<'EOF'\nfeat: x\n\nsupports a 5\" disk\nEOF\n)\" && git push -u origin a && gh pr create --title t --body-file pr.md",
+                |p| p.commits_first && p.local == s("a") && p.body == Body::File("pr.md".into()),
+            ),
+            ("git commit -m \"say \\\"hi\" && git push origin a", |p| {
+                p.commits_first && p.local == s("a")
+            }),
+            ("git commit -m 'it'\\''s' && git push origin a", |p| {
+                p.commits_first && p.local == s("a")
+            }),
+            ("# don't push yet\ngit push origin a", |p| {
+                p.local == s("a")
+            }),
+            ("git status # isn't this it\ngit push origin a", |p| {
+                p.local == s("a")
+            }),
+            ("git commit -m \"`echo \"x`\" && git push origin a", |p| {
+                p.commits_first && p.local == s("a")
+            }),
+            ("gh pr create --body \"\" --title t", |p| {
+                p.body == Body::Inline(String::new())
+            }),
+            ("git commit -m \"a \\$(b)\" && git push origin a", |p| {
+                p.local == s("a")
+            }),
+            ("git push origin $(git branch --show-current)", |p| {
+                p.unpreviewable.is_some()
+            }),
+        ];
+        for (cmd, check) in rows {
+            let p = parse(cmd).unwrap_or_else(|| panic!("no parse: {cmd}"));
+            assert!(check(&p), "{cmd}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn unfinished_commands_do_not_panic() {
+        let cmd = "git commit -m \"$(cat <<-'EOF' # c\n\tx\n\tEOF\n)\" && echo `a\\b` 'c' ${d} \\\n\
+                   \"e\\\"f\" \\g && git push origin a # end";
+        for (i, _) in cmd.char_indices() {
+            let _ = parse(&cmd[..i]);
+        }
+        assert_eq!(parse(cmd).unwrap().local, s("a"));
+    }
+
+    #[test]
+    fn a_pr_body_cannot_invent_a_push() {
+        let p = parse(
+            "gh pr create --title t --body \"$(cat <<'EOF'\n## Summary\nRun \"this\n\ngit push origin evil\nEOF\n)\"",
+        )
+        .unwrap();
+        assert!(matches!(p.body, Body::Unreadable(_)), "{p:?}");
+        assert_eq!((p.local, p.remote, p.unpreviewable), (None, None, None));
+        assert!(
+            parse("echo \"$(cat <<EOF\ngit push origin evil\nEOF\n)\"").is_none(),
+            "a heredoc in a substitution isn't a command"
+        );
+    }
+
+    #[test]
+    fn reads_through_simple_prefixes() {
+        for cmd in [
+            "if true; then git push origin a; fi",
+            "if git push origin a; then echo ok; fi",
+            "for b in a; do git push origin a; done",
+            "while true; do git push origin a; done",
+            "if false; then :; else git push origin a; fi",
+            "sudo git push origin a",
+            "env git push origin a",
+            "env A=1 B=2 git push origin a",
+            "time git push origin a",
+            "command git push origin a",
+            "timeout 60 git push origin a",
+            "timeout 5m git push origin a",
+            "/usr/bin/env A=1 git push origin a",
+            "{ git push origin a; }",
+            "! git push origin a",
+            "A=1 sudo B=2 git push origin a",
+        ] {
+            let p = parse(cmd).unwrap_or_else(|| panic!("no parse: {cmd}"));
+            assert_eq!(p.local, s("a"), "{cmd}");
+            assert_eq!(p.unpreviewable, None, "{cmd}");
+        }
+        unpreviewable("git push origin a; sudo git push origin b");
+        assert!(parse("command -v git").is_none());
+        assert!(parse("timeout").is_none());
     }
 
     #[test]
@@ -1568,7 +1877,10 @@ mod tests {
     fn commands_that_do_not_push() {
         let f = Fixture::new("nopush");
         let p = f.preview("git stash push");
-        assert_eq!(p.unavailable.as_deref(), Some("This command doesn't push."));
+        assert_eq!(
+            p.unavailable.as_deref(),
+            Some("drovr couldn't find a push it can preview in this command. That doesn't mean it won't push.")
+        );
         let p = f.preview("gh pr edit 7 --body-file x");
         assert!(p.unavailable.is_none() && !p.pushes);
         assert_eq!(p.root, f.root());
