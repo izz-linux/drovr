@@ -6,6 +6,7 @@ use crate::review::{self, words};
 use crate::shell::{self, quote};
 use anyhow::Result;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -177,6 +178,134 @@ fn shortstat(text: &str) -> (usize, usize, usize) {
     out
 }
 
+/// `(old, new)` line counts from a hunk header `@@ -a,b +c,d @@`, and the
+/// first new-file line number `c`.
+fn hunk_header(line: &str) -> Option<(u32, u32, u32)> {
+    let rest = line.strip_prefix("@@ -")?;
+    let (old, rest) = rest.split_once(" +")?;
+    let new = rest.split(" @@").next()?;
+    let count = |r: &str| -> Option<u32> {
+        match r.split_once(',') {
+            Some((_, n)) => n.parse().ok(),
+            None => r.parse::<u32>().ok().map(|_| 1),
+        }
+    };
+    let start = new.split(',').next()?.parse().ok()?;
+    Some((count(old)?, count(new)?, start))
+}
+
+/// The path from a `+++ b/path` header. None: `/dev/null`, or a name git
+/// quoted, which we leave unmarked rather than guess at.
+fn header_path(line: &str) -> Option<String> {
+    let p = line.strip_prefix("+++ ")?.trim_end_matches('\t');
+    if p == "/dev/null" || p.starts_with('"') {
+        return None;
+    }
+    Some(p.strip_prefix("b/").unwrap_or(p).to_string())
+}
+
+/// Calls `f(index, path, new_line)` for each added line of `diff`, where
+/// `index` is 0-based within the text. Hunk counts say where a hunk ends,
+/// so a body line like `+++ x` isn't taken for a file header.
+fn each_added(diff: &str, mut f: impl FnMut(usize, &str, u32)) {
+    let mut path: Option<String> = None;
+    let (mut old_left, mut new_left, mut next) = (0u32, 0u32, 0u32);
+    for (i, line) in diff.lines().enumerate() {
+        if old_left == 0 && new_left == 0 {
+            if line.starts_with("diff ") {
+                path = None;
+            } else if line.starts_with("+++ ") {
+                path = header_path(line);
+            } else if let Some((o, n, start)) = hunk_header(line) {
+                (old_left, new_left, next) = (o, n, start);
+            }
+            continue;
+        }
+        match line.as_bytes().first() {
+            Some(b'+') => {
+                new_left = new_left.saturating_sub(1);
+                if let Some(p) = &path {
+                    f(i, p, next);
+                }
+                next += 1;
+            }
+            Some(b'-') => old_left = old_left.saturating_sub(1),
+            Some(b'\\') => {}
+            _ => {
+                old_left = old_left.saturating_sub(1);
+                new_left = new_left.saturating_sub(1);
+                next += 1;
+            }
+        }
+    }
+}
+
+/// path -> new-file line numbers of the `+` lines in `diff`.
+fn added_lines(diff: &str) -> HashMap<String, HashSet<u32>> {
+    let mut out: HashMap<String, HashSet<u32>> = HashMap::new();
+    each_added(diff, |_, path, n| {
+        out.entry(path.to_string()).or_default().insert(n);
+    });
+    out
+}
+
+/// The 0-based lines of `branch_diff` that add a line in `added`. Both
+/// diffs end at the same tip, so a line number names the same line in each.
+fn mark(branch_diff: &str, added: &HashMap<String, HashSet<u32>>) -> Vec<u32> {
+    let mut out = Vec::new();
+    each_added(branch_diff, |i, path, n| {
+        if added.get(path).is_some_and(|set| set.contains(&n)) {
+            out.push(i as u32);
+        }
+    });
+    out
+}
+
+/// The branch's base: `--base X` as `<remote>/X`, else `X`, else the
+/// default branch, with a notice when `X` can't be found.
+fn branch_base(
+    root: &str,
+    parsed: &Parsed,
+    remote: &str,
+    local_ref: &str,
+    notices: &mut Vec<String>,
+) -> Option<(String, String)> {
+    let verify = |c: &str| {
+        git(
+            root,
+            &["rev-parse", "--verify", "-q", &format!("{c}^{{commit}}")],
+        )
+        .is_ok()
+    };
+    let merge_base = |name: &str| {
+        git(root, &["merge-base", local_ref, name])
+            .ok()
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+    };
+    if let Some(x) = parsed.base.as_deref().filter(|x| !x.starts_with('-')) {
+        let found = [format!("{remote}/{x}"), x.to_string()]
+            .into_iter()
+            .filter(|c| verify(c))
+            .find_map(|c| merge_base(&c).map(|m| (c, m)));
+        if found.is_some() {
+            return found;
+        }
+    }
+    let default = review::base_of(root, local_ref);
+    if let Some(x) = &parsed.base {
+        notices.push(if default.name == "HEAD" {
+            format!("The base branch {x} isn't known here, so there's no branch to compare with.")
+        } else {
+            format!(
+                "The base branch {x} isn't known here; comparing with {} instead.",
+                default.name
+            )
+        });
+    }
+    (default.name != "HEAD").then_some((default.name, default.commit))
+}
+
 fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String> {
     if !dir.is_dir() {
         return Err(format!("The folder {} doesn't exist.", dir.display()));
@@ -282,6 +411,11 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
             plural(files, "file"),
         )
     };
+    let whole_branch = if tracking.is_some() {
+        whole_branch(&root, parsed, &remote, &local_ref, &this_push, &mut notices)
+    } else {
+        None
+    };
     Ok(Preview {
         root,
         branch,
@@ -292,7 +426,44 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
         summary_line,
         commits,
         this_push,
+        whole_branch,
         ..Preview::default()
+    })
+}
+
+/// The branch against its base with this push's lines marked; None when
+/// the branch has nothing beyond its base or the base can't be found.
+fn whole_branch(
+    root: &str,
+    parsed: &Parsed,
+    remote: &str,
+    local_ref: &str,
+    this_push: &str,
+    notices: &mut Vec<String>,
+) -> Option<WholeBranch> {
+    let (base, start) = branch_base(root, parsed, remote, local_ref, notices)?;
+    let range = format!("{start}..{local_ref}");
+    let commits: u32 = git(root, &["rev-list", "--count", &range])
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    if commits == 0 {
+        return None;
+    }
+    let mut diff = vec!["diff"];
+    diff.extend(diff_args());
+    diff.extend([start.as_str(), local_ref, "--"]);
+    let text = git(root, &diff).ok()?;
+    diff.insert(1, "--shortstat");
+    let (files, _, _) = shortstat(&git(root, &diff).ok()?);
+    let marked = mark(&text, &added_lines(this_push));
+    Some(WholeBranch {
+        base,
+        text,
+        marked,
+        commits,
+        files: files as u32,
     })
 }
 
@@ -1247,5 +1418,228 @@ mod tests {
         ] {
             assert_eq!(shortstat(text), want, "{text}");
         }
+    }
+
+    fn added(diff: &str) -> Vec<(String, Vec<u32>)> {
+        let mut v: Vec<(String, Vec<u32>)> = added_lines(diff)
+            .into_iter()
+            .map(|(k, set)| {
+                let mut n: Vec<u32> = set.into_iter().collect();
+                n.sort();
+                (k, n)
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn added_lines_reads_hunks() {
+        let diff = "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n--- a/a.txt\n+++ b/a.txt\n\
+@@ -1,3 +1,4 @@\n one\n+two\n three\n four\n@@ -10,2 +11,3 @@\n ten\n+eleven\n+twelve\n\
+diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n\
+@@ -1 +0,0 @@\n-bye\n\
+diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t\n\
+@@ -0,0 +1 @@\n+hi\n\\ No newline at end of file\n";
+        assert_eq!(
+            added(diff),
+            vec![
+                ("a.txt".to_string(), vec![2, 12, 13]),
+                ("my file.txt".to_string(), vec![1]),
+            ]
+        );
+        assert!(added("").is_empty());
+    }
+
+    #[test]
+    fn content_like_headers() {
+        let diff = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n keep\n--- gone\n\
++++ not a header\n end\ndiff --git a/g b/g\n--- a/g\n+++ b/g\n@@ -1 +1,2 @@\n x\n+y\n";
+        assert_eq!(
+            added(diff),
+            vec![("f".to_string(), vec![2]), ("g".to_string(), vec![2])]
+        );
+    }
+
+    #[test]
+    fn mark_picks_lines_by_number() {
+        let diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -0,0 +1,3 @@\n\
++one\n+two\n+three\n";
+        let mut want = HashMap::new();
+        want.insert("a.txt".to_string(), HashSet::from([2u32]));
+        assert_eq!(mark(diff, &want), vec![5]);
+        want.insert("other".to_string(), HashSet::from([1u32]));
+        assert_eq!(mark(diff, &want), vec![5]);
+        assert!(mark(diff, &HashMap::new()).is_empty());
+    }
+
+    fn marked_text(p: &Preview) -> Vec<String> {
+        let w = p.whole_branch.as_ref().unwrap_or_else(|| panic!("{p:?}"));
+        let lines: Vec<&str> = w.text.lines().collect();
+        w.marked
+            .iter()
+            .map(|i| lines[*i as usize].to_string())
+            .collect()
+    }
+
+    fn pushed_branch(name: &str) -> Fixture {
+        let f = Fixture::new(name);
+        f.sh("git checkout -q -b fix/x");
+        f
+    }
+
+    #[test]
+    fn marks_by_line_number() {
+        let f = pushed_branch("marks");
+        f.commit("a.rs", "fn a() {\n    one();\n    two();\n}\n", "feat: fn");
+        f.sh("git push -q -u origin fix/x");
+        f.commit(
+            "a.rs",
+            "fn a() {\n    one();\n    n1();\n    n2();\n    n3();\n    two();\n}\n",
+            "feat: more",
+        );
+        let p = f.preview("git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert_eq!(marked_text(&p), ["+    n1();", "+    n2();", "+    n3();"]);
+        let w = p.whole_branch.unwrap();
+        assert_eq!((w.commits, w.files), (2, 1));
+        assert!(w.text.contains("+fn a() {"));
+    }
+
+    #[test]
+    fn shifted_lines() {
+        let f = pushed_branch("shifted");
+        f.commit("a.txt", "a\nb\nc\n", "feat: abc");
+        f.sh("git push -q -u origin fix/x");
+        f.commit("a.txt", "x\ny\na\nb\nc\n", "feat: xy");
+        assert_eq!(marked_text(&f.preview("git push")), ["+x", "+y"]);
+    }
+
+    #[test]
+    fn renamed_file() {
+        let f = pushed_branch("renamed");
+        f.commit("f.txt", "1\n2\n3\n4\n5\n", "feat: f");
+        f.sh("git push -q -u origin fix/x");
+        f.sh("git mv f.txt g.txt && printf '6\\n' >> g.txt && git add -A && git commit -q -m 'refactor: g'");
+        assert_eq!(marked_text(&f.preview("git push")), ["+6"]);
+    }
+
+    #[test]
+    fn binary_entry() {
+        let f = pushed_branch("binary");
+        let w = |n: &str, b: &[u8]| std::fs::write(f.work.join(n), b).unwrap();
+        w("a.txt", b"a1\n");
+        w("b.bin", b"\0\x01\x02");
+        w("c.txt", b"c1\n");
+        f.sh("git add -A && git commit -q -m 'feat: three'");
+        f.sh("git push -q -u origin fix/x");
+        w("a.txt", b"a1\na2\n");
+        w("b.bin", b"\0\x01\x02\x03");
+        w("c.txt", b"c1\nc2\n");
+        f.sh("git add -A && git commit -q -m 'feat: more'");
+        let p = f.preview("git push");
+        assert!(p
+            .whole_branch
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("Binary files"));
+        assert_eq!(marked_text(&p), ["+a2", "+c2"]);
+    }
+
+    #[test]
+    fn odd_paths() {
+        let f = pushed_branch("odd");
+        let w = |n: &str, t: &str| std::fs::write(f.work.join(n), t).unwrap();
+        w("my file.txt", "a\nb\nc\n");
+        w("caf\u{e9}.txt", "a\nb\n");
+        f.sh("git add -A && git commit -q -m 'feat: files'");
+        f.sh("git push -q -u origin fix/x");
+        w("my file.txt", "a\nb\nc\nd\n");
+        w("caf\u{e9}.txt", "a\nb\nd\n");
+        f.sh("git add -A && git commit -q -m 'feat: d'");
+        assert_eq!(marked_text(&f.preview("git push")), ["+d", "+d"]);
+    }
+
+    #[test]
+    fn whole_branch_uses_default() {
+        let f = pushed_branch("default");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.sh("git push -q -u origin fix/x");
+        f.commit("b.txt", "b\n", "feat: b");
+        let p = f.preview("git push");
+        let w = p.whole_branch.unwrap();
+        assert_eq!(w.base, "origin/main");
+        assert!(w.text.contains("+a") && w.text.contains("+b"));
+        assert!(!w.text.contains("base.txt"));
+    }
+
+    fn with_dev(name: &str) -> Fixture {
+        let f = Fixture::new(name);
+        f.sh("git checkout -q -b dev");
+        f.commit("d.txt", "d\n", "feat: dev");
+        f.sh("git push -q origin dev");
+        f.sh("git checkout -q -b fix/x");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.sh("git push -q -u origin fix/x");
+        f.commit("b.txt", "b\n", "feat: b");
+        f
+    }
+
+    #[test]
+    fn whole_branch_base() {
+        let f = with_dev("dev");
+        let p = f.preview("git push && gh pr create --base dev");
+        let w = p.whole_branch.clone().unwrap_or_else(|| panic!("{p:?}"));
+        assert_eq!(w.base, "origin/dev");
+        assert_eq!(w.commits, 2);
+        assert!(!w.text.contains("d.txt"));
+        assert!(p.notices.is_empty(), "{p:?}");
+    }
+
+    #[test]
+    fn whole_branch_unknown_base() {
+        let f = with_dev("nobase");
+        let p = f.preview("git push && gh pr create --base nope");
+        let w = p.whole_branch.clone().unwrap_or_else(|| panic!("{p:?}"));
+        assert_eq!(w.base, "origin/main");
+        assert!(p.notices.iter().any(|n| n.contains("nope")), "{p:?}");
+    }
+
+    #[test]
+    fn whole_branch_hidden() {
+        let f = pushed_branch("hidden");
+        f.commit("a.txt", "a\n", "feat: a");
+        let p = f.preview("git push -u origin fix/x");
+        assert!(p.unavailable.is_none() && p.tracking.is_none(), "{p:?}");
+        assert!(p.whole_branch.is_none());
+    }
+
+    #[test]
+    fn whole_branch_not_ahead() {
+        let f = pushed_branch("notahead");
+        f.sh("git push -q -u origin fix/x");
+        assert!(f.preview("git push").whole_branch.is_none());
+    }
+
+    #[test]
+    fn whole_branch_of_another_branch() {
+        let f = Fixture::new("other");
+        f.sh("git checkout -q -b x");
+        f.commit("x.txt", "x\n", "feat: x");
+        f.sh("git checkout -q main");
+        f.commit("m.txt", "m\n", "feat: m");
+        f.sh("git push -q origin main");
+        f.sh("git checkout -q -b other");
+        f.commit("o1.txt", "o1\n", "feat: o1");
+        f.sh("git push -q -u origin other");
+        f.commit("o2.txt", "o2\n", "feat: o2");
+        f.sh("git checkout -q x");
+        let p = f.preview("git push origin other");
+        let w = p.whole_branch.clone().unwrap_or_else(|| panic!("{p:?}"));
+        assert_eq!(w.commits, 2);
+        assert!(w.text.contains("+o1") && w.text.contains("+o2"));
+        assert!(!w.text.contains("m.txt") && !w.text.contains("x.txt"));
+        assert_eq!(marked_text(&p), ["+o2"]);
     }
 }
