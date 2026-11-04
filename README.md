@@ -223,10 +223,10 @@ Answering wakes the agent if it's idle.
 
 **Reviewing a push:** a Command or Bash Permission item whose command runs `git push`, `gh pr create` or `gh pr edit` has a **View push** button (**View PR summary** if it only edits a PR). It opens inside the card and shows:
 
-- **This push:** the commits GitHub doesn't have yet and their combined diff, plus any uncommitted changes the command would commit first.
+- **This push:** the commits GitHub doesn't have yet and their combined diff, plus what the command would commit first: staged changes, all tracked changes if it uses `git commit -a` or has no `git add`, and the files it adds. New files over 1 MiB aren't shown, and longer ones stop at 2000 lines with a note.
 - **Whole branch:** the branch against its base (`--base` from the command, else the default branch), with this push's lines highlighted and earlier work dimmed. It's hidden on a new branch.
-- **PR summary:** the `--body-file` or `--body` text, rendered.
-- **How it's read:** drovr only parses the command and compares local refs; it never runs the command and never fetches. For a Permission item the command doesn't say where it runs, so the agent's working folder is assumed and the card says so. The card warns if GitHub has moved since the last fetch. Run, Allow and the other buttons work with it open or closed.
+- **PR summary:** the `--body-file` or `--body` text, rendered. A file the command writes itself can't be shown, since it would be the old text.
+- **How it's read:** drovr only parses the command and compares local refs; it never runs the command and never fetches, and it doesn't run hooks, signature checks or submodule commands from the repo's config. For a Permission item, unless the command gives a full path, the agent's working folder is assumed and the card says so. The card warns if the command changes the branch before pushing, and if GitHub has moved since the last fetch. **Refresh** recomputes an open preview. Run, Allow and the other buttons work with it open or closed.
 
 - **Keyboard:** ↓↑ (or J K) move between items, 1–9 pick a decision's option (or a Watcher item's **Send to**), A allows a permission or starts a worker, and D denies or declines one, with the reason typed in its box. Keys don't fire while you're typing in a box.
 - **Notifications:** when something new lands in the Inbox while you're in another app, drovr sends a macOS notification (turn it off with `notifications.enabled = false`). The Dock icon's badge shows how many items are waiting.
@@ -467,7 +467,7 @@ For any agent, this lists every git repo and worktree it worked in, so it works 
 - **Each repo** shows its branch, how many commits it's ahead, and its last commit, then the changed files with colored diffs and its HTML pages.
 - **The plans folder's repo:** if the plans folder is in a git repo (often `~/.claude` itself), every agent's work is in it. There an agent's review shows only the folders it started in and the files it touched ("Only plans/release"), not the whole repo.
 
-**Send feedback** prompts the agent with your comments about a file, naming the repo. Long diffs (a lockfile, generated code) stay fast: only the lines in view are drawn.
+**Send feedback** prompts the agent with your comments about a file, naming the repo. Long diffs (a lockfile, generated code) stay fast: only the lines in view are drawn. An untracked file over 1 MiB isn't shown, and a longer one stops at 2000 lines with a note.
 
 ### Themes
 
