@@ -41,4 +41,4 @@ cargo clippy --workspace --all-targets -- -D warnings   # lint, as CI does (same
 - **Harnesses:** anything that depends on one agent CLI (its flags, its JSON output, its costs, its saved sessions) goes behind the `Harness` trait in `crates/drovr-core/src/harness/`, never in the engine. A new CLI is a new file there that implements the trait, plus an entry in `all()`.
 - **Reports:** reports are `.html` files under `~/.claude/plans/`. A group's go in `plans/<group>/`, and a solo agent's in the root.
 - **herdr:** it's driven only through the command templates in `[herdr]` in the config. macOS rejects typed input lines over about 1 KB, so long prompts and commands go through a file.
-- **Signing:** the signing identity is never put in `tauri.conf.json`. It comes from a git-ignored `.env.signing`, the same as local-wiki.
+- **Signing:** the signing identity is never put in `tauri.conf.json`. It comes from a git-ignored `.env.signing`.
