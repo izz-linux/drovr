@@ -39,6 +39,8 @@ pub struct Parsed {
     pub force: bool,
     pub commits_first: bool,
     pub add: Add,
+    /// The commit takes every tracked change: `git commit -a`, `git add -u`.
+    pub all_tracked: bool,
     pub body: Body,
     /// The shell's folder when `gh` runs, which `git -C` doesn't change; a
     /// relative body file is read from there. None: not named.
@@ -127,7 +129,7 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
             ..Preview::default()
         }
     } else {
-        match this_push(&parsed, &dir) {
+        match this_push(&parsed, &dir, here) {
             Ok(p) => p,
             Err(why) => Preview::unavailable(why),
         }
@@ -412,7 +414,7 @@ fn branch_base(
     (default.name != "HEAD").then_some((default.name, default.commit))
 }
 
-fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String> {
+fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Preview, String> {
     if !dir.is_dir() {
         return Err(format!("The folder {} doesn't exist.", dir.display()));
     }
@@ -529,7 +531,7 @@ fn this_push(parsed: &Parsed, dir: &Path) -> std::result::Result<Preview, String
         if repo_has_filter(&root) {
             pending_note = Some(UNCOMMITTED_FILTERED.to_string());
         } else {
-            match uncommitted(&root, &parsed.add) {
+            match uncommitted(&root, &parsed.add, parsed.all_tracked, here) {
                 Ok((text, files)) if files > 0 => {
                     summary_line +=
                         &format!("; plus uncommitted changes in {}", plural(files, "file"));
@@ -627,22 +629,42 @@ fn repo_has_filter(root: &str) -> bool {
 const UNCOMMITTED_FILTERED: &str =
     "Uncommitted changes can't be previewed in this repo because its git config defines content filters.";
 
-/// What the command's `git add` and `git commit` would include: `(text,
-/// files)`. Tracked changes come from `diff HEAD`; untracked files only
-/// when `add` names them.
-fn uncommitted(root: &str, add: &Add) -> Result<(String, usize)> {
-    let mut diff = vec!["diff"];
-    diff.extend(diff_args());
-    diff.extend(["HEAD", "--"]);
-    let mut pathspec: Vec<&str> = Vec::new();
-    if let Add::Paths(paths) = add {
-        pathspec.extend(paths.iter().map(String::as_str));
-        diff.extend(&pathspec);
-    }
-    let mut text = git(root, &diff)?;
+/// What the command's `git add` and `git commit` would take: `(text,
+/// files)`. Staged changes always; every tracked change with `all_tracked`
+/// or no `git add`; otherwise the paths added, from `here`. Untracked files
+/// only when `add` names them.
+fn uncommitted(
+    root: &str,
+    add: &Add,
+    all_tracked: bool,
+    here: &Path,
+) -> Result<(String, usize)> {
+    let paths: Vec<String> = match add {
+        Add::Paths(paths) => paths
+            .iter()
+            .map(|p| review::resolve(here, p).display().to_string())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let diff = |tail: &[&str]| {
+        let mut args = vec!["diff"];
+        args.extend(diff_args());
+        args.extend(tail);
+        git(root, &args)
+    };
+    let mut text = if all_tracked || paths.is_empty() {
+        diff(&["HEAD", "--"])?
+    } else {
+        let excluded: Vec<String> = paths.iter().map(|p| format!(":(exclude){p}")).collect();
+        let mut staged = vec!["--cached", "HEAD", "--", ":/"];
+        staged.extend(excluded.iter().map(String::as_str));
+        let mut added = vec!["HEAD", "--"];
+        added.extend(paths.iter().map(String::as_str));
+        diff(&staged)? + &diff(&added)?
+    };
     if !matches!(add, Add::None) {
         let mut ls = vec!["ls-files", "-z", "--others", "--exclude-standard", "--"];
-        ls.extend(&pathspec);
+        ls.extend(paths.iter().map(String::as_str));
         for path in git(root, &ls)?.split('\0').filter(|p| !p.is_empty()) {
             let full = Path::new(root).join(path);
             if full
@@ -691,6 +713,21 @@ const GH_SKIPPED: &[&str] = &[
     "--recover",
 ];
 
+/// `git commit` long flags that take a separate value.
+const COMMIT_VALUE_FLAGS: &[&str] = &[
+    "--message",
+    "--file",
+    "--reuse-message",
+    "--reedit-message",
+    "--template",
+    "--author",
+    "--date",
+    "--fixup",
+    "--squash",
+    "--trailer",
+    "--cleanup",
+];
+
 const GH_READ: &[&str] = &[
     "--body-file",
     "-F",
@@ -713,6 +750,7 @@ struct Scan {
     committed: bool,
     add: Add,
     add_unknown: bool,
+    all_tracked: bool,
     /// Files redirected or `tee`d to so far.
     writes: HashSet<String>,
     /// Folders where a command moved the branch.
@@ -833,8 +871,8 @@ impl Scan {
                 }
                 self.push(rest, dir, dir_unknown);
             }
-            "add" => self.add(rest),
-            "commit" => self.committed = true,
+            "add" => self.add(rest, dir.as_deref(), dir_unknown),
+            "commit" => self.commit(rest),
             "checkout" | "switch" | "rebase" | "merge" | "pull" | "reset" | "cherry-pick"
             | "revert" | "am" => {
                 if dir_unknown {
@@ -847,14 +885,44 @@ impl Scan {
         }
     }
 
-    fn add(&mut self, args: &[String]) {
+    fn commit(&mut self, args: &[String]) {
+        self.committed = true;
+        let mut i = 0;
+        while let Some(a) = args.get(i) {
+            i += 1;
+            if a == "--" {
+                break;
+            } else if a == "--all" {
+                self.all_tracked = true;
+            } else if COMMIT_VALUE_FLAGS.contains(&a.as_str()) {
+                i += 1;
+            } else if let Some(flags) = a.strip_prefix('-').filter(|f| !f.starts_with('-')) {
+                for (n, c) in flags.char_indices() {
+                    if c == 'a' {
+                        self.all_tracked = true;
+                    } else if "mFcCt".contains(c) {
+                        if n + 1 == flags.len() {
+                            i += 1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn add(&mut self, args: &[String], dir: Option<&str>, dir_unknown: bool) {
         let mut paths = Vec::new();
         for a in args {
+            let short = a.strip_prefix('-').filter(|f| !f.starts_with('-'));
             match a.as_str() {
-                "-A" | "--all" | "-u" | "--update" | "." => self.add = Add::All,
+                "--all" => self.add = Add::All,
+                "--update" => self.all_tracked = true,
+                _ if short.is_some_and(|f| f.contains('A')) => self.add = Add::All,
+                _ if short.is_some_and(|f| f.contains('u')) => self.all_tracked = true,
                 a if a.starts_with('-') => {}
-                a if unknowable(a) => self.add_unknown = true,
-                a => paths.push(a.to_string()),
+                a if unknowable(a) || dir_unknown || a.starts_with(':') => self.add_unknown = true,
+                a => paths.push(join(dir, a)),
             }
         }
         if paths.is_empty() {
@@ -970,6 +1038,7 @@ impl Scan {
         self.p.commits_first = self.committed;
         if self.committed {
             self.p.add = self.add.clone();
+            self.p.all_tracked = self.all_tracked;
             if self.add_unknown {
                 self.refuse("This push follows a git add of unknown files.");
             }
@@ -1547,11 +1616,32 @@ mod tests {
                 assert_eq!(p.add, Add::Paths(vec!["a".into(), "b".into()]))
             }),
             ("git add . && git commit -m x && git push", |p| {
+                assert_eq!(p.add, Add::Paths(vec![".".into()]))
+            }),
+            ("git add --all && git commit -m x && git push", |p| {
                 assert_eq!(p.add, Add::All)
+            }),
+            ("git add -Av && git commit -m x && git push", |p| {
+                assert_eq!(p.add, Add::All)
+            }),
+            ("git add -u && git commit -m x && git push", |p| {
+                assert_eq!(p.add, Add::None);
+                assert!(p.all_tracked);
+            }),
+            ("git add --update a && git commit -m x && git push", |p| {
+                assert_eq!(p.add, Add::Paths(vec!["a".into()]));
+                assert!(p.all_tracked);
+            }),
+            ("cd sub && git add a.txt && git commit -m x && git push", |p| {
+                assert_eq!(p.add, Add::Paths(vec!["sub/a.txt".into()]))
+            }),
+            ("git -C sub add a.txt && git commit -m x && git push", |p| {
+                assert_eq!(p.add, Add::Paths(vec!["sub/a.txt".into()]))
             }),
             ("git commit -am x && git push", |p| {
                 assert!(p.commits_first);
                 assert_eq!(p.add, Add::None);
+                assert!(p.all_tracked);
             }),
             ("git add a && git push", |p| {
                 assert!(!p.commits_first);
@@ -1854,6 +1944,34 @@ mod tests {
         }
         let p = parse("git push origin a && gh pr create --head other").unwrap();
         assert_eq!(p.local, s("a"));
+    }
+
+    #[test]
+    fn reads_commit_all() {
+        for (args, want) in [
+            ("-am x", true),
+            ("-a -m x", true),
+            ("-m x -a", true),
+            ("--all -m x", true),
+            ("-m x", false),
+            ("-ma", false),
+            ("-m -a", false),
+            ("--message -a", false),
+            ("--message=-a", false),
+            ("-F a", false),
+            ("--amend --no-edit", false),
+        ] {
+            let cmd = format!("git commit {args} && git push");
+            assert_eq!(parse(&cmd).unwrap().all_tracked, want, "{cmd}");
+        }
+        assert!(!parse("git commit -am x").is_some_and(|p| p.all_tracked));
+        assert!(!parse("git add -u && git push").unwrap().all_tracked);
+    }
+
+    #[test]
+    fn unknown_or_magic_add_paths_are_refused() {
+        unpreviewable("git add ':/foo' && git commit -m x && git push");
+        unpreviewable("git -C $X add a && git commit -m x && git push");
     }
 
     #[test]
@@ -2945,5 +3063,163 @@ diff --git a/my file.txt b/my file.txt\n--- a/my file.txt\t\n+++ b/my file.txt\t
         f.sh("git branch other");
         let p = f.preview("git push && gh pr create --head other");
         assert_eq!(p.branch, "main", "{p:?}");
+    }
+
+    fn pending(p: &Preview) -> &str {
+        p.uncommitted.as_deref().unwrap_or_else(|| panic!("{p:?}"))
+    }
+
+    fn write(f: &Fixture, file: &str, text: &str) {
+        let path = f.work.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn staged_changes_are_always_included() {
+        let f = Fixture::new("i6-staged");
+        commit_push(&f, false);
+        write(&f, "s.txt", "staged\n");
+        f.sh("git add s.txt");
+        write(&f, "other.txt", "other\n");
+        write(&f, "a.txt", "unstaged\n");
+        let p = f.preview("git add other.txt && git commit -m x && git push");
+        let u = pending(&p);
+        assert!(u.contains("+staged") && u.contains("+other"), "{u}");
+        assert!(!u.contains("unstaged"), "{u}");
+        assert!(p.summary_line.ends_with("in 2 files"), "{}", p.summary_line);
+    }
+
+    #[test]
+    fn a_staged_file_shows_its_staged_text() {
+        let f = Fixture::new("i6-version");
+        commit_push(&f, false);
+        write(&f, "a.txt", "in the index\n");
+        f.sh("git add a.txt");
+        write(&f, "a.txt", "only on disk\n");
+        write(&f, "other.txt", "other\n");
+        let u = f.preview("git add other.txt && git commit -m x && git push");
+        let u = pending(&u);
+        assert!(u.contains("+in the index"), "{u}");
+        assert!(!u.contains("only on disk"), "{u}");
+    }
+
+    #[test]
+    fn a_path_both_staged_and_added_shows_once() {
+        let f = Fixture::new("i6-once");
+        commit_push(&f, false);
+        write(&f, "a.txt", "in the index\n");
+        f.sh("git add a.txt");
+        write(&f, "a.txt", "on disk\n");
+        let p = f.preview("git add a.txt && git commit -m x && git push");
+        let u = pending(&p);
+        assert_eq!(u.matches("diff --git a/a.txt").count(), 1, "{u}");
+        assert!(u.contains("+on disk"), "{u}");
+    }
+
+    #[test]
+    fn commit_all_takes_other_tracked_edits() {
+        let f = Fixture::new("i6-all");
+        commit_push(&f, false);
+        write(&f, "a.txt", "a2\n");
+        write(&f, "b.txt", "b2\n");
+        write(&f, "new.txt", "named\n");
+        write(&f, "stray.txt", "stray\n");
+        let p = f.preview("git add new.txt && git commit -am x && git push");
+        let u = pending(&p);
+        assert!(u.contains("+a2") && u.contains("+b2") && u.contains("+named"), "{u}");
+        assert!(!u.contains("stray"), "{u}");
+    }
+
+    #[test]
+    fn add_update_leaves_out_untracked() {
+        let f = Fixture::new("i6-update");
+        commit_push(&f, false);
+        write(&f, "a.txt", "a2\n");
+        write(&f, "new.txt", "new\n");
+        let p = f.preview("git add -u && git commit -m x && git push");
+        let u = pending(&p);
+        assert!(u.contains("+a2") && !u.contains("new.txt"), "{u}");
+    }
+
+    #[test]
+    fn plain_commit_shows_tracked_changes() {
+        let f = Fixture::new("i6-plain");
+        commit_push(&f, false);
+        write(&f, "a.txt", "a2\n");
+        write(&f, "new.txt", "new\n");
+        let p = f.preview("git commit -m x && git push");
+        let u = pending(&p);
+        assert!(u.contains("+a2") && !u.contains("new.txt"), "{u}");
+    }
+
+    fn with_sub(name: &str) -> Fixture {
+        let f = Fixture::new(name);
+        write(&f, "sub/a.txt", "sub a\n");
+        write(&f, "a.txt", "root a\n");
+        f.sh("git add -A && git commit -q -m 'feat: files' && git push -q origin main");
+        write(&f, "sub/a.txt", "sub a2\n");
+        write(&f, "a.txt", "root a2\n");
+        write(&f, "sub/new.txt", "sub new\n");
+        write(&f, "new.txt", "root new\n");
+        f
+    }
+
+    #[test]
+    fn add_paths_resolve_from_the_commands_folder() {
+        let f = with_sub("i6-sub");
+        for cmd in [
+            "cd sub && git add a.txt new.txt && git commit -m x && git push",
+            "git -C sub add a.txt new.txt && git commit -m x && git push",
+            "git add sub/a.txt sub/new.txt && git commit -m x && git push",
+        ] {
+            let p = f.preview(cmd);
+            let u = pending(&p);
+            assert!(u.contains("+sub a2") && u.contains("+sub new"), "{cmd}: {u}");
+            assert!(u.contains("b/sub/new.txt"), "{cmd}: {u}");
+            assert!(!u.contains("root"), "{cmd}: {u}");
+        }
+    }
+
+    #[test]
+    fn add_dot_is_the_commands_folder() {
+        let f = with_sub("i6-dot");
+        let p = f.preview("cd sub && git add . && git commit -m x && git push");
+        let u = pending(&p);
+        assert!(u.contains("+sub a2") && u.contains("+sub new"), "{u}");
+        assert!(!u.contains("root"), "{u}");
+        let p = f.preview("git add . && git commit -m x && git push");
+        let u = pending(&p);
+        assert!(u.contains("+sub a2") && u.contains("+root new"), "{u}");
+    }
+
+    #[test]
+    fn add_paths_resolve_from_a_folder_outside_the_repo() {
+        let f = with_sub("i6-outside");
+        let here = f.dir.display().to_string();
+        let p = preview(
+            "git -C work add a.txt && git -C work commit -m x && git -C work push",
+            &here,
+            true,
+        );
+        let u = pending(&p);
+        assert!(u.contains("+root a2") && !u.contains("sub a2"), "{u}");
+    }
+
+    #[test]
+    fn add_paths_resolve_through_a_symlinked_folder() {
+        let f = with_sub("i6-link");
+        let link = f.dir.join("link");
+        std::os::unix::fs::symlink(&f.work, &link).unwrap();
+        write(&f, "s.txt", "staged\n");
+        f.sh("git add s.txt");
+        let p = preview(
+            "git add a.txt && git commit -m x && git push",
+            &link.display().to_string(),
+            true,
+        );
+        let u = pending(&p);
+        assert!(u.contains("+root a2") && u.contains("+staged"), "{u}");
+        assert!(!u.contains("sub a2"), "{u}");
     }
 }
