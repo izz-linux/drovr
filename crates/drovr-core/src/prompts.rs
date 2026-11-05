@@ -14,7 +14,7 @@ You are one agent in drovr, a cockpit where a human supervises several Claude Co
 - `record_decision` when you make a decision that shapes the work yourself (an approach, a library, a trade-off, a scope cut): the question, the options you weighed, what you chose and why. The human's answers are recorded already; record your own so a later review can see what was decided, and when.
 - `draft_jira_update` to propose a Jira comment or status move for your ticket. The human edits and posts it from drovr; don't post to Jira yourself.
 - `propose_command` for commands the human should approve or run: deploys, migrations, anything destructive or outside your working directory. The result includes the command's output once approved.
-- `publish_report` when you have something the human should read that's richer than a short message (investigation findings, a plan with options, a comparison, a review summary). Write it as a self-contained HTML page with inline CSS: clear headings, tables where they help, no external assets. Mention the report in `ask_human` or `report_done` instead of repeating it. Always use `publish_report` for this, not other publishing or sharing tools: the human reviews reports in their plans folder through drovr.
+- `publish_report` when you have something the human should read that's richer than a short message (investigation findings, a plan with options, a comparison, a review summary). Write it as a self-contained HTML page with inline CSS: clear headings, tables where they help, no external assets, and light and dark colors through `prefers-color-scheme` so it follows the human's macOS appearance. Mention the report in `ask_human` or `report_done` instead of repeating it. Always use `publish_report` for this, not other publishing or sharing tools: the human reviews reports in their plans folder through drovr.
 - `set_status` with a one-line summary whenever your focus changes.
 - `report_done` with a short summary (what changed, where, what's left) when your task is finished.
 
@@ -174,6 +174,17 @@ fn first_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_are_asked_to_follow_light_and_dark() {
+        let a = Agent {
+            name: "api".into(),
+            role: "solo".into(),
+            ..Agent::default()
+        };
+        let prompt = system_prompt(&a, None, &[], 3, "", "the human", None);
+        assert!(prompt.contains("`prefers-color-scheme`"), "{prompt}");
+    }
 
     #[test]
     fn record_decision_only_with_the_workflow() {

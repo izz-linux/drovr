@@ -235,12 +235,12 @@ Answering wakes the agent if it's idle.
 
 Reports are everything you need to look at and review, saved as HTML in `~/.claude/plans/` (change with `reports.dir`). Links in reports, agent output and the Inbox open in your default browser, never inside drovr.
 
-- **Where agents save:** agents publish with the `publish_report` tool. A group's reports go in `~/.claude/plans/<group>/`, so all the plans and designs for one piece of work stay together. A solo agent's go in the root folder.
+- **Where agents save:** agents publish with the `publish_report` tool. A group's reports go in `~/.claude/plans/<group>/`, so all the plans and designs for one piece of work stay together. A solo agent's go in the root folder. Agents are asked to give reports light and dark colors with `prefers-color-scheme`, so a report follows your macOS appearance rather than the theme chosen in drovr.
 - **Revisions replace:** when any agent publishes a title that's already in that folder, the new version replaces the newest copy's file and shows as unread again, and any older copies of it are deleted. Titles match ignoring case and punctuation, on the title they were published under or the page's `<title>`. Files you put in the folder yourself are never replaced. An agent keeps the earlier version (`keep_versions`) only when you ask it to; those copies fold under the newest one as **earlier versions**.
 - **Order:** newest first, in each folder and across folders.
 - **What the view lists:** every `.html` file in the folder and its subfolders, including ones you or other tools put there. They're grouped by folder, newest first.
 - **Folders:** click a folder to collapse or expand it; drovr remembers which are collapsed. When Reports opens an unread report in a collapsed folder, the folder opens to show it, without changing what's remembered.
-- **Unread:** a report an agent published shows a dot until you open it, and the sidebar shows an unread count. Opening Reports while there's an unread report opens the newest one. **Mark all read** clears them.
+- **Unread:** a report an agent published shows a dot until you open it, and the sidebar shows an unread count, which leaves out reports whose files are gone. Opening Reports while there's an unread report opens the newest one. **Mark all read** clears them.
 - **On each report:** preview it, **Open in browser**, **Show folder** (in Finder), or send feedback to any agent.
 - **Previews run as the page would in a browser:** its scripts, theme and saved settings (`localStorage`) work, and its own images and stylesheets load from next to it. It can load files only from the plans folder and the repos you've opened in Code review. The same goes for HTML previews in Code review. See [Security](#security).
 
