@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/izz-linux/drovr/compare/v0.9.1...v0.10.0) (2026-11-05)
+
+
+### Features
+
+* show a push's diff in the inbox ([#28](https://github.com/izz-linux/drovr/issues/28)) ([fcbc49d](https://github.com/izz-linux/drovr/commit/fcbc49d87e82a1ee23527368883fb0cf12574681))
+
 ## [0.9.1](https://github.com/izz-linux/drovr/compare/v0.9.0...v0.9.1) (2026-11-04)
 
 
