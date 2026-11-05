@@ -113,8 +113,8 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
     };
     let relative_body = matches!(&parsed.body, Body::File(f) if !is_absolute(f))
         && !parsed.body_dir.as_deref().is_some_and(is_absolute);
-    let assumed_folder =
-        !named_cwd && (relative_body || !parsed.dir.as_deref().is_some_and(is_absolute));
+    let relative_push = parsed.pushes && !parsed.dir.as_deref().is_some_and(is_absolute);
+    let assumed_folder = !named_cwd && (relative_body || relative_push);
     let here = Path::new(cwd);
     let dir = match &parsed.dir {
         Some(d) => review::resolve(here, d),
@@ -165,6 +165,29 @@ fn this_push_note(commits: usize, files: usize, text: &str) -> Option<&'static s
     } else {
         Some("Nothing new to push.")
     }
+}
+
+/// A remote URL as `host/path`, so the ways of writing one repo's URL compare
+/// equal: `https://host/o/r.git`, `ssh://git@host/o/r`, `git@host:o/r.git`.
+/// None for anything else, such as a remote's name or a local path.
+fn repo_id(url: &str) -> Option<String> {
+    let (host, path) = match url.split_once("://") {
+        Some((_, rest)) => {
+            let (host, path) = rest.split_once('/')?;
+            let host = host.rsplit('@').next()?;
+            (host.split(':').next()?, path)
+        }
+        None => {
+            let (host, path) = url.split_once(':')?;
+            if host.contains('/') {
+                return None;
+            }
+            (host.rsplit('@').next()?, path)
+        }
+    };
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    (!host.is_empty() && !path.is_empty()).then(|| format!("{}/{path}", host.to_lowercase()))
 }
 
 const NO_FOLDER: &str = "There's no folder to look in.";
@@ -455,7 +478,22 @@ fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Pr
     }
     let remotes = git(&root, &["remote"]).unwrap_or_default();
     let remote = match &parsed.remote {
-        Some(r) => r.clone(),
+        Some(r) => match repo_id(r) {
+            Some(id) if !remotes.lines().any(|name| name == r) => remotes
+                .lines()
+                .find(|name| {
+                    git(&root, &["remote", "get-url", name])
+                        .is_ok_and(|url| repo_id(url.trim()).as_ref() == Some(&id))
+                })
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    format!(
+                        "{r} doesn't match any remote of this repository, \
+                         so drovr can't tell what it already has."
+                    )
+                })?,
+            _ => r.clone(),
+        },
         None => git(
             &root,
             &["config", "--get", &format!("branch.{branch}.remote")],
@@ -746,8 +784,6 @@ const GH_SKIPPED: &[&str] = &[
     "-p",
     "--template",
     "-T",
-    "--repo",
-    "-R",
     "--recover",
 ];
 
@@ -1101,9 +1137,12 @@ impl Scan {
             }
         }
         self.p.body_dir = self.cwd.clone();
+        let mut names_repo = false;
         let mut j = 0;
         while j < rest.len() {
-            if let Some(v) = value(rest, &mut j, &["--body-file", "-F"]) {
+            if value(rest, &mut j, &["--repo", "-R"]).is_some() {
+                names_repo = true;
+            } else if let Some(v) = value(rest, &mut j, &["--body-file", "-F"]) {
                 self.p.body = if v == "-" {
                     Body::Unreadable("The body comes from standard input.".into())
                 } else if unknowable(v) {
@@ -1137,6 +1176,11 @@ impl Scan {
                 value(rest, &mut j, GH_SKIPPED);
             }
             j += 1;
+        }
+        // It works on that repo and pushes nothing, whatever folder it's in.
+        if create && names_repo && !self.pushed {
+            self.p.pushes = false;
+            self.p.local = None;
         }
     }
 }
@@ -2315,6 +2359,88 @@ mod tests {
         assert_eq!((p.branch.as_str(), p.remote_branch.as_str()), ("a", "b"));
         assert!(p.tracking.is_some());
         assert_eq!(p.commits.len(), 1);
+    }
+
+    #[test]
+    fn a_url_matching_a_remote_previews_that_remote() {
+        let f = Fixture::new("remote-url");
+        f.sh("git checkout -q -b a");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.sh("git push -q -u origin a");
+        f.commit("a2.txt", "a2\n", "feat: a2");
+        f.sh("git remote set-url origin git@github.com:o/r.git");
+        let root = f.root();
+        for cmd in [
+            "git push https://github.com/o/r.git a".to_string(),
+            "git push https://github.com/o/r a".to_string(),
+            "git push https://token@GitHub.com/o/r.git/ a".to_string(),
+            "git push ssh://git@github.com/o/r.git a".to_string(),
+            "git push git@github.com:o/r.git a".to_string(),
+            format!(
+                "git -C {root} -c credential.helper='!gh auth git-credential' push https://github.com/o/r.git a"
+            ),
+        ] {
+            let p = f.preview(&cmd);
+            assert!(p.unavailable.is_none(), "{cmd}: {p:?}");
+            assert_eq!(p.remote, "origin", "{cmd}");
+            assert!(p.tracking.is_some(), "{cmd}");
+            assert_eq!(p.commits.len(), 1, "{cmd}");
+            assert!(p.this_push.contains("a2.txt"), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn gh_naming_a_repo_only_shows_the_summary() {
+        let dir = std::env::temp_dir().join(format!("drovr-push-gh-repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let body = dir.join("pr.md");
+        std::fs::write(&body, "PR text\n").unwrap();
+        let body = body.display();
+        for flag in ["--repo o/r", "--repo=o/r", "-R o/r"] {
+            let cmd = format!("gh pr create {flag} --draft --base main --head feat/x --title 't: x' --body-file {body}");
+            for named_cwd in [true, false] {
+                let p = preview(&cmd, &dir.display().to_string(), named_cwd);
+                assert_eq!(p.unavailable, None, "{cmd}");
+                assert!(!p.pushes, "{cmd}");
+                assert!(!p.assumed_folder, "{cmd} {named_cwd}");
+                let summary = p.pr_summary.unwrap_or_else(|| panic!("{cmd}"));
+                assert_eq!(summary.text.as_deref(), Some("PR text\n"), "{cmd}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // A real push in the same command is still previewed.
+        for cmd in [
+            "git push origin a && gh pr create --repo o/r --head a",
+            "gh pr create --repo o/r --head b && git push origin a",
+        ] {
+            let p = parse(cmd).unwrap();
+            assert!(p.pushes, "{cmd}");
+            assert_eq!(p.local, s("a"), "{cmd}");
+        }
+        // Without --repo, --head still previews that local branch.
+        let p = parse("gh pr create --head x").unwrap();
+        assert!(p.pushes);
+        assert_eq!(p.local, s("x"));
+    }
+
+    #[test]
+    fn a_url_matching_no_remote_is_refused() {
+        let f = Fixture::new("remote-url-other");
+        f.sh("git checkout -q -b a");
+        f.commit("a.txt", "a\n", "feat: a");
+        f.sh("git remote set-url origin git@github.com:o/r.git");
+        for url in [
+            "https://github.com/someone-else/r.git",
+            "https://evil.example/o/r.git",
+        ] {
+            let p = f.preview(&format!("git push {url} a"));
+            let why = unavailable(&p);
+            assert!(why.contains(url), "{why}");
+            assert!(why.contains("doesn't match"), "{why}");
+        }
     }
 
     #[test]
