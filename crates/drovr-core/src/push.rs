@@ -111,7 +111,10 @@ pub fn preview(command: &str, cwd: &str, named_cwd: bool) -> Preview {
              That doesn't mean it won't push.",
         );
     };
-    let assumed_folder = !named_cwd && !parsed.dir.as_deref().is_some_and(is_absolute);
+    let relative_body = matches!(&parsed.body, Body::File(f) if !is_absolute(f))
+        && !parsed.body_dir.as_deref().is_some_and(is_absolute);
+    let assumed_folder =
+        !named_cwd && (relative_body || !parsed.dir.as_deref().is_some_and(is_absolute));
     let here = Path::new(cwd);
     let dir = match &parsed.dir {
         Some(d) => review::resolve(here, d),
@@ -532,8 +535,9 @@ fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Pr
     let name = Path::new(&root)
         .file_name()
         .map_or(root.clone(), |n| n.to_string_lossy().into_owned());
-    let this_push_note = this_push_note(commits.len(), files, &this_push).map(str::to_string);
-    let summary_line = if commits.is_empty() && this_push.is_empty() && files == 0 {
+    let mut this_push_note = this_push_note(commits.len(), files, &this_push).map(str::to_string);
+    let nothing_committed = commits.is_empty() && this_push.is_empty() && files == 0;
+    let mut summary_line = if nothing_committed {
         format!("{name} · {branch} · nothing to push")
     } else {
         format!(
@@ -542,7 +546,6 @@ fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Pr
             plural(files, "file"),
         )
     };
-    let mut summary_line = summary_line;
     let (mut pending, mut pending_note) = (None, None);
     if parsed.commits_first && checked_out {
         if repo_has_filter(&root) {
@@ -550,13 +553,23 @@ fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Pr
         } else {
             match uncommitted(&root, &parsed.add, parsed.all_tracked, here) {
                 Ok((text, files)) if files > 0 => {
-                    summary_line +=
-                        &format!("; plus uncommitted changes in {}", plural(files, "file"));
+                    let changes = format!("uncommitted changes in {}", plural(files, "file"));
+                    summary_line = if nothing_committed {
+                        format!("{name} · {branch} · {changes}")
+                    } else {
+                        format!("{summary_line}; plus {changes}")
+                    };
                     pending = Some(text);
                 }
                 Ok(_) => {}
                 Err(e) => pending_note = Some(format!("Uncommitted changes couldn't be read: {e}")),
             }
+        }
+        if nothing_committed && pending_note.is_some() {
+            summary_line = format!("{name} · {branch} · commits first");
+        }
+        if nothing_committed && (pending.is_some() || pending_note.is_some()) {
+            this_push_note = None;
         }
     }
     let whole_branch = if tracking.is_some() {
@@ -582,8 +595,13 @@ fn this_push(parsed: &Parsed, dir: &Path, here: &Path) -> std::result::Result<Pr
     })
 }
 
+const WHOLE_BRANCH_UNREADABLE: &str =
+    "The whole branch diff couldn't be read, so that tab is hidden. \
+     In a partial clone, this happens when older file versions aren't downloaded.";
+
 /// The branch against its base with this push's lines marked; None when
-/// the branch has nothing beyond its base or the base can't be found.
+/// the branch has nothing beyond its base, the base can't be found, or the
+/// diff can't be read, which adds a notice.
 fn whole_branch(
     root: &str,
     parsed: &Parsed,
@@ -605,9 +623,17 @@ fn whole_branch(
     let mut diff = vec!["diff"];
     diff.extend(diff_args());
     diff.extend([start.as_str(), local_ref, "--"]);
-    let text = git(root, &diff).ok()?;
-    diff.insert(1, "--shortstat");
-    let (files, _, _) = shortstat(&git(root, &diff).ok()?);
+    let read = || -> Result<(String, String)> {
+        let text = git(root, &diff)?;
+        let mut stat = diff.clone();
+        stat.insert(1, "--shortstat");
+        Ok((text, git(root, &stat)?))
+    };
+    let Ok((text, stat)) = read() else {
+        notices.push(WHOLE_BRANCH_UNREADABLE.to_string());
+        return None;
+    };
+    let (files, _, _) = shortstat(&stat);
     let marked = mark(&text, &added_lines(this_push));
     Some(WholeBranch {
         base,
@@ -1281,7 +1307,13 @@ fn tokens(cmd: &str) -> Vec<String> {
                 i = end;
             }
             '$' if next == Some('{') => {
-                let end = (closing(&cs, i + 2, '}') + 1).min(cs.len());
+                let end = parameter(&cs, i + 2, false);
+                cur.extend(&cs[i..end]);
+                in_word = true;
+                i = end;
+            }
+            '$' if next == Some('\'') => {
+                let end = escaped_until(&cs, i + 2, '\'');
                 cur.extend(&cs[i..end]);
                 in_word = true;
                 i = end;
@@ -1378,6 +1410,11 @@ fn double_quoted(cs: &[char], mut i: usize, cur: &mut String) -> usize {
                 cur.extend(&cs[i..end]);
                 i = end;
             }
+            '$' if cs.get(i + 1) == Some(&'{') => {
+                let end = parameter(cs, i + 2, true);
+                cur.extend(&cs[i..end]);
+                i = end;
+            }
             '`' => {
                 let end = backticks(cs, i + 1);
                 cur.extend(&cs[i..end]);
@@ -1392,12 +1429,40 @@ fn double_quoted(cs: &[char], mut i: usize, cur: &mut String) -> usize {
     cs.len()
 }
 
-/// The index after the backtick closing one opened just before `i`.
-fn backticks(cs: &[char], mut i: usize) -> usize {
+/// The index after the next `close` from `i` that no backslash escapes.
+fn escaped_until(cs: &[char], mut i: usize, close: char) -> usize {
     while let Some(&c) = cs.get(i) {
+        if c == '\\' {
+            i += 2;
+        } else if c == close {
+            return i + 1;
+        } else {
+            i += 1;
+        }
+    }
+    cs.len()
+}
+
+/// The index after the backtick closing one opened just before `i`.
+fn backticks(cs: &[char], i: usize) -> usize {
+    escaped_until(cs, i, '`')
+}
+
+/// The index after the `}` closing a `${` opened just before `i`. A `}` inside
+/// quotes or a nested expansion doesn't close it. Single quotes are plain text
+/// when the whole expansion sits inside double quotes.
+fn parameter(cs: &[char], mut i: usize, in_double: bool) -> usize {
+    while let Some(&c) = cs.get(i) {
+        let next = cs.get(i + 1).copied();
         match c {
+            '}' => return i + 1,
             '\\' => i += 2,
-            '`' => return i + 1,
+            '\'' if !in_double => i = closing(cs, i + 1, '\'') + 1,
+            '"' => i = double_quoted(cs, i + 1, &mut String::new()),
+            '`' => i = backticks(cs, i + 1),
+            '$' if next == Some('(') => i = substitution(cs, i + 2),
+            '$' if next == Some('{') => i = parameter(cs, i + 2, in_double),
+            '$' if next == Some('\'') && !in_double => i = escaped_until(cs, i + 2, '\''),
             _ => i += 1,
         }
     }
@@ -1415,6 +1480,8 @@ fn substitution(cs: &[char], mut i: usize) -> usize {
             '"' => i = double_quoted(cs, i + 1, &mut String::new()),
             '\\' => i += 2,
             '`' => i = backticks(cs, i + 1),
+            '$' if cs.get(i + 1) == Some(&'\'') => i = escaped_until(cs, i + 2, '\''),
+            '$' if cs.get(i + 1) == Some(&'{') => i = parameter(cs, i + 2, false),
             '(' => {
                 depth += 1;
                 i += 1;
@@ -1784,6 +1851,31 @@ mod tests {
     }
 
     #[test]
+    fn quoting_cannot_show_a_decoy_push() {
+        let real = "git push origin secret ;";
+        for cmd in [
+            format!("echo $'\\'' ; {real} echo '; git push origin decoy ;'"),
+            format!("echo $(echo $'\\'') ; {real} echo '; git push origin decoy ;'"),
+            format!("echo ${{a:-\"}}\"}} ; {real} echo \"; git push origin decoy ;\""),
+            format!("echo \"${{a:-\"}}\"}}\" ; {real} echo \"; git push origin decoy ;\""),
+            format!("echo ${{a:-'}}'}} ; {real} echo '; git push origin decoy ;'"),
+            format!("echo ${{a:-${{b:-\"}}\"}}}} ; {real} echo \"; git push origin decoy ;\""),
+            format!("echo $(echo ${{a:-\")\"}}) ; {real} echo \"; git push origin decoy ;\""),
+        ] {
+            let p = parse(&cmd).unwrap_or_else(|| panic!("no parse: {cmd}"));
+            assert_eq!(p.local, s("secret"), "{cmd}");
+        }
+        assert!(parse("git push origin $'a'")
+            .unwrap()
+            .unpreviewable
+            .is_some());
+        assert!(parse("git push origin ${a:-\"}\"}")
+            .unwrap()
+            .unpreviewable
+            .is_some());
+    }
+
+    #[test]
     fn unfinished_commands_do_not_panic() {
         let cmd =
             "git commit -m \"$(cat <<-'EOF' # c\n\tx\n\tEOF\n)\" && echo `a\\b` 'c' ${d} \\\n\
@@ -2146,6 +2238,72 @@ mod tests {
     }
 
     #[test]
+    fn assumed_folder_covers_a_relative_body_file() {
+        let f = Fixture::new("assumed-body");
+        let root = f.root();
+        f.sh("echo text > pr.md");
+        let relative = format!("git -C {root} push && gh pr edit --body-file pr.md");
+        let absolute = format!("git -C {root} push && gh pr edit --body-file {root}/pr.md");
+        let cd_first = format!("cd {root} && gh pr edit --body-file pr.md");
+        for (cmd, named_cwd, want) in [
+            (relative.as_str(), false, true),
+            (relative.as_str(), true, false),
+            (absolute.as_str(), false, false),
+            (cd_first.as_str(), false, false),
+        ] {
+            let p = preview(cmd, &root, named_cwd);
+            assert_eq!(p.assumed_folder, want, "{cmd} {named_cwd}");
+        }
+    }
+
+    #[test]
+    fn a_commit_to_come_is_not_nothing_to_push() {
+        let f = Fixture::new("pending-commit");
+        f.sh("git checkout -q -b x");
+        f.commit("a.txt", "one\n", "feat: a");
+        f.sh("git push -q -u origin x");
+        std::fs::write(f.work.join("a.txt"), "two\n").unwrap();
+        let p = f.preview("git commit -am m && git push");
+        assert_eq!(p.this_push_note, None, "{p:?}");
+        assert!(!p.summary_line.contains("nothing to push"), "{p:?}");
+        assert!(
+            p.summary_line.contains("uncommitted changes in 1 file"),
+            "{p:?}"
+        );
+        assert!(p.uncommitted.is_some(), "{p:?}");
+
+        f.sh("git checkout -q a.txt");
+        let clean = f.preview("git commit -am m && git push");
+        assert_eq!(
+            clean.this_push_note.as_deref(),
+            Some("Nothing new to push.")
+        );
+    }
+
+    #[test]
+    fn partial_clone_says_why_whole_branch_is_missing() {
+        let f = Fixture::new("partial-whole");
+        f.commit("a.txt", "one\n", "feat: a");
+        f.sh("git push -q origin HEAD:main && git checkout -q -b x");
+        f.commit("a.txt", "two\n", "feat: b");
+        f.sh("git push -q -u origin x");
+        f.commit("b.txt", "new\n", "feat: c");
+        // The first version of a.txt is on the server only, as in a blobless clone.
+        f.sh("h=$(git rev-parse HEAD~2:a.txt); rm -f .git/objects/$(echo $h | cut -c1-2)/$(echo $h | cut -c3-)");
+        f.sh("git config core.repositoryformatversion 1 && git config extensions.partialClone origin && git config remote.origin.promisor true");
+        let p = f.preview("git push");
+        assert!(p.unavailable.is_none(), "{p:?}");
+        assert!(p.whole_branch.is_none(), "{p:?}");
+        assert!(p.this_push.contains("+new"), "{p:?}");
+        assert!(
+            p.notices
+                .iter()
+                .any(|n| n.contains("whole branch diff couldn't be read")),
+            "{p:?}"
+        );
+    }
+
+    #[test]
     fn refspec() {
         let f = Fixture::new("refspec");
         f.sh("git checkout -q -b a");
@@ -2329,7 +2487,22 @@ mod tests {
         assert_eq!(p.uncommitted_note, None);
         assert!(
             p.summary_line
-                .ends_with("; plus uncommitted changes in 2 files"),
+                .ends_with(" · uncommitted changes in 2 files"),
+            "{}",
+            p.summary_line
+        );
+    }
+
+    #[test]
+    fn uncommitted_beside_unpushed_commits() {
+        let f = Fixture::new("unc-both");
+        commit_push(&f, false);
+        f.commit("c.txt", "c\n", "feat: c");
+        std::fs::write(f.work.join("a.txt"), "a2\n").unwrap();
+        let p = f.preview("git commit -am x && git push");
+        assert!(
+            p.summary_line
+                .ends_with("; plus uncommitted changes in 1 file"),
             "{}",
             p.summary_line
         );
@@ -2342,8 +2515,7 @@ mod tests {
         std::fs::write(f.work.join("a.txt"), "a2\n").unwrap();
         let p = f.preview("git commit -am x && git push");
         assert!(
-            p.summary_line
-                .ends_with("; plus uncommitted changes in 1 file"),
+            p.summary_line.ends_with(" · uncommitted changes in 1 file"),
             "{}",
             p.summary_line
         );

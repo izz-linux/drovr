@@ -49,11 +49,21 @@ pub struct Repo {
 }
 
 fn git(cwd: &str, args: &str) -> Result<String> {
+    run_git(cwd, "", args)
+}
+
+/// For the push preview, which promises not to fetch: a partial clone would
+/// otherwise fetch a missing object on its own. Code review needs those
+/// objects to show its diff, so it uses `git`.
+fn git_no_fetch(cwd: &str, args: &str) -> Result<String> {
+    run_git(cwd, "GIT_NO_LAZY_FETCH=1 ", args)
+}
+
+fn run_git(cwd: &str, env: &str, args: &str) -> Result<String> {
     shell::sh(
         // Unquoted paths: by default git escapes non-ASCII names ("caf\303\251"),
         // which then match no file.
-        // A partial clone would otherwise fetch a missing object on its own.
-        &format!("GIT_NO_LAZY_FETCH=1 git -c core.quotePath=false {args}"),
+        &format!("{env}git -c core.quotePath=false {args}"),
         Some(Path::new(cwd)),
         None,
         Duration::from_secs(30),
@@ -209,11 +219,15 @@ pub struct Base {
 /// The default branch (`origin/HEAD`, else `origin/main`, `origin/master`,
 /// `main`, `master`) and where this branch left it.
 pub fn base(root: &str) -> Base {
-    base_of(root, "HEAD")
+    find_base(git, root, "HEAD")
 }
 
-/// Like `base`, for the branch at `rev` rather than `HEAD`.
+/// Like `base`, for the branch at `rev` rather than `HEAD`, without fetching.
 pub fn base_of(root: &str, rev: &str) -> Base {
+    find_base(git_no_fetch, root, rev)
+}
+
+fn find_base(git: fn(&str, &str) -> Result<String>, root: &str, rev: &str) -> Base {
     let head = Base {
         name: "HEAD".into(),
         commit: "HEAD".into(),
@@ -624,11 +638,43 @@ mod tests {
         sh(&w, "git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two && git update-ref refs/remotes/origin/main HEAD && git reset -q --hard HEAD~1 && git reflog expire --expire=now --all");
         sh(&w, "h=$(git rev-parse origin/main); rm -f .git/objects/$(echo $h | cut -c1-2)/$(echo $h | cut -c3-)");
         sh(&w, &format!("git config core.repositoryformatversion 1 && git config extensions.partialClone origin && git config remote.origin.promisor true && git config remote.origin.uploadpack {}", script.display()));
-        let _ = base(&w.display().to_string());
+        let _ = base_of(&w.display().to_string(), "HEAD");
         assert!(
             !marker.exists(),
             "a lazy fetch ran remote.origin.uploadpack"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn code_review_reads_a_partial_clone() {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-review-blobless-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let sh = |cwd: &Path, cmd: &str| {
+            let out = shell::sh(cmd, Some(cwd), None, Duration::from_secs(30)).unwrap();
+            assert!(out.ok(), "{cmd}: {}", out.stderr);
+        };
+        sh(
+            &dir,
+            "git init -q --bare -b main o.git && git -C o.git config uploadpack.allowFilter true && git clone -q o.git seed 2>/dev/null",
+        );
+        let seed = dir.join("seed");
+        let id = "-c user.name=t -c user.email=t@t";
+        sh(&seed, &format!("git checkout -q -B main && echo one > a.txt && git add . && git {id} commit -qm one && git push -q origin main"));
+        sh(&seed, &format!("git checkout -q -b x && echo two > a.txt && git {id} commit -qam two && git push -q origin x"));
+        sh(
+            &dir,
+            &format!(
+                "git clone -q --filter=blob:none -b x file://{}/o.git w 2>/dev/null",
+                dir.display()
+            ),
+        );
+        let w = dir.join("w").display().to_string();
+        let text = diff(&w, "a.txt", &[]).unwrap();
+        assert!(text.contains("-one") && text.contains("+two"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
