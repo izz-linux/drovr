@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/izz-linux/drovr/compare/v0.10.0...v0.10.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* keep report unread state when a folder differs by case or a file is gone ([#30](https://github.com/izz-linux/drovr/issues/30)) ([703e3c1](https://github.com/izz-linux/drovr/commit/703e3c188aa45b35ccec6d88aa39140c5bf8d1ff))
+* preview pushes to a URL and gh pr create --repo ([#31](https://github.com/izz-linux/drovr/issues/31)) ([3a6acf3](https://github.com/izz-linux/drovr/commit/3a6acf34a32a3637a88eb47f225c09f09a490f7a))
+
 ## [0.10.0](https://github.com/izz-linux/drovr/compare/v0.9.1...v0.10.0) (2026-11-05)
 
 
