@@ -29,7 +29,8 @@
   function extra(line: string, i: number) {
     if (!mark) return "";
     if (mark.has(i)) return " marked";
-    return cls(line) === "add" ? " dim" : "";
+    const kind = cls(line);
+    return kind === "add" || kind === "del" ? " dim" : "";
   }
 </script>
 
@@ -43,6 +44,11 @@
 
 <style>
   .diff { font-family: var(--mono); font-size: 12px; padding: 8px 0; min-height: 0; }
+  /* macOS's overlay bars hide when idle and are hard to grab; long lines need a real one. */
+  .diff::-webkit-scrollbar { width: 12px; height: 12px; }
+  .diff::-webkit-scrollbar-track { background: transparent; }
+  .diff::-webkit-scrollbar-thumb { background: var(--muted); border: 3px solid transparent; border-radius: 6px; background-clip: padding-box; }
+  .diff::-webkit-scrollbar-corner { background: transparent; }
   .rows { min-width: 100%; }
   .l { white-space: pre; padding: 0 14px; height: 18px; line-height: 18px; overflow: hidden; }
   .add { background: color-mix(in srgb, var(--green) 14%, transparent); }

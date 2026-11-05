@@ -29,7 +29,7 @@ In the **Inbox**, when you're not typing in a box:
 | --- | --- |
 | ↓ ↑ or J K | Next / previous item |
 | 1 … 9 | Pick that option of a decision, or a Watcher item's **Send to** |
-| A | Allow a permission request, or start a worker |
+| A | Allow a permission request (not while its push preview is open), or start a worker |
 | D | Deny a permission request (with the reason typed in its box), or decline a worker |
 
 Ctrl works in place of ⌘, except in the terminal, where Ctrl keys go to the shell. **View → Theme** switches themes.
@@ -102,7 +102,7 @@ Everything waiting on you is in the **Inbox** (⌘2), oldest first: new items jo
   - **Run in herdr pane** runs it in herdr.
   - **Copy** it to run anywhere, then **Mark as run**. Paste the output or a note in the box first, and the agent gets it.
   - **Reject** it.
-  - **View push** (when it runs `git push`, `gh pr create` or `gh pr edit`) opens what the push adds inside the card: **This push** (the commits GitHub doesn't have yet, and their diff), **Whole branch** (the branch against its base, with this push's lines highlighted; hidden on a new branch) and **PR summary** (the `--body-file` or `--body` text). It reads the text currently in the box, so an edited command previews as edited. **Refresh** recomputes an open preview, and the card says so if the command has changed since. If drovr can't find a push it can preview, the card says that, which doesn't mean the command won't push. Nothing is run or fetched.
+  - **View push** (when it runs `git push`, `gh pr create` or `gh pr edit`) opens what the push adds inside the card: **This push** (the commits GitHub doesn't have yet, and their diff), **Whole branch** (the branch against its base, with this push's added lines highlighted, and earlier additions and all removed lines dimmed; hidden on a new branch) and **PR summary** (the `--body-file` or `--body` text). It reads the text currently in the box, so an edited command previews as edited. **Refresh** recomputes an open preview, and the card says so if the command has changed since. If drovr can't find a push it can preview, the card says that, which doesn't mean the command won't push. Nothing is run or fetched.
 - **Permission:** **Allow**, or **Deny** with a reason. A Bash command that pushes has the same **View push**. Unless the command gives a full path, drovr starts from the agent's working folder and says so; check the repo and branch on the summary line.
 - **Spawn** (with `orchestrator.auto_spawn = false`): a lead wants to start a worker. **Start worker** or **Decline**. The box next to it is the model the worker runs on: the lead's pick if it made one, else empty for the default shown in it (a stage's `stages.models`, or `defaults.model`). Type another to override it.
 - **Finished:** read the summary, then **Review changes**.

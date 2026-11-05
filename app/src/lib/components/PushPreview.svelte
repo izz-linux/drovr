@@ -120,7 +120,7 @@
         {:else if shown === "branch" && preview.whole_branch}
           {@const w = preview.whole_branch}
           <div class="sum">{preview.branch} against {w.base} · {plural(w.commits, "commit")}, {plural(w.files, "file")}</div>
-          <div class="muted small">Added lines from this push are highlighted; removed lines aren't marked.</div>
+          <div class="muted small">Added lines from this push are highlighted. Earlier additions and all removed lines are dimmed; see This push for what this push removes.</div>
           {#if preview.uncommitted}<div class="muted small">Uncommitted changes aren't included; see This push.</div>{/if}
           <DiffLines text={w.text} marked={w.marked} class="pp-diff" />
         {:else if shown === "pr" && preview.pr_summary}

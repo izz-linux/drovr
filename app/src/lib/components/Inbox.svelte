@@ -94,7 +94,11 @@
       cards[items[at].id]?.scrollIntoView({ block: "nearest" });
     } else if (/^[1-9]$/.test(k) && item.options[Number(k) - 1] && item.kind !== "permission") {
       pick(item, item.options[Number(k) - 1]);
-    } else if (k === "a" && item.kind === "permission") allow(item);
+    } else if (k === "a" && item.kind === "permission") {
+      // Reading a push's diff shouldn't be one stray key from sending it.
+      if (cards[item.id]?.querySelector(".pp .body")) return;
+      allow(item);
+    }
     else if (k === "d" && item.kind === "permission") deny(item);
     else if (k === "a" && item.kind === "spawn") startWorker(item);
     else if (k === "d" && item.kind === "spawn") declineWorker(item);
