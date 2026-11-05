@@ -629,12 +629,24 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn unseen_reports(&self) -> Result<i64> {
-        Ok(self
-            .db
-            .query_row("SELECT COUNT(*) FROM report_meta WHERE seen = 0", [], |r| {
-                r.get(0)
-            })?)
+    /// Record what's known about `from` under `to` instead. If `to` has a row
+    /// too, it keeps the newer time and any text only `from` has, and it's
+    /// unread if either was.
+    pub fn move_report(&self, from: &str, to: &str) -> Result<()> {
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO report_meta (path, ts, agent, title, summary, seen) \
+             SELECT ?2, ts, agent, title, summary, seen FROM report_meta WHERE path = ?1 \
+             ON CONFLICT(path) DO UPDATE SET ts = max(ts, excluded.ts), \
+             agent = CASE WHEN excluded.agent != '' THEN excluded.agent ELSE agent END, \
+             title = CASE WHEN excluded.title != '' THEN excluded.title ELSE title END, \
+             summary = CASE WHEN excluded.summary != '' THEN excluded.summary ELSE summary END, \
+             seen = min(seen, excluded.seen)",
+            params![from, to],
+        )?;
+        tx.execute("DELETE FROM report_meta WHERE path = ?1", [from])?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Drop what drovr knows about a report whose file is gone.

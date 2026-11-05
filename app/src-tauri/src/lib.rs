@@ -82,7 +82,7 @@ async fn snapshot() -> Res<Snapshot> {
             groups: e.store.groups()?,
             inbox: e.store.items(Some("pending"), 500)?,
             recent,
-            unseen_reports: e.store.unseen_reports()?,
+            unseen_reports: drovr_core::reports::unseen(&e.store)?,
             herdr: installed(&e.cfg.herdr.command),
             codex: installed(&e.cfg.codex.command),
         })

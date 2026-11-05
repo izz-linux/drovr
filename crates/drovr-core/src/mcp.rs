@@ -140,7 +140,7 @@ fn base_tools() -> Value {
               "decisions": { "type": "string", "description": "Decisions made since the blueprint." } }), &["done", "left"]) },
         { "name": "stop_agent", "description": "Orchestrators only: stop a worker in your group.",
           "inputSchema": s(json!({ "name": { "type": "string" } }), &["name"]) },
-        { "name": "publish_report", "description": "Publish an HTML page for the human to review: findings, plans, designs, comparisons, summaries, anything richer than a short message. It is saved to their plans folder (in your group's subfolder) and shows up in drovr's Reports view. Pass either `html` (a complete, self-contained document with inline CSS) or `path` to an .html file you wrote, which is copied there. Publishing a title that's already in the folder, whoever published it, replaces that report and deletes any older copies, so revise a plan or runbook under the same title rather than a new one. Set `keep_versions` only when the human explicitly asks you to keep the earlier version.",
+        { "name": "publish_report", "description": "Publish an HTML page for the human to review: findings, plans, designs, comparisons, summaries, anything richer than a short message. It is saved to their plans folder (in your group's subfolder) and shows up in drovr's Reports view. Pass either `html` (a complete, self-contained document with inline CSS, with light and dark colors through `prefers-color-scheme`) or `path` to an .html file you wrote, which is copied there. Publishing a title that's already in the folder, whoever published it, replaces that report and deletes any older copies, so revise a plan or runbook under the same title rather than a new one. Set `keep_versions` only when the human explicitly asks you to keep the earlier version.",
           "inputSchema": s(json!({
               "title": { "type": "string" },
               "summary": { "type": "string", "description": "One or two sentences shown in the list." },
@@ -894,6 +894,21 @@ mod tests {
     use crate::engine::Engine;
     use crate::store::{Agent, Store};
     use serde_json::json;
+
+    #[test]
+    fn publish_report_asks_for_light_and_dark() {
+        let tools = super::base_tools();
+        let tool = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "publish_report")
+            .unwrap();
+        assert!(tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("`prefers-color-scheme`"));
+    }
 
     #[test]
     fn records_what_agents_do() {

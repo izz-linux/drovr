@@ -9,6 +9,7 @@ use crate::engine::slug;
 use crate::store::{ReportMeta, Store};
 use anyhow::Result;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +81,15 @@ pub fn publish(
     html: &str,
     keep_versions: bool,
 ) -> Result<PathBuf> {
+    folder_path(cfg, folder)?;
+    let root = cfg.reports.path();
+    repair_paths(store, &report_files(&root))?;
+    let folder = if folder.is_empty() {
+        String::new()
+    } else {
+        disk_folder(&root, folder)
+    };
+    let folder = folder.as_str();
     let dir = folder_path(cfg, folder)?;
     let path = if keep_versions {
         save(cfg, folder, title, html)?
@@ -179,31 +189,43 @@ fn title_in(html: &str) -> Option<String> {
 }
 
 pub fn list(cfg: &Config, store: &Store) -> Result<Vec<ReportFile>> {
-    let root = cfg.reports.path();
+    let files = report_files(&cfg.reports.path());
+    repair_paths(store, &files)?;
     let meta: Vec<ReportMeta> = store.report_meta()?;
-    let mut out = vec![];
-    let mut visit = |dir: &Path, folder: &str| {
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if !path.is_file() || !is_html(&path) {
-                continue;
-            }
-            let modified = modified(&path);
+    let mut out: Vec<ReportFile> = files
+        .into_iter()
+        .map(|(path, folder)| {
             let key = path.display().to_string();
             let m = meta.iter().find(|m| m.path == key);
-            out.push(ReportFile {
+            ReportFile {
                 title: title_of(&path),
-                folder: folder.to_string(),
-                modified,
+                folder,
+                modified: modified(&path),
                 agent: m.map(|m| m.agent.clone()).unwrap_or_default(),
                 summary: m.map(|m| m.summary.clone()).unwrap_or_default(),
                 seen: m.map(|m| m.seen).unwrap_or(true),
                 path: key,
-            });
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.modified.total_cmp(&a.modified));
+    Ok(out)
+}
+
+/// The HTML files the Reports list shows, each with its subfolder (empty for
+/// the plans folder itself).
+fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
+    let mut out = vec![];
+    let mut visit = |dir: &Path, folder: &str| {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_file() && is_html(&path) {
+                out.push((path, folder.to_string()));
+            }
         }
     };
-    visit(&root, "");
-    for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+    visit(root, "");
+    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
         if entry.path().is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
             if !name.starts_with('.') {
@@ -211,8 +233,64 @@ pub fn list(cfg: &Config, store: &Store) -> Result<Vec<ReportFile>> {
             }
         }
     }
-    out.sort_by(|a, b| b.modified.total_cmp(&a.modified));
-    Ok(out)
+    out
+}
+
+/// `folder` as it's spelled on disk. A disk that ignores case treats `sre-1`
+/// and `SRE-1` as one folder, but paths compare as text, so a report has to be
+/// recorded under the spelling the list reads back.
+fn disk_folder(root: &Path, folder: &str) -> String {
+    let Ok(wanted) = root.join(folder).canonicalize() else {
+        return folder.to_string();
+    };
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|e| e.path().canonicalize().is_ok_and(|p| p == wanted))
+        .map_or(folder.to_string(), |e| {
+            e.file_name().to_string_lossy().to_string()
+        })
+}
+
+/// Move rows recorded under another spelling of a listed file's path onto the
+/// listed path, so each report has one row. Rows for missing files stay as
+/// they are.
+fn repair_paths(store: &Store, files: &[(PathBuf, String)]) -> Result<()> {
+    let listed: HashSet<String> = files.iter().map(|(p, _)| p.display().to_string()).collect();
+    let moved: Vec<(String, PathBuf)> = store
+        .report_meta()?
+        .into_iter()
+        .filter(|m| !listed.contains(&m.path))
+        .filter_map(|m| Some((Path::new(&m.path).canonicalize().ok()?, m.path)))
+        .map(|(real, path)| (path, real))
+        .collect();
+    if moved.is_empty() {
+        return Ok(());
+    }
+    let by_real: HashMap<PathBuf, String> = files
+        .iter()
+        .filter_map(|(p, _)| Some((p.canonicalize().ok()?, p.display().to_string())))
+        .collect();
+    for (path, real) in moved {
+        if let Some(to) = by_real.get(&real) {
+            store.move_report(&path, to)?;
+        }
+    }
+    Ok(())
+}
+
+/// How many reports are unread. A file that's gone can't be opened, so it
+/// doesn't count, and two spellings of one path count once.
+pub fn unseen(store: &Store) -> Result<i64> {
+    let unread: HashSet<PathBuf> = store
+        .report_meta()?
+        .into_iter()
+        .filter(|m| !m.seen)
+        .filter_map(|m| Path::new(&m.path).canonicalize().ok())
+        .filter(|p| p.is_file())
+        .collect();
+    Ok(unread.len() as i64)
 }
 
 /// A subfolder of the plans folder and the files in it that can serve as
@@ -289,6 +367,130 @@ pub fn read_prompt(cfg: &Config, folder: &str, file: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plans folder holding a ticket's `SRE-1` folder. None where the disk
+    /// tells `sre-1` from `SRE-1`, since the two are then different folders.
+    fn differs_by_case(name: &str) -> Option<(PathBuf, Config, Store)> {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-reports-case-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("SRE-1")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        if !dir.join("sre-1").exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return None;
+        }
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.display().to_string();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        Some((dir, cfg, store))
+    }
+
+    #[test]
+    fn publishing_to_a_folder_differing_by_case_stays_unread() {
+        let Some((dir, cfg, store)) = differs_by_case("publish") else {
+            return;
+        };
+        let path = publish(
+            &cfg, &store, "sre-1", "lead", "Plan", "why", "<p>x</p>", false,
+        )
+        .unwrap();
+        assert!(path.ends_with("SRE-1/plan.html"), "{}", path.display());
+        let files = list(&cfg, &store).unwrap();
+        assert_eq!(files.len(), 1);
+        let f = &files[0];
+        assert_eq!(
+            (
+                f.folder.as_str(),
+                f.agent.as_str(),
+                f.summary.as_str(),
+                f.seen
+            ),
+            ("SRE-1", "lead", "why", false)
+        );
+        assert_eq!(unseen(&store).unwrap(), 1);
+        store.mark_report_seen(&f.path).unwrap();
+        assert_eq!(unseen(&store).unwrap(), 0);
+        assert!(list(&cfg, &store).unwrap()[0].seen);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rows_recorded_under_another_case_are_repaired() {
+        let Some((dir, cfg, store)) = differs_by_case("repair") else {
+            return;
+        };
+        std::fs::write(dir.join("SRE-1/plan.html"), "<p>x</p>").unwrap();
+        let lower = dir.join("sre-1/plan.html").display().to_string();
+        let upper = dir.join("SRE-1/plan.html").display().to_string();
+        store.publish_report(&lower, "lead", "Plan", "why").unwrap();
+        // Opening it in the old version added a second row.
+        store.mark_report_seen(&upper).unwrap();
+
+        let files = list(&cfg, &store).unwrap();
+        assert_eq!(
+            (
+                files[0].agent.as_str(),
+                files[0].summary.as_str(),
+                files[0].seen
+            ),
+            ("lead", "why", false)
+        );
+        let rows = store.report_meta().unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].path, upper);
+        assert_eq!(unseen(&store).unwrap(), 1);
+        store.mark_report_seen(&files[0].path).unwrap();
+        assert_eq!(unseen(&store).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn republishing_replaces_a_copy_recorded_under_another_case() {
+        let Some((dir, cfg, store)) = differs_by_case("republish") else {
+            return;
+        };
+        std::fs::write(dir.join("SRE-1/plan.html"), "<p>one</p>").unwrap();
+        let lower = dir.join("sre-1/plan.html").display().to_string();
+        store.publish_report(&lower, "lead", "Plan", "").unwrap();
+
+        publish(
+            &cfg,
+            &store,
+            "sre-1",
+            "lead",
+            "Plan",
+            "",
+            "<p>two</p>",
+            false,
+        )
+        .unwrap();
+        let files = list(&cfg, &store).unwrap();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(
+            std::fs::read_to_string(&files[0].path).unwrap(),
+            "<p>two</p>"
+        );
+        assert_eq!(unseen(&store).unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_deleted_report_is_not_counted_as_unread() {
+        let dir = std::env::temp_dir().join(format!("drovr-reports-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.display().to_string();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let gone = publish(&cfg, &store, "", "lead", "Gone", "", "<p>x</p>", false).unwrap();
+        publish(&cfg, &store, "", "lead", "Here", "", "<p>x</p>", false).unwrap();
+        assert_eq!(unseen(&store).unwrap(), 2);
+        std::fs::remove_file(&gone).unwrap();
+        assert_eq!(unseen(&store).unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn saves_into_group_folder_and_lists() {
