@@ -16,7 +16,7 @@
   let tab = $state<Tab>("push");
   let seq = 0;
 
-  const summaryOnly = $derived(/\bgh\s+pr\s+edit\b/.test(command) && !/\bgit\b[^\n;&|]*\bpush\b/.test(command));
+  const summaryOnly = $derived(/\bgh\s+pr\s+(edit\b|create\b[^\n;&|]*\s(--repo|-R)[\s=])/.test(command) && !/\bgit\b[^\n;&|]*\bpush\b/.test(command));
   const stale = $derived(open && !loading && loaded !== null && loaded !== command);
   const tabs = $derived.by(() => {
     const p = preview;
