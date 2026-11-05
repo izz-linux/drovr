@@ -3,6 +3,10 @@
   import { app, act, select, toast } from "#lib/state.svelte.ts";
   import { md } from "#lib/md.ts";
   import { shq } from "#lib/terminal.svelte.ts";
+  import PushPreview from "./PushPreview.svelte";
+
+  // Only decides whether the button shows; the parser's answer is what counts.
+  const pushRe = /\bgit\b[^\n;&|]*\bpush\b|\bgh\s+pr\s+(create|edit)\b/;
 
   let showResolved = $state(false);
   let drafts = $state<Record<number, string>>({});
@@ -90,7 +94,11 @@
       cards[items[at].id]?.scrollIntoView({ block: "nearest" });
     } else if (/^[1-9]$/.test(k) && item.options[Number(k) - 1] && item.kind !== "permission") {
       pick(item, item.options[Number(k) - 1]);
-    } else if (k === "a" && item.kind === "permission") allow(item);
+    } else if (k === "a" && item.kind === "permission") {
+      // Reading a push's diff shouldn't be one stray key from sending it.
+      if (cards[item.id]?.querySelector(".pp .body")) return;
+      allow(item);
+    }
     else if (k === "d" && item.kind === "permission") deny(item);
     else if (k === "a" && item.kind === "spawn") startWorker(item);
     else if (k === "d" && item.kind === "spawn") declineWorker(item);
@@ -127,6 +135,9 @@
         <div class="reason md">{@html md(item.body)}</div>
         <textarea rows="2" value={commands[item.id] ?? item.payload.command} oninput={(e) => (commands[item.id] = e.currentTarget.value)}></textarea>
         <div class="muted small">in {item.payload.cwd}</div>
+        {#if pushRe.test(commands[item.id] ?? item.payload.command)}
+          <PushPreview command={commands[item.id] ?? item.payload.command} cwd={item.payload.cwd ?? ""} namedCwd={true} />
+        {/if}
         <div class="row actions">
           <button class="primary" disabled={running[item.id]} onclick={() => run(item, "local")}>{running[item.id] ? "Running…" : "Run & return output"}</button>
           <button onclick={() => runInTerminal(item)} title="Type it into the agent's terminal in drovr; you press Enter">Run in terminal</button>
@@ -139,6 +150,9 @@
       {:else if item.kind === "permission"}
         <h3><code>{item.title}</code></h3>
         <div class="md">{@html md(item.body)}</div>
+        {#if typeof item.payload.command === "string" && pushRe.test(item.payload.command)}
+          <PushPreview command={item.payload.command} cwd={item.payload.cwd ?? ""} namedCwd={false} />
+        {/if}
         <div class="row actions">
           <button class="primary" onclick={() => allow(item)}>Allow <span class="kbd">A</span></button>
           <input class="grow" placeholder="Tell it why, or what to do instead (optional)" bind:value={drafts[item.id]} />

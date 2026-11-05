@@ -68,6 +68,12 @@ export type Ticket = {
 export type Page = { id: string; title: string; space: string; url: string; excerpt: string; body: string };
 export type SlackMessage = { channel: string; user: string; ts: string; text: string; permalink: string };
 export type Change = { path: string; status: string; uncommitted: boolean; is_html: boolean };
+export type PushPreview = {
+  unavailable: string | null; pushes: boolean; root: string; branch: string; remote: string; remote_branch: string;
+  tracking: string | null; assumed_folder: boolean; notices: string[]; summary_line: string; commits: string[]; this_push: string; this_push_note: string | null;
+  whole_branch: { base: string; text: string; marked: number[]; commits: number; files: number } | null;
+  uncommitted: string | null; uncommitted_note: string | null; pr_summary: { text: string | null; note: string | null } | null;
+};
 export type Repo = {
   root: string; label: string; summary: string; base: string; changes: Change[]; html: string[];
   /** In a repo every agent's work shares (the plans folder's): the parts this agent worked in. Empty: all of it. */
@@ -140,6 +146,10 @@ export const api = {
   ask: (question: string) => invoke<string>("ask", { question }),
   review: (name: string) => invoke<{ cwd: string; repos: Repo[] }>("review", { name }),
   diff: (root: string, path: string, scope: string[] = []) => invoke<string>("review_diff", { root, path, scope }),
+  pushPreview: (command: string, cwd: string, namedCwd: boolean) =>
+    invoke<PushPreview>("push_preview", { command, cwd, namedCwd }),
+  pushGithubMoved: (root: string, branch: string, tracking: string | null) =>
+    invoke<boolean | null>("push_github_moved", { root, branch, tracking }),
   configInfo: () => invoke<{ path: string; home: string; text: string; effective: string }>("config_info"),
   saveConfig: (text: string) => invoke<void>("save_config", { text }),
   reports: () => invoke<{ dir: string; files: ReportFile[] }>("reports"),

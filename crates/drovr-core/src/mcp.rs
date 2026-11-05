@@ -830,13 +830,20 @@ impl Server {
             serde_json::to_string_pretty(&input).unwrap_or_default()
         );
         let options = vec!["allow".to_string(), "deny".to_string()];
+        let mut payload = json!({ "tool": tool });
+        if let Some(command) = input["command"].as_str() {
+            payload["command"] = json!(command);
+            if let Ok(agent) = self.engine.agent(me) {
+                payload["cwd"] = json!(agent.cwd);
+            }
+        }
         let id = self.engine.store.add_item(
             me,
             "permission",
             &format!("{tool} {summary}"),
             &body,
             &options,
-            &json!({ "tool": tool }),
+            &payload,
         )?;
         self.engine.record_item(id);
         let item = wait_for(&self.engine, id, self.engine.cfg.permissions.wait_seconds)?;
@@ -968,6 +975,55 @@ mod tests {
             )
             .unwrap();
         assert!(r.as_str().unwrap().contains("no ticket"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn permission_items_record_the_command() {
+        let dir = std::env::temp_dir().join(format!("drovr-mcp-perm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        cfg.permissions.auto_allow.clear();
+        cfg.permissions.wait_seconds = 0;
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        store
+            .add_agent(&Agent {
+                name: "api".into(),
+                role: "solo".into(),
+                cwd: "/work/api".into(),
+                ..Agent::default()
+            })
+            .unwrap();
+        let engine = Engine::with(store, cfg, "drovr".into());
+        let api = Server::new(engine, "api".into());
+        api.call(
+            "approve",
+            &json!({ "tool_name": "Bash", "input": { "command": "git push" } }),
+        )
+        .unwrap();
+        api.call(
+            "approve",
+            &json!({ "tool_name": "Read", "input": { "file_path": "/etc/hosts" } }),
+        )
+        .unwrap();
+        let items = Store::open(&dir.join("t.db"))
+            .unwrap()
+            .items(None, 10)
+            .unwrap();
+        let payload = |tool: &str| {
+            items
+                .iter()
+                .find(|i| i.payload["tool"] == tool)
+                .unwrap()
+                .payload
+                .clone()
+        };
+        let bash = payload("Bash");
+        assert_eq!(bash["command"], "git push");
+        assert_eq!(bash["cwd"], "/work/api");
+        assert!(payload("Read").get("command").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

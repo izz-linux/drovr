@@ -49,10 +49,21 @@ pub struct Repo {
 }
 
 fn git(cwd: &str, args: &str) -> Result<String> {
+    run_git(cwd, "", args)
+}
+
+/// For the push preview, which promises not to fetch: a partial clone would
+/// otherwise fetch a missing object on its own. Code review needs those
+/// objects to show its diff, so it uses `git`.
+fn git_no_fetch(cwd: &str, args: &str) -> Result<String> {
+    run_git(cwd, "GIT_NO_LAZY_FETCH=1 ", args)
+}
+
+fn run_git(cwd: &str, env: &str, args: &str) -> Result<String> {
     shell::sh(
         // Unquoted paths: by default git escapes non-ASCII names ("caf\303\251"),
         // which then match no file.
-        &format!("git -c core.quotePath=false {args}"),
+        &format!("{env}git -c core.quotePath=false {args}"),
         Some(Path::new(cwd)),
         None,
         Duration::from_secs(30),
@@ -208,6 +219,15 @@ pub struct Base {
 /// The default branch (`origin/HEAD`, else `origin/main`, `origin/master`,
 /// `main`, `master`) and where this branch left it.
 pub fn base(root: &str) -> Base {
+    find_base(git, root, "HEAD")
+}
+
+/// Like `base`, for the branch at `rev` rather than `HEAD`, without fetching.
+pub fn base_of(root: &str, rev: &str) -> Base {
+    find_base(git_no_fetch, root, rev)
+}
+
+fn find_base(git: fn(&str, &str) -> Result<String>, root: &str, rev: &str) -> Base {
     let head = Base {
         name: "HEAD".into(),
         commit: "HEAD".into(),
@@ -229,7 +249,7 @@ pub fn base(root: &str) -> Base {
     }) else {
         return head;
     };
-    match git(root, &format!("merge-base HEAD {}", quote(&name))) {
+    match git(root, &format!("merge-base {} {}", quote(rev), quote(&name))) {
         Ok(mb) if !mb.trim().is_empty() => Base {
             name,
             commit: mb.trim().to_string(),
@@ -318,19 +338,31 @@ pub fn diff(root: &str, path: &str, scope: &[String]) -> Result<String> {
     git(root, &format!("diff -M {since} -- {}", quote(path)))
 }
 
-fn new_file_diff(root: &str, path: &str) -> String {
+/// A new file larger than this isn't read.
+const MAX_NEW_FILE: u64 = 1024 * 1024;
+const MAX_NEW_FILE_LINES: usize = 2000;
+
+pub(crate) fn new_file_diff(root: &str, path: &str) -> String {
     let full = Path::new(root).join(path);
-    match std::fs::read_to_string(&full) {
-        Ok(text) => {
-            let mut out =
-                format!("diff --git a/{path} b/{path}\nnew file\n--- /dev/null\n+++ b/{path}\n");
-            for line in text.lines().take(2000) {
-                out += &format!("+{line}\n");
-            }
-            out
-        }
-        Err(_) => format!("diff --git a/{path} b/{path}\n(binary or unreadable new file)\n"),
+    let unreadable = || format!("diff --git a/{path} b/{path}\n(binary or unreadable new file)\n");
+    let Some(meta) = std::fs::metadata(&full).ok().filter(|m| m.is_file()) else {
+        return unreadable();
+    };
+    if meta.len() > MAX_NEW_FILE {
+        return format!("diff --git a/{path} b/{path}\nnew file\n(too large to show)\n");
     }
+    let Ok(text) = std::fs::read_to_string(&full) else {
+        return unreadable();
+    };
+    let mut out = format!("diff --git a/{path} b/{path}\nnew file\n--- /dev/null\n+++ b/{path}\n");
+    let mut lines = text.lines();
+    for line in lines.by_ref().take(MAX_NEW_FILE_LINES) {
+        out += &format!("+{line}\n");
+    }
+    if lines.next().is_some() {
+        out += &format!("(truncated at {MAX_NEW_FILE_LINES} lines)\n");
+    }
+    out
 }
 
 /// Branch, commits ahead of the base, and the last commit.
@@ -413,7 +445,7 @@ fn touched(transcript: &Path, cwd: &str, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn resolve(here: &Path, p: &str) -> PathBuf {
+pub(crate) fn resolve(here: &Path, p: &str) -> PathBuf {
     let p = if p == "~" {
         user_home()
     } else if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("$HOME/")) {
@@ -481,8 +513,9 @@ fn is_separator(w: &str) -> bool {
 }
 
 /// Split a command into words, roughly as a shell would: quotes group, and
-/// `&&`, `||`, `;` and `|` are words of their own.
-fn words(cmd: &str) -> Vec<String> {
+/// `&&`, `||`, `;` and `|` are words of their own. An unquoted newline is a
+/// `;`; a backslash before a newline joins the lines.
+pub(crate) fn words(cmd: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
@@ -499,9 +532,13 @@ fn words(cmd: &str) -> Vec<String> {
             None => match c {
                 '\'' | '"' => quote = Some(c),
                 '\\' => {
-                    if let Some(n) = chars.next() {
+                    if let Some(n) = chars.next().filter(|n| *n != '\n') {
                         cur.push(n);
                     }
+                }
+                '\n' => {
+                    flush(&mut cur, &mut out);
+                    out.push(";".into());
                 }
                 c if c.is_whitespace() => flush(&mut cur, &mut out),
                 ';' | '(' | ')' => {
@@ -527,6 +564,126 @@ fn words(cmd: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_file_diff_caps_what_it_reads() {
+        let dir = std::env::temp_dir().join(format!("drovr-review-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.display().to_string();
+        let sized = |name: &str, len: u64| {
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            f.set_len(len).unwrap();
+        };
+        sized("over.txt", MAX_NEW_FILE + 1);
+        sized("at.txt", MAX_NEW_FILE);
+        let d = new_file_diff(&root, "over.txt");
+        assert!(d.len() < 200, "{} bytes", d.len());
+        assert_eq!(
+            d,
+            "diff --git a/over.txt b/over.txt\nnew file\n(too large to show)\n"
+        );
+        assert!(!new_file_diff(&root, "at.txt").contains("too large"));
+
+        let lines = |n: usize| "x\n".repeat(n);
+        std::fs::write(dir.join("long.txt"), lines(2001)).unwrap();
+        std::fs::write(dir.join("exact.txt"), lines(2000)).unwrap();
+        let d = new_file_diff(&root, "long.txt");
+        assert!(
+            d.ends_with("+x\n(truncated at 2000 lines)\n"),
+            "{}",
+            &d[d.len() - 40..]
+        );
+        assert_eq!(d.matches("+x\n").count(), 2000);
+        let d = new_file_diff(&root, "exact.txt");
+        assert!(!d.contains("truncated"));
+        assert_eq!(d.matches("+x\n").count(), 2000);
+
+        std::fs::write(dir.join("short.txt"), "a\nb\n").unwrap();
+        assert_eq!(
+            new_file_diff(&root, "short.txt"),
+            "diff --git a/short.txt b/short.txt\nnew file\n--- /dev/null\n+++ b/short.txt\n+a\n+b\n"
+        );
+        assert!(new_file_diff(&root, "gone.txt").contains("unreadable"));
+        std::fs::create_dir(dir.join("adir")).unwrap();
+        assert!(new_file_diff(&root, "adir").contains("unreadable"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finding_the_base_fetches_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("drovr-review-lazy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let sh = |cwd: &Path, cmd: &str| {
+            let out = shell::sh(cmd, Some(cwd), None, Duration::from_secs(30)).unwrap();
+            assert!(out.ok(), "{cmd}: {}", out.stderr);
+        };
+        let marker = dir.join("ran");
+        let script = dir.join("tripwire.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        sh(
+            &dir,
+            "git init -q --bare -b main o.git && git clone -q o.git w 2>/dev/null",
+        );
+        let w = dir.join("w");
+        sh(&w, "git checkout -q -B main && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m one");
+        sh(&w, "git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two && git update-ref refs/remotes/origin/main HEAD && git reset -q --hard HEAD~1 && git reflog expire --expire=now --all");
+        sh(&w, "h=$(git rev-parse origin/main); rm -f .git/objects/$(echo $h | cut -c1-2)/$(echo $h | cut -c3-)");
+        sh(&w, &format!("git config core.repositoryformatversion 1 && git config extensions.partialClone origin && git config remote.origin.promisor true && git config remote.origin.uploadpack {}", script.display()));
+        let _ = base_of(&w.display().to_string(), "HEAD");
+        assert!(
+            !marker.exists(),
+            "a lazy fetch ran remote.origin.uploadpack"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn code_review_reads_a_partial_clone() {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-review-blobless-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let sh = |cwd: &Path, cmd: &str| {
+            let out = shell::sh(cmd, Some(cwd), None, Duration::from_secs(30)).unwrap();
+            assert!(out.ok(), "{cmd}: {}", out.stderr);
+        };
+        sh(
+            &dir,
+            "git init -q --bare -b main o.git && git -C o.git config uploadpack.allowFilter true && git clone -q o.git seed 2>/dev/null",
+        );
+        let seed = dir.join("seed");
+        let id = "-c user.name=t -c user.email=t@t";
+        sh(&seed, &format!("git checkout -q -B main && echo one > a.txt && git add . && git {id} commit -qm one && git push -q origin main"));
+        sh(&seed, &format!("git checkout -q -b x && echo two > a.txt && git {id} commit -qam two && git push -q origin x"));
+        sh(
+            &dir,
+            &format!(
+                "git clone -q --filter=blob:none -b x file://{}/o.git w 2>/dev/null",
+                dir.display()
+            ),
+        );
+        let w = dir.join("w").display().to_string();
+        let text = diff(&w, "a.txt", &[]).unwrap();
+        assert!(text.contains("-one") && text.contains("+two"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn splits_words_at_newlines() {
+        assert_eq!(words("a\nb"), ["a", ";", "b"]);
+        assert_eq!(words("a \\\n b"), ["a", "b"]);
+        assert_eq!(words("'a\nb'"), ["a\nb"]);
+    }
 
     #[test]
     fn finds_folders_in_commands() {
