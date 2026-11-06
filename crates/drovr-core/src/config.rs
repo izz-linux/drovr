@@ -344,6 +344,8 @@ pub struct Herdr {
     pub read: String,
     pub stop: String,
     pub get: String,
+    /// Shows a running agent's pane. `{target}` is the pane.
+    pub focus: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -572,6 +574,7 @@ impl Default for Herdr {
             read: "{herdr} agent read {target} --source recent-unwrapped --lines {lines}".into(),
             stop: "{herdr} pane close {pane}".into(),
             get: "{herdr} agent get {target}".into(),
+            focus: "{herdr} agent focus {target}".into(),
         }
     }
 }

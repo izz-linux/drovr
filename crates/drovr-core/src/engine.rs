@@ -1848,6 +1848,9 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
     /// Open a headless agent's session interactively in a new herdr pane.
     pub fn open_in_herdr(&self, name: &str) -> Result<String> {
         let agent = self.agent(name)?;
+        if let Some(pane) = self.focus_live_pane(&agent)? {
+            return Ok(pane);
+        }
         if agent.run_state == "working" {
             bail!("{name} is mid-run; stop it first so two sessions don't write to the same conversation");
         }
@@ -1855,6 +1858,22 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         let pane = self.herdr_split(&agent.cwd)?;
         self.herdr_run_script(&pane, &cmd)?;
         Ok(pane)
+    }
+
+    /// Show the pane a herdr agent is still running in, because resuming its
+    /// session elsewhere would put two processes on one conversation.
+    fn focus_live_pane(&self, agent: &Agent) -> Result<Option<String>> {
+        if agent.backend != "herdr" || agent.pane.is_empty() {
+            return Ok(None);
+        }
+        let target = [("target", agent.pane.as_str())];
+        let get = self.herdr_fill(&self.cfg.herdr.get, &target);
+        if !shell::sh(&get, None, None, Duration::from_secs(10))?.ok() {
+            return Ok(None);
+        }
+        let focus = self.herdr_fill(&self.cfg.herdr.focus, &target);
+        shell::sh(&focus, None, None, Duration::from_secs(10))?.into_stdout("herdr agent focus")?;
+        Ok(Some(agent.pane.clone()))
     }
 
     // -- herdr ----------------------------------------------------------------
@@ -2617,6 +2636,102 @@ mod tests {
         let out = r#"{"id":"cli:agent:get","result":{"agent":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"225e9ac0-9c9c-4f7c-927e-49054bff82a0"},"agent_status":"done","cwd":"/Users/x/develop","focused":false,"pane_id":"w7:p1","revision":32,"state_change_seq":1578,"tab_id":"w7:t1","terminal_id":"term_65e3465ece130d","terminal_title":"✳ pay-api coordinator session restart","workspace_id":"w7"},"type":"agent_info"}}"#;
         assert_eq!(herdr_status(out).as_deref(), Some("done"));
         assert_eq!(herdr_status("not json"), None);
+    }
+
+    /// An engine whose `herdr` is a stub that logs each call to the returned
+    /// file, with `agent get` and `agent focus` exiting as asked.
+    fn engine_with_logging_herdr(case: &str, get: i32, focus: i32) -> (Engine, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-herdr-open-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls");
+        let stub = dir.join("herdr");
+        std::fs::write(
+            &stub,
+            format!(
+                r#"echo "$1 $2 $3" >> {log}
+case "$1 $2" in
+"agent get") exit {get} ;;
+"agent focus") exit {focus} ;;
+esac
+"#,
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.herdr.command = format!("sh {}", stub.display());
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        (Engine::with(store, cfg, "drovr".into()), log)
+    }
+
+    fn add_herdr_test_agent(engine: &Engine, backend: &str, pane: &str, state: &str) -> Agent {
+        engine
+            .store
+            .add_agent(&Agent {
+                name: "a".into(),
+                backend: backend.into(),
+                cwd: "/tmp".into(),
+                ..Agent::default()
+            })
+            .unwrap();
+        engine.store.set_agent("a", "pane", pane).unwrap();
+        engine.store.set_agent("a", "run_state", state).unwrap();
+        engine.agent("a").unwrap()
+    }
+
+    #[test]
+    fn opening_a_live_herdr_agent_focuses_its_pane() {
+        for state in ["idle", "working"] {
+            let (engine, log) = engine_with_logging_herdr(&format!("live-{state}"), 0, 0);
+            add_herdr_test_agent(&engine, "herdr", "w1:p2", state);
+            assert_eq!(engine.open_in_herdr("a").unwrap(), "w1:p2", "{state}");
+            assert_eq!(
+                std::fs::read_to_string(&log).unwrap(),
+                "agent get w1:p2\nagent focus w1:p2\n",
+                "{state}"
+            );
+        }
+    }
+
+    #[test]
+    fn says_so_when_a_live_herdr_pane_wont_focus() {
+        let (engine, log) = engine_with_logging_herdr("no-focus", 0, 1);
+        add_herdr_test_agent(&engine, "herdr", "w1:p2", "idle");
+        let err = engine.open_in_herdr("a").unwrap_err().to_string();
+        assert!(err.contains("herdr agent focus"), "{err}");
+        assert!(!std::fs::read_to_string(&log).unwrap().contains("split"));
+    }
+
+    #[test]
+    fn only_a_live_herdr_pane_gets_focused() {
+        for (case, backend, pane, get, want_calls) in [
+            ("gone", "herdr", "w1:p2", 1, "agent get w1:p2\n"),
+            ("no-pane", "herdr", "", 0, ""),
+            ("headless", "headless", "w1:p2", 0, ""),
+        ] {
+            let (engine, log) = engine_with_logging_herdr(case, get, 0);
+            let agent = add_herdr_test_agent(&engine, backend, pane, "idle");
+            assert_eq!(engine.focus_live_pane(&agent).unwrap(), None, "{case}");
+            assert_eq!(
+                std::fs::read_to_string(&log).unwrap_or_default(),
+                want_calls,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn opening_a_working_agent_without_a_live_pane_is_refused() {
+        for (case, backend, get) in [("gone-busy", "herdr", 1), ("busy", "headless", 0)] {
+            let (engine, log) = engine_with_logging_herdr(case, get, 0);
+            add_herdr_test_agent(&engine, backend, "w1:p2", "working");
+            let err = engine.open_in_herdr("a").unwrap_err().to_string();
+            assert!(err.contains("mid-run"), "{case}: {err}");
+            let calls = std::fs::read_to_string(&log).unwrap_or_default();
+            assert!(!calls.contains("split"), "{case}: {calls}");
+        }
     }
 
     #[test]

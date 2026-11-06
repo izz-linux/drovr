@@ -90,6 +90,7 @@ prompt = "{herdr} agent prompt {target} {text}"
 read = "{herdr} agent read {target} --source recent-unwrapped --lines {lines}"
 stop = "{herdr} pane close {pane}"
 get = "{herdr} agent get {target}"
+focus = "{herdr} agent focus {target}"
 
 # ---- Sources -------------------------------------------------------------
 # provider = "agent"   : a one-shot Claude agent uses the Jira/Confluence/Slack MCPs you already have
