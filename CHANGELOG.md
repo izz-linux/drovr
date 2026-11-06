@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/izz-linux/drovr/compare/v0.10.2...v0.10.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* track herdr agent costs and runs ([#38](https://github.com/izz-linux/drovr/issues/38)) ([3fe1588](https://github.com/izz-linux/drovr/commit/3fe158851be48ddfc2bfebaafdd263515897ffb1))
+
 ## [0.10.2](https://github.com/izz-linux/drovr/compare/v0.10.1...v0.10.2) (2026-11-06)
 
 
