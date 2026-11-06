@@ -138,7 +138,7 @@ The Agents view shows each agent's output as it runs: text, tool calls with thei
   - **✕** takes the message back and puts its text in the box to edit.
 - **Copy on select:** selecting text in the output copies it. Turn it off with `defaults.copy_on_select = false`.
 - **Stop, Resume, Remove:** Stop ends the current run (it shows while the agent is working). Resume continues the same conversation. **✕** removes the agent and its output in drovr once you click it and then **Remove?**, and dismisses anything of its still in the Inbox; its Claude Code session is kept. If drovr made it a worktree, the worktree is removed too when nothing in it is uncommitted, and kept (with a note saying so) when something is. Its `drovr/<name>` branch always stays, and an agent started later under the same name picks up that branch, or the worktree if it's still there.
-- **Open in herdr:** opens the agent's session interactively in a new herdr pane. Without herdr, **Copy attach cmd** copies a `cd … && claude --resume …` command for any terminal.
+- **Open in herdr:** opens the agent's session interactively in a new herdr pane. If the agent is already running in a herdr pane, it focuses that pane instead. Without herdr, **Copy attach cmd** copies a `cd … && claude --resume …` command for any terminal.
 - **Terminal:** a terminal under the output. See below.
 
 ### Terminal
@@ -656,6 +656,7 @@ The `[herdr]` keys are command templates. Values substituted into `{placeholders
 | `prompt` | `{herdr} agent prompt {target} {text}` |
 | `read` | `{herdr} agent read {target} --source recent-unwrapped --lines {lines}` |
 | `get` | `{herdr} agent get {target}` |
+| `focus` | `{herdr} agent focus {target}` |
 | `stop` | `{herdr} pane close {pane}` |
 
 herdr's `--current` only works inside one of its own panes. When drovr wasn't started from a herdr pane, it runs `split` against herdr's focused pane instead, so herdr has to be running. A `split` template without `--current` runs as written.

@@ -196,7 +196,7 @@
   async function attach() {
     if (!current) return;
     if (app.snap.herdr) {
-      await act(() => api.openInHerdr(current.name), `Opened ${current.name} in a herdr pane`);
+      await act(() => api.openInHerdr(current.name), `Opened ${current.name} in herdr`);
     } else {
       const cmd = await api.attachCommand(current.name);
       await navigator.clipboard.writeText(cmd);
