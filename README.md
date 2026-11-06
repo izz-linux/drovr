@@ -650,6 +650,7 @@ The `[herdr]` keys are command templates. Values substituted into `{placeholders
 | --- | --- |
 | `command` | `herdr`: the herdr binary, which `{herdr}` stands for in the others |
 | `split` | `{herdr} pane split --current --direction right --cwd {cwd} --no-focus` |
+| `list` | `{herdr} pane list`: finds the focused pane (see below) |
 | `start` | `{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}` |
 | `run` | `{herdr} pane run {pane} {cmd}` |
 | `prompt` | `{herdr} agent prompt {target} {text}` |
@@ -657,6 +658,8 @@ The `[herdr]` keys are command templates. Values substituted into `{placeholders
 | `get` | `{herdr} agent get {target}` |
 | `focus` | `{herdr} agent focus {target}` |
 | `stop` | `{herdr} pane close {pane}` |
+
+herdr's `--current` only works inside one of its own panes. When drovr wasn't started from a herdr pane, it runs `split` against herdr's focused pane instead, so herdr has to be running. A `split` template without `--current` runs as written.
 
 If your herdr version takes different arguments, edit these templates instead of the code.
 
@@ -760,7 +763,7 @@ Repo rules, also in [CLAUDE.md](CLAUDE.md):
 - **Jira, Confluence or Slack lookups fail:** try `drovr ask "list my open Jira tickets"`.
   - **If that fails too:** the MCP server isn't available to `claude -p` from your home folder.
   - **If it says a tool isn't allowed:** drovr didn't recognize the tool as read-only. Add its full name, e.g. `mcp__atlassian__getJiraIssue`, to `agent_queries.auto_allow`.
-- **herdr panes don't start:** run the `start` template from `config.example.toml` by hand in a herdr pane, with an agent name and pane ID, and adjust the template to match what your herdr version accepts.
+- **herdr panes don't start:** check that herdr is running with a pane open, because new panes open next to the focused one. If they still fail, run the `start` template from `config.example.toml` by hand in a herdr pane, with an agent name and pane ID, and adjust the template to match what your herdr version accepts.
 - **A report shows blank:** it must be a complete HTML file. Click **Open in browser** to see what the browser makes of it.
 
 ## Security

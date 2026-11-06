@@ -1885,13 +1885,32 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
     }
 
     fn herdr_split(&self, cwd: &str) -> Result<String> {
-        let cmd = self.herdr_fill(&self.cfg.herdr.split, &[("cwd", cwd)]);
+        self.herdr_split_from(cwd, std::env::var("HERDR_PANE_ID").ok().as_deref())
+    }
+
+    /// `--current` reads `HERDR_PANE_ID`, which only herdr's own panes have, and
+    /// the app usually isn't started from one. There it means the focused pane.
+    fn herdr_split_from(&self, cwd: &str, inherited: Option<&str>) -> Result<String> {
+        let mut cmd = self.herdr_fill(&self.cfg.herdr.split, &[("cwd", cwd)]);
+        if cmd.contains("--current") {
+            let pane = match inherited.filter(|pane| !pane.is_empty()) {
+                Some(pane) => pane.to_string(),
+                None => self.herdr_focused_pane()?,
+            };
+            cmd = format!("export HERDR_PANE_ID={}; {cmd}", quote(&pane));
+        }
         let out = shell::sh(&cmd, None, None, Duration::from_secs(30))?
             .into_stdout("herdr pane split")?;
-        let v: Value = serde_json::from_str(&out).unwrap_or(Value::String(out.trim().to_string()));
-        find_key(&v, &["pane_id", "pane", "id"])
-            .or_else(|| v.as_str().filter(|s| !s.is_empty()).map(String::from))
-            .ok_or_else(|| anyhow!("couldn't find a pane id in herdr output: {out}"))
+        split_pane_id(&out).ok_or_else(|| anyhow!("couldn't find a pane id in herdr output: {out}"))
+    }
+
+    fn herdr_focused_pane(&self) -> Result<String> {
+        let cmd = self.herdr_fill(&self.cfg.herdr.list, &[]);
+        let out = shell::sh(&cmd, None, None, Duration::from_secs(10))?
+            .into_stdout("herdr pane list")
+            .map_err(|e| anyhow!("couldn't find a herdr pane to split. Is herdr running? {e}"))?;
+        focused_pane(&out)
+            .ok_or_else(|| anyhow!("herdr has no focused pane to split. Open herdr and try again."))
     }
 
     fn start_herdr(&self, agent: &Agent) -> Result<()> {
@@ -2018,6 +2037,29 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         }
         Ok(())
     }
+}
+
+/// The new pane's id from `herdr pane split` output.
+fn split_pane_id(stdout: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(stdout).unwrap_or(Value::String(stdout.trim().to_string()));
+    // Each key searches the whole output: herdr's top-level "id" names the
+    // request, so it mustn't win over a nested "pane_id".
+    ["pane_id", "pane", "id"]
+        .iter()
+        .find_map(|key| find_key(&v, &[key]))
+        .or_else(|| v.as_str().filter(|s| !s.is_empty()).map(String::from))
+}
+
+/// The focused pane's id from `herdr pane list` output:
+/// `{"result":{"panes":[{"focused":true,"pane_id":"w1:p1", …}]}}`.
+fn focused_pane(stdout: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(stdout).ok()?;
+    v["result"]["panes"]
+        .as_array()?
+        .iter()
+        .find(|pane| pane["focused"] == true)?["pane_id"]
+        .as_str()
+        .map(String::from)
 }
 
 /// The agent's status from `herdr agent get` output:
@@ -2731,6 +2773,106 @@ esac
             assert!(err.contains("mid-run"), "{case}: {err}");
             let calls = std::fs::read_to_string(&log).unwrap_or_default();
             assert!(!calls.contains("split"), "{case}: {calls}");
+        }
+    }
+
+    #[test]
+    fn reads_the_pane_id_from_herdr_pane_split() {
+        // Real `herdr pane split` output from herdr 0.9.1 first: its top-level
+        // "id" names the request, not the pane.
+        for (out, want) in [
+            (
+                r#"{"id":"cli:pane:split","result":{"pane":{"agent_status":"unknown","cwd":"/private/tmp","focused":false,"pane_id":"w1:p4","tab_id":"w1:t1","workspace_id":"w1"},"type":"pane_info"}}"#,
+                Some("w1:p4"),
+            ),
+            (r#"{"pane":"w2:p1"}"#, Some("w2:p1")),
+            (r#"{"id":"w3:p1"}"#, Some("w3:p1")),
+            ("w4:p1\n", Some("w4:p1")),
+            ("", None),
+        ] {
+            assert_eq!(split_pane_id(out).as_deref(), want, "{out}");
+        }
+    }
+
+    /// An engine whose `herdr` is a stub: `pane list` runs `list`, and
+    /// `pane split` behaves like the real one, needing `HERDR_PANE_ID` for
+    /// `--current` and naming the pane it split from in the new pane's id.
+    fn engine_with_herdr_stub(case: &str, list: &str, split: &str) -> Engine {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-herdr-split-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("herdr");
+        std::fs::write(
+            &stub,
+            format!(
+                r#"case "$2" in
+list) {list} ;;
+split)
+  if [ "$3" = --current ]; then
+    [ -n "$HERDR_PANE_ID" ] || {{ echo '--current requires HERDR_PANE_ID' >&2; exit 2; }}
+    from="$HERDR_PANE_ID"
+  else
+    from="$3"
+  fi
+  printf '{{"id":"cli:pane:split","result":{{"pane":{{"pane_id":"beside-%s"}}}}}}' "$from"
+  ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.herdr.command = format!("sh {}", stub.display());
+        if !split.is_empty() {
+            cfg.herdr.split = split.into();
+        }
+        Engine::with(Store::open(&dir.join("t.db")).unwrap(), cfg, "drovr".into())
+    }
+
+    #[test]
+    fn splits_the_focused_pane_when_drovr_isnt_inside_herdr() {
+        // Real `herdr pane list` shape: one workspace's pane is in the background.
+        let two_panes = r#"printf '%s' '{"id":"cli:pane:list","result":{"panes":[{"focused":false,"pane_id":"w2:p1","workspace_id":"w2"},{"focused":true,"pane_id":"w1:p3","workspace_id":"w1"}],"type":"pane_list"}}'"#;
+        let list_fails = "echo 'list must not run' >&2; exit 1";
+        for (case, list, split, inherited, want) in [
+            ("outside", two_panes, "", None, "beside-w1:p3"),
+            ("empty-env", two_panes, "", Some(""), "beside-w1:p3"),
+            ("inside", list_fails, "", Some("w5:p2"), "beside-w5:p2"),
+            (
+                "custom",
+                list_fails,
+                "{herdr} pane split w6:p1 --cwd {cwd}",
+                None,
+                "beside-w6:p1",
+            ),
+        ] {
+            let engine = engine_with_herdr_stub(case, list, split);
+            let pane = engine
+                .herdr_split_from("/tmp", inherited)
+                .unwrap_or_else(|e| panic!("{case}: {e}"));
+            assert_eq!(pane, want, "{case}");
+        }
+    }
+
+    #[test]
+    fn says_so_when_there_is_no_herdr_pane_to_split() {
+        let no_server = r#"echo '{"error":{"code":"server_not_running"}}' >&2; exit 1"#;
+        let unfocused =
+            r#"printf '%s' '{"result":{"panes":[{"focused":false,"pane_id":"w2:p1"}]}}'"#;
+        let no_panes = r#"printf '%s' '{"result":{"panes":[]}}'"#;
+        for (case, list, want) in [
+            ("no-server", no_server, "server_not_running"),
+            ("unfocused", unfocused, "no focused pane"),
+            ("no-panes", no_panes, "no focused pane"),
+        ] {
+            let err = engine_with_herdr_stub(case, list, "")
+                .herdr_split_from("/tmp", None)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("herdr"), "{case}: {err}");
+            assert!(err.contains(want), "{case}: {err}");
+            assert!(!err.contains("requires HERDR_PANE_ID"), "{case}: {err}");
         }
     }
 
