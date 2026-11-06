@@ -1,10 +1,11 @@
 //! Claude Code (`claude`): drovr's permission prompt, cost tracking, herdr
 //! panes, forking and adopting existing sessions.
 
-use super::{line, Costs, Event, Harness, Run, Session};
+use super::{line, Costs, Event, Harness, Live, Run, Session};
 use crate::config::Config;
 use crate::engine::truncate;
 use crate::sessions::SavedSession;
+use crate::shell::quote;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -72,7 +73,21 @@ impl Harness for Claude {
             args.push("--fork-session".into());
         }
         args.extend(claude_common(run));
+        add_status_line(&mut args, run)?;
         Ok(args)
+    }
+
+    fn live_status(&self, status: &Value) -> Option<Live> {
+        let usage = &status["context_window"]["current_usage"];
+        let tokens = |key: &str| usage[key].as_u64().unwrap_or(0);
+        Some(Live {
+            session: status["session_id"].as_str().unwrap_or("").to_string(),
+            total_cost_usd: status["cost"]["total_cost_usd"].as_f64()?,
+            context_tokens: tokens("input_tokens")
+                + tokens("cache_creation_input_tokens")
+                + tokens("cache_read_input_tokens"),
+            model: status["model"]["id"].as_str().unwrap_or("").to_string(),
+        })
     }
 
     fn parse(&self, v: &Value) -> Event {
@@ -150,6 +165,35 @@ fn claude_common(run: &Run) -> Vec<String> {
     }
     args.extend(cfg.claude.extra_args.iter().cloned());
     args
+}
+
+/// An interactive session reports its cost only to its status line, so that
+/// runs `drovr status-line`. herdr types the start command into a shell, and
+/// macOS limits how long a typed line can be, so the settings go in a file.
+fn add_status_line(args: &mut Vec<String>, run: &Run) -> Result<()> {
+    let inline = args.iter().position(|a| a == "--settings").and_then(|i| {
+        let settings = serde_json::from_str::<Value>(&args[i + 1]).ok()?;
+        settings.is_object().then(|| {
+            args.drain(i..=i + 1);
+            settings
+        })
+    });
+    let mut settings = inline.unwrap_or_else(|| json!({}));
+    settings["statusLine"] = json!({
+        "type": "command",
+        "command": format!(
+            "DROVR_HOME={} {} status-line {}",
+            quote(&run.home.display().to_string()),
+            quote(&run.cli.display().to_string()),
+            quote(&run.agent.name),
+        ),
+    });
+    std::fs::write(&run.settings_file, settings.to_string())?;
+    args.extend([
+        "--settings".to_string(),
+        run.settings_file.display().to_string(),
+    ]);
+    Ok(())
 }
 
 /// Claude Code's `--output-format stream-json`.
@@ -282,6 +326,7 @@ mod tests {
                 home: "/data/drovr".into(),
                 mcp_config: "/m.json".into(),
                 system_prompt: "/s.md".into(),
+                settings_file: "/settings.json".into(),
                 session: Session::New,
             })
         };
@@ -290,6 +335,60 @@ mod tests {
         let args = run(&cfg);
         let at = args.iter().position(|a| a == "--settings").unwrap();
         let s: Value = serde_json::from_str(&args[at + 1]).unwrap();
+        assert_eq!(s["autoMemoryDirectory"], "/m/memory");
+        assert_eq!(s["permissions"]["deny"], json!(["Edit(//m/memory/**)"]));
+    }
+
+    #[test]
+    fn reads_a_live_status() {
+        // Real status line input from Claude Code 2.1.319: before the first
+        // prompt, and after one.
+        for (status, want) in [
+            (
+                r#"{"session_id":"s1","cost":{"total_cost_usd":0},"model":{"id":"claude-haiku-5-5"},"context_window":{"total_input_tokens":0,"current_usage":null}}"#,
+                Some(Live {
+                    session: "s1".into(),
+                    total_cost_usd: 0.0,
+                    context_tokens: 0,
+                    model: "claude-haiku-5-5".into(),
+                }),
+            ),
+            (
+                r#"{"session_id":"s1","cost":{"total_cost_usd":0.25},"model":{"id":"claude-haiku-5-5"},"context_window":{"total_input_tokens":44738,"current_usage":{"input_tokens":2,"output_tokens":77,"cache_creation_input_tokens":22249,"cache_read_input_tokens":22487}}}"#,
+                Some(Live {
+                    session: "s1".into(),
+                    total_cost_usd: 0.25,
+                    context_tokens: 44738,
+                    model: "claude-haiku-5-5".into(),
+                }),
+            ),
+            (r#"{"session_id":"s1"}"#, None),
+        ] {
+            let v: Value = serde_json::from_str(status).unwrap();
+            assert_eq!(Claude.live_status(&v), want, "{status}");
+        }
+    }
+
+    #[test]
+    fn a_herdr_start_keeps_its_settings_in_a_file() {
+        let a = Agent {
+            role: "worker".into(),
+            ..agent("s1")
+        };
+        let mut cfg = Config::default();
+        cfg.memory.dir = "/m/memory".into();
+        let args = crate::harness::testing::with_config(&a, Session::New, cfg, |r| {
+            Claude.herdr_args(r).unwrap()
+        });
+        assert_eq!(args.iter().filter(|x| *x == "--settings").count(), 1);
+        let at = args.iter().position(|x| x == "--settings").unwrap();
+        let s: Value =
+            serde_json::from_str(&std::fs::read_to_string(&args[at + 1]).unwrap()).unwrap();
+        assert_eq!(s["statusLine"]["type"], "command");
+        assert_eq!(
+            s["statusLine"]["command"],
+            "DROVR_HOME=/data/drovr /opt/drovr status-line api"
+        );
         assert_eq!(s["autoMemoryDirectory"], "/m/memory");
         assert_eq!(s["permissions"]["deny"], json!(["Edit(//m/memory/**)"]));
     }

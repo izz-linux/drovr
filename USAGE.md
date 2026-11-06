@@ -306,4 +306,4 @@ Agent and group names are lowercase letters, digits, `-` and `_`, starting with 
 | `drovr config` | Print where drovr reads its config and keeps its data, as JSON |
 | `drovr help` | Show this list |
 
-Agents and run wrappers call two internal commands: `drovr mcp --agent <name>` is an agent's MCP server, and `drovr hook finished <agent>` runs when a headless run exits.
+Agents and run wrappers call three internal commands: `drovr mcp --agent <name>` is an agent's MCP server, `drovr hook finished <agent>` runs when a headless run exits, and `drovr status-line <agent>` is a herdr agent's Claude Code status line, which saves its cost.

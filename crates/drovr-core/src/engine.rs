@@ -33,6 +33,33 @@ const HERDR_INLINE_MAX: usize = 600;
 const HERDR_READY_WAIT: Duration = Duration::from_secs(15);
 const HERDR_READY_POLL: Duration = Duration::from_millis(500);
 
+/// herdr can still report an agent as idle just after it's been prompted, so
+/// a run this new, in seconds, isn't over yet.
+const HERDR_RUN_SETTLE: f64 = 5.0;
+
+/// What drovr has counted of a herdr agent's cost.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct HerdrRun {
+    session: String,
+    total: f64,
+    run_cost: f64,
+    started: f64,
+}
+
+/// Save what an agent's status line was given, for `refresh_herdr` to read.
+pub fn save_status_line(name: &str, status: &str) -> Result<()> {
+    if !valid_name(name) {
+        bail!("no agent named {name}");
+    }
+    let dir = home().join("agents").join(name);
+    std::fs::create_dir_all(&dir)?;
+    let partial = dir.join("status-line.json.tmp");
+    std::fs::write(&partial, status)?;
+    std::fs::rename(partial, dir.join("status-line.json"))?;
+    Ok(())
+}
+
 pub struct Engine {
     pub store: Store,
     pub cfg: Config,
@@ -712,13 +739,20 @@ impl Engine {
     pub fn prompt(&self, name: &str, text: &str) -> Result<String> {
         let agent = self.agent(name)?;
         if agent.backend == "herdr" {
+            // After a checkpoint, the run starts a fresh session.
+            if let Some(fresh) = self.take_fresh(&agent)? {
+                self.herdr_close_pane(&agent);
+                self.store.set_agent(name, "pane", "")?;
+                self.herdr_open_session(&fresh, Session::New, Some(text))?;
+                return Ok("started".into());
+            }
             self.herdr_prompt(&agent, text)?;
             self.record(
                 name,
                 "herdr_prompt",
                 json!({ "prompt": truncate(text, 4000) }),
             );
-            self.store.set_agent(name, "run_state", "working")?;
+            self.herdr_begin_run(name, "resume", text)?;
             return Ok("sent".into());
         }
         match self.store.claim_run(name)? {
@@ -774,6 +808,7 @@ impl Engine {
             home: home(),
             mcp_config: self.mcp_config(&agent.name)?,
             system_prompt: self.system_prompt_file(agent)?,
+            settings_file: self.agent_dir(&agent.name).join("herdr-settings.json"),
             session,
         })
     }
@@ -992,10 +1027,10 @@ impl Engine {
     pub fn stop(&self, name: &str) -> Result<()> {
         let agent = self.agent(name)?;
         if agent.backend == "herdr" {
-            if !agent.pane.is_empty() {
-                let cmd = self.herdr_fill(&self.cfg.herdr.stop, &[("pane", &agent.pane)]);
-                let _ = shell::sh(&cmd, None, None, Duration::from_secs(15));
+            if agent.run_state == "working" {
+                let _ = self.herdr_end_run(&agent, "stopped");
             }
+            self.herdr_close_pane(&agent);
         } else if run_alive(agent.pid, &agent.name) {
             // After a reboot the pid may belong to an unrelated process group.
             unsafe { libc::killpg(agent.pid as i32, libc::SIGTERM) };
@@ -1937,6 +1972,16 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             None if agent.runs > 0 => Session::Resume,
             None => Session::New,
         };
+        let first = (agent.runs == 0 && !agent.task.is_empty()).then_some(agent.task.as_str());
+        self.herdr_open_session(agent, session, first)
+    }
+
+    fn herdr_open_session(
+        &self,
+        agent: &Agent,
+        session: Session,
+        first: Option<&str>,
+    ) -> Result<()> {
         let args = harness::of(agent).herdr_args(&self.run_for(agent, session)?)?;
         let pane = self.herdr_agent_pane(agent)?;
         self.store.set_agent(&agent.name, "pane", &pane)?;
@@ -1950,12 +1995,111 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             ],
         );
         self.herdr_start_when_ready(&agent.name, &start, &pane, HERDR_READY_WAIT)?;
-        if agent.runs == 0 && !agent.task.is_empty() {
-            self.store.set_agent(&agent.name, "runs", "1")?;
-            self.herdr_prompt(&self.agent(&agent.name)?, &agent.task)?;
-            self.store.set_agent(&agent.name, "run_state", "working")?;
+        if let Some(text) = first {
+            let name = format!("{session:?}").to_lowercase();
+            self.herdr_begin_run(&agent.name, &name, text)?;
+            self.herdr_prompt(&self.agent(&agent.name)?, text)?;
         }
         Ok(())
+    }
+
+    fn herdr_close_pane(&self, agent: &Agent) {
+        if !agent.pane.is_empty() {
+            let cmd = self.herdr_fill(&self.cfg.herdr.stop, &[("pane", &agent.pane)]);
+            let _ = shell::sh(&cmd, None, None, Duration::from_secs(15));
+        }
+    }
+
+    fn herdr_load_run(&self, name: &str) -> HerdrRun {
+        std::fs::read_to_string(self.agent_dir(name).join("herdr-run.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn herdr_save_run(&self, name: &str, run: &HerdrRun) -> Result<()> {
+        std::fs::write(
+            self.agent_dir(name).join("herdr-run.json"),
+            serde_json::to_string(run)?,
+        )?;
+        Ok(())
+    }
+
+    /// Add what the session has cost since this was last called to the
+    /// agent's cost and the current run's.
+    fn herdr_track_cost(&self, name: &str) -> Result<(HerdrRun, Option<harness::Live>)> {
+        let agent = self.agent(name)?;
+        let mut run = self.herdr_load_run(name);
+        let live = std::fs::read_to_string(self.agent_dir(name).join("status-line.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| harness::of(&agent).live_status(&v));
+        if let Some(live) = &live {
+            // A lower total means a new count (a new or forked session).
+            let added = if live.session == run.session && live.total_cost_usd >= run.total {
+                live.total_cost_usd - run.total
+            } else {
+                live.total_cost_usd
+            };
+            run.session = live.session.clone();
+            run.total = live.total_cost_usd;
+            run.run_cost += added;
+            self.store.set_cost(name, agent.cost_usd + added)?;
+            self.herdr_save_run(name, &run)?;
+        }
+        Ok((run, live))
+    }
+
+    /// A run starts, unless one already is going.
+    fn herdr_begin_run(&self, name: &str, session: &str, prompt: &str) -> Result<()> {
+        let (mut state, _) = self.herdr_track_cost(name)?;
+        let Some(run) = self.store.claim_run(name)? else {
+            return Ok(());
+        };
+        state.run_cost = 0.0;
+        state.started = crate::store::now();
+        self.herdr_save_run(name, &state)?;
+        let agent = self.agent(name)?;
+        let harness = harness::of(&agent);
+        self.record(
+            name,
+            "run_start",
+            json!({
+                "run": run,
+                "harness": harness.name(),
+                "model": harness::model_of(harness, &agent, &self.cfg),
+                "session": session,
+                "prompt": truncate(prompt, 4000),
+            }),
+        );
+        Ok(())
+    }
+
+    /// A run ended in `state`. Returns what `after_stage_run` reads: an
+    /// interactive session gives no per-run tokens, turns or exit code.
+    fn herdr_end_run(&self, agent: &Agent, state: &str) -> Result<Value> {
+        let (mut run, live) = self.herdr_track_cost(&agent.name)?;
+        let model = live.as_ref().map(|l| l.model.clone());
+        self.record(
+            &agent.name,
+            "run_end",
+            json!({
+                "run": self.agent(&agent.name)?.runs,
+                "state": state,
+                "exit": null,
+                "cost_usd": run.run_cost,
+                "duration_ms": ((crate::store::now() - run.started) * 1000.0) as i64,
+                "turns": null,
+                "tokens": null,
+                "models": model.filter(|m| !m.is_empty()).map(|m| vec![m]),
+            }),
+        );
+        run.run_cost = 0.0;
+        self.herdr_save_run(&agent.name, &run)?;
+        Ok(json!({
+            "total_cost_usd": live.as_ref().map(|l| l.total_cost_usd),
+            "context_tokens": live.as_ref().map(|l| l.context_tokens),
+        }))
     }
 
     /// Run `start`, which herdr refuses until the new pane's shell is at its
@@ -2058,9 +2202,13 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             };
             if !out.ok() {
                 // The pane, or the agent in it, is gone.
+                if agent.run_state == "working" {
+                    self.herdr_end_run(&agent, "stopped")?;
+                }
                 self.store.set_agent(&agent.name, "run_state", "stopped")?;
                 continue;
             }
+            let (run, _) = self.herdr_track_cost(&agent.name)?;
             let state = match herdr_status(&out.stdout).as_deref() {
                 Some("working") | Some("blocked") => "working",
                 Some("idle") | Some("done") => {
@@ -2072,12 +2220,26 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
                 }
                 _ => continue,
             };
-            if state != agent.run_state {
-                self.store.set_agent(&agent.name, "run_state", state)?;
-                if state == "idle" || state == "done" {
-                    self.maybe_wake(&agent.name)?;
+            if state == agent.run_state {
+                continue;
+            }
+            // You typed into the pane.
+            if state == "working" {
+                self.herdr_begin_run(&agent.name, "resume", "")?;
+                continue;
+            }
+            let ended = agent.run_state == "working";
+            if ended && crate::store::now() - run.started < HERDR_RUN_SETTLE {
+                continue;
+            }
+            self.store.set_agent(&agent.name, "run_state", state)?;
+            if ended {
+                let end = self.herdr_end_run(&agent, state)?;
+                if self.after_stage_run(&self.agent(&agent.name)?, &end, "")? {
+                    continue;
                 }
             }
+            self.maybe_wake(&agent.name)?;
         }
         Ok(())
     }
@@ -3027,6 +3189,236 @@ esac
             );
             assert_eq!(engine.agent("a").unwrap().pane, pane, "{case}");
         }
+    }
+
+    /// An engine, in a group with a ticket, with one herdr agent in pane
+    /// `w1:p1`. `herdr` is a stub that logs its calls to the returned file,
+    /// and `agent get` reports the status in its `state` file, or fails
+    /// when there's none.
+    fn engine_with_herdr_agent(
+        case: &str,
+        change: impl FnOnce(&mut Agent),
+    ) -> (Engine, String, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-herdr-run-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls");
+        let stub = dir.join("herdr");
+        std::fs::write(
+            &stub,
+            format!(
+                r#"echo "$*" >> {log}
+case "$1 $2" in
+"agent get")
+  [ -f {state} ] || exit 1
+  printf '{{"result":{{"agent":{{"agent_status":"%s"}}}}}}' "$(cat {state})"
+  ;;
+"tab create") printf '%s' '{{"result":{{"root_pane":{{"pane_id":"w1:p2"}},"tab":{{}}}}}}' ;;
+esac
+"#,
+                log = log.display(),
+                state = dir.join("state").display(),
+            ),
+        )
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.herdr.command = format!("sh {}", stub.display());
+        cfg.workflow.enabled = true;
+        cfg.defaults.auto_wake = false;
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let engine = Engine::with(store, cfg, "drovr".into());
+        engine
+            .store
+            .add_group("g", "", "SRE-1", "/tmp", "", true)
+            .unwrap();
+        let name = format!("run-{case}");
+        let mut agent = Agent {
+            name: name.clone(),
+            group_name: "g".into(),
+            backend: "herdr".into(),
+            cwd: "/tmp".into(),
+            ticket: "SRE-1".into(),
+            session_id: "s1".into(),
+            ..Agent::default()
+        };
+        change(&mut agent);
+        engine.store.add_agent(&agent).unwrap();
+        engine.store.set_agent(&name, "pane", "w1:p1").unwrap();
+        engine.store.set_agent(&name, "run_state", "idle").unwrap();
+        (engine, name, dir)
+    }
+
+    fn status_line(name: &str, session: &str, total: f64) {
+        save_status_line(
+            name,
+            &json!({
+                "session_id": session,
+                "cost": { "total_cost_usd": total },
+                "model": { "id": "claude-haiku-5-5" },
+                "context_window": { "current_usage": { "input_tokens": 1000 } },
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    /// Past the moment when herdr may still say a prompted agent is idle.
+    fn settle_run(engine: &Engine, name: &str) {
+        let mut run = engine.herdr_load_run(name);
+        run.started -= HERDR_RUN_SETTLE + 1.0;
+        engine.herdr_save_run(name, &run).unwrap();
+    }
+
+    fn events(engine: &Engine, kind: &str) -> Vec<Value> {
+        ledger::timeline(&engine.cfg, "SRE-1")
+            .into_iter()
+            .filter(|e| e["kind"] == kind)
+            .collect()
+    }
+
+    #[test]
+    fn a_status_line_is_saved_only_for_a_real_agent_name() {
+        assert!(save_status_line("../evil", "{}").is_err());
+        save_status_line("saved-status", "{\"a\":1}").unwrap();
+        let file = home().join("agents/saved-status/status-line.json");
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "{\"a\":1}");
+    }
+
+    #[test]
+    fn a_herdr_agents_cost_counts_each_session_once() {
+        let (engine, name, _) = engine_with_herdr_agent("count", |_| {});
+        for (session, total, cost) in [
+            ("s1", 1.0, 1.0),
+            ("s1", 1.5, 1.5),
+            // The same figure again, as on every refresh.
+            ("s1", 1.5, 1.5),
+            // A resumed session keeps counting.
+            ("s1", 1.75, 1.75),
+            // A new session, then a lower total for it.
+            ("s2", 0.25, 2.0),
+            ("s2", 0.125, 2.125),
+        ] {
+            status_line(&name, session, total);
+            engine.herdr_track_cost(&name).unwrap();
+            let got = engine.agent(&name).unwrap().cost_usd;
+            assert!((got - cost).abs() < 1e-9, "{session} {total}: {got}");
+        }
+    }
+
+    #[test]
+    fn a_herdr_run_is_recorded_with_its_cost_and_model() {
+        let (engine, name, dir) = engine_with_herdr_agent("record", |_| {});
+        status_line(&name, "s1", 1.0);
+        engine.prompt(&name, "do it").unwrap();
+        // A prompt while it's busy isn't another run.
+        engine.prompt(&name, "and this").unwrap();
+        status_line(&name, "s1", 1.5);
+        std::fs::write(dir.join("state"), "idle").unwrap();
+        settle_run(&engine, &name);
+        engine.refresh_herdr().unwrap();
+
+        let agent = engine.agent(&name).unwrap();
+        assert_eq!(agent.run_state, "idle");
+        assert_eq!(agent.runs, 1);
+        assert!((agent.cost_usd - 1.5).abs() < 1e-9, "{}", agent.cost_usd);
+        let starts = events(&engine, "run_start");
+        assert_eq!(starts.len(), 1, "{starts:?}");
+        assert_eq!(starts[0]["prompt"], "do it");
+        let ends = events(&engine, "run_end");
+        assert_eq!(ends.len(), 1, "{ends:?}");
+        assert_eq!(ends[0]["run"], 1);
+        assert_eq!(ends[0]["state"], "idle");
+        assert_eq!(ends[0]["cost_usd"], 0.5);
+        assert_eq!(ends[0]["models"], json!(["claude-haiku-5-5"]));
+    }
+
+    #[test]
+    fn a_just_prompted_herdr_agent_isnt_taken_for_finished() {
+        let (engine, name, dir) = engine_with_herdr_agent("settle", |_| {});
+        engine.prompt(&name, "do it").unwrap();
+        std::fs::write(dir.join("state"), "idle").unwrap();
+        engine.refresh_herdr().unwrap();
+        assert_eq!(engine.agent(&name).unwrap().run_state, "working");
+        assert!(events(&engine, "run_end").is_empty());
+    }
+
+    #[test]
+    fn typing_into_a_herdr_pane_counts_as_a_run() {
+        let (engine, name, dir) = engine_with_herdr_agent("typed", |_| {});
+        std::fs::write(dir.join("state"), "working").unwrap();
+        engine.refresh_herdr().unwrap();
+        let agent = engine.agent(&name).unwrap();
+        assert_eq!((agent.run_state.as_str(), agent.runs), ("working", 1));
+        assert_eq!(events(&engine, "run_start").len(), 1);
+    }
+
+    #[test]
+    fn a_herdr_run_ends_when_it_stops_or_its_pane_goes() {
+        for (case, stop) in [("gone", false), ("stop", true)] {
+            let (engine, name, dir) = engine_with_herdr_agent(case, |_| {});
+            status_line(&name, "s1", 1.0);
+            engine.prompt(&name, "do it").unwrap();
+            status_line(&name, "s1", 1.25);
+            if stop {
+                std::fs::write(dir.join("state"), "working").unwrap();
+                engine.stop(&name).unwrap();
+            } else {
+                engine.refresh_herdr().unwrap();
+            }
+            assert_eq!(engine.agent(&name).unwrap().run_state, "stopped", "{case}");
+            let ends = events(&engine, "run_end");
+            assert_eq!(ends.len(), 1, "{case}: {ends:?}");
+            assert_eq!(ends[0]["state"], "stopped", "{case}");
+            assert_eq!(ends[0]["cost_usd"], 0.25, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_herdr_build_agent_is_asked_for_a_checkpoint() {
+        for (case, stage, total, limit_tokens, asked) in [
+            ("cost", "build", 20.0, 0, true),
+            ("tokens", "build", 0.5, 1000, true),
+            ("under", "build", 0.5, 2000, false),
+            ("research", "research", 20.0, 1000, false),
+        ] {
+            let (mut engine, name, dir) =
+                engine_with_herdr_agent(&format!("cp-{case}"), |a| a.stage = stage.into());
+            engine.cfg.stages.build_checkpoint_tokens = limit_tokens;
+            status_line(&name, "s1", 0.0);
+            engine.prompt(&name, "do it").unwrap();
+            status_line(&name, "s1", total);
+            std::fs::write(dir.join("state"), "idle").unwrap();
+            settle_run(&engine, &name);
+            engine.refresh_herdr().unwrap();
+            assert_eq!(
+                events(&engine, "checkpoint_due").len() == 1,
+                asked,
+                "{case}"
+            );
+            let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+            assert_eq!(
+                calls.matches("agent prompt").count() == 2,
+                asked,
+                "{case}: {calls}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_herdr_session_replaces_the_pane_and_session() {
+        let (engine, name, dir) = engine_with_herdr_agent("fresh", |a| a.stage = "build".into());
+        std::fs::write(engine.agent_dir(&name).join("fresh"), "").unwrap();
+        engine.prompt(&name, "start from the checkpoint").unwrap();
+        let agent = engine.agent(&name).unwrap();
+        assert_ne!(agent.session_id, "s1");
+        assert_eq!(agent.pane, "w1:p2");
+        assert_eq!(agent.run_state, "working");
+        let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+        assert!(calls.contains("pane close w1:p1"), "{calls}");
+        assert!(calls.contains("--session-id"), "{calls}");
+        assert!(calls.contains("agent prompt w1:p2"), "{calls}");
     }
 
     #[test]
