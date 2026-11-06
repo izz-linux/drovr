@@ -627,9 +627,20 @@ pub fn user_home() -> PathBuf {
 
 /// Where drovr keeps its database and agent run logs.
 pub fn home() -> PathBuf {
-    let dir = env_path("DROVR_HOME").unwrap_or_else(|| user_home().join(".local/share/drovr"));
+    let dir = data_dir();
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+#[cfg(not(test))]
+fn data_dir() -> PathBuf {
+    env_path("DROVR_HOME").unwrap_or_else(|| user_home().join(".local/share/drovr"))
+}
+
+/// Unit tests stay out of the real data folder, even with `DROVR_HOME` set.
+#[cfg(test)]
+fn data_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("drovr-test-home-{}", std::process::id()))
 }
 
 pub fn config_path() -> PathBuf {
@@ -749,6 +760,12 @@ pub fn personalize(text: &str, you: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::Config;
+
+    #[test]
+    fn tests_never_use_the_real_data_folder() {
+        let home = super::home();
+        assert!(home.starts_with(std::env::temp_dir()), "{home:?}");
+    }
 
     #[test]
     fn recognises_the_human() {
