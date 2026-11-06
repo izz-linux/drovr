@@ -67,6 +67,6 @@
   .theme { display: flex; align-items: center; gap: 10px; margin: 6px 0 14px; }
   .theme label { margin: 0; }
   .theme select { width: 200px; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
   .eff { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px; max-height: 620px; overflow: auto; margin: 0; }
 </style>
