@@ -498,6 +498,7 @@ Match System, Light, Dark, Darcula, Solarized Dark and Nord: the same set and co
   - **Permissions:** prompts go to the Inbox through `--permission-prompt-tool mcp__drovr__approve`.
 - **herdr agents** (`backend = "herdr"`):
   - **Runs:** an interactive Claude Code session in its own herdr tab, started with `herdr agent start <name> --kind claude --pane <id> -- <claude args>` and driven with `herdr agent prompt` and `herdr agent read`.
+  - **Costs and run records:** Claude Code only reports an interactive session's cost to its status line, so a herdr agent's status line is `drovr status-line <agent>`, which saves the figures and shows the agent's name. It replaces your own `statusLine` in that session only. drovr adds up the cost and records each run when herdr says the agent went from working to idle, so the app, retros and the build stage's checkpoint all see it. These sessions don't report tokens per run or turns, so retros show those as 0.
   - **State:** comes from `herdr agent get` (`.result.agent.agent_status`).
   - **Permissions:** you approve them in the pane, as usual.
   - **Long prompts:** macOS rejects typed terminal lines over about 1 KB, so long prompts (a whole Jira ticket, say) and long commands are written to a file, and the pane gets a short line pointing at it.

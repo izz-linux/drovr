@@ -84,6 +84,13 @@ pub trait Harness: Sync {
         false
     }
 
+    /// What the CLI's `status` output says about a live interactive session,
+    /// or None when it doesn't report one.
+    fn live_status(&self, status: &Value) -> Option<Live> {
+        let _ = status;
+        None
+    }
+
     /// Arguments for starting the agent in a herdr pane.
     fn herdr_args(&self, run: &Run) -> Result<Vec<String>> {
         let _ = run;
@@ -168,6 +175,8 @@ pub struct Run<'a> {
     pub mcp_config: PathBuf,
     /// The system prompt drovr wrote for the agent.
     pub system_prompt: PathBuf,
+    /// Where a herdr start's Claude Code settings go.
+    pub settings_file: PathBuf,
     pub session: Session,
 }
 
@@ -193,6 +202,15 @@ pub enum Event {
 /// and every resumed run reports it again).
 #[derive(Default)]
 pub struct Costs(HashMap<String, f64>);
+
+/// An interactive session's running figures.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Live {
+    pub session: String,
+    pub total_cost_usd: f64,
+    pub context_tokens: u64,
+    pub model: String,
+}
 
 impl Costs {
     /// What a run added to its session's running `total`.
@@ -225,6 +243,15 @@ pub(crate) mod testing {
     }
 
     pub fn with<T>(a: &Agent, session: Session, f: impl FnOnce(&Run) -> T) -> T {
+        with_config(a, session, Config::default(), f)
+    }
+
+    pub fn with_config<T>(
+        a: &Agent,
+        session: Session,
+        cfg: Config,
+        f: impl FnOnce(&Run) -> T,
+    ) -> T {
         // Each call its own file: tests run in parallel, and a shared one
         // could be read while another test is rewriting it.
         static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -233,7 +260,6 @@ pub(crate) mod testing {
         std::fs::create_dir_all(&dir).unwrap();
         let system = dir.join(format!("system-{n}.md"));
         std::fs::write(&system, "You are \"api\".\nLine two.").unwrap();
-        let cfg = Config::default();
         let run = Run {
             cfg: &cfg,
             agent: a,
@@ -241,6 +267,7 @@ pub(crate) mod testing {
             home: "/data/drovr".into(),
             mcp_config: "/data/drovr/agents/api/mcp.json".into(),
             system_prompt: system,
+            settings_file: dir.join(format!("settings-{n}.json")),
             session,
         };
         f(&run)

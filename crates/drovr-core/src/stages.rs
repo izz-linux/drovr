@@ -136,7 +136,7 @@ impl Engine {
         self.record(
             &me.name,
             "handoff_approved",
-            json!({ "stage": stage, "next": p["next"], "model": model, "by": "you" }),
+            json!({ "stage": stage, "next": p["next"], "model": model, "offered": p["next_model"], "by": "you" }),
         );
         let you = capitalize(&self.cfg.your_name());
         match p["next"].as_str() {
@@ -269,7 +269,10 @@ impl Engine {
             return Ok(false);
         }
         let s = &self.cfg.stages;
-        let tokens = crate::harness::of(agent).context_tokens(log).unwrap_or(0);
+        let tokens = end["context_tokens"]
+            .as_u64()
+            .or_else(|| crate::harness::of(agent).context_tokens(log))
+            .unwrap_or(0);
         let cost = end["total_cost_usd"].as_f64().unwrap_or(0.0);
         let over_tokens = s.build_checkpoint_tokens > 0 && tokens >= s.build_checkpoint_tokens;
         let over_cost = s.build_checkpoint_usd > 0.0 && cost >= s.build_checkpoint_usd;
@@ -554,6 +557,7 @@ mod tests {
             .find(|e| e["kind"] == "handoff_approved")
             .unwrap();
         assert_eq!(approved["model"], "claude-opus-5-5");
+        assert_eq!(approved["offered"], "claude-haiku-5-5");
         cleanup(&dir, &engine);
     }
 

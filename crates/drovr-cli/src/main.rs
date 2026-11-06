@@ -67,6 +67,15 @@ fn run() -> Result<()> {
         None => String::new(),
     };
     let cmd = args.first().map(String::as_str).unwrap_or("help");
+    // Runs every few seconds for each herdr agent, so it stays off the database.
+    if cmd == "status-line" {
+        let name = arg(&args, 1, "agent")?;
+        let mut status = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut status)?;
+        drovr_core::engine::save_status_line(name, &status)?;
+        println!("{name}");
+        return Ok(());
+    }
     let engine = Engine::open()?;
     match cmd {
         "mcp" if args.iter().any(|a| a == "--lookup") => {
