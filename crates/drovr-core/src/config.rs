@@ -339,6 +339,8 @@ pub struct Herdr {
     /// With `--current`, drovr splits the pane it was started in, or else the
     /// focused pane, found with `list`.
     pub split: String,
+    /// Opens the pane an agent starts in: `{cwd}` and the agent's `{name}`.
+    pub agent_pane: String,
     /// Lists panes as JSON.
     pub list: String,
     /// Starts Claude Code in a pane. `{args}` is inserted already shell-quoted.
@@ -570,6 +572,7 @@ impl Default for Herdr {
         Herdr {
             command: "herdr".into(),
             split: "{herdr} pane split --current --direction right --cwd {cwd} --no-focus".into(),
+            agent_pane: "{herdr} tab create --cwd {cwd} --label {name} --no-focus".into(),
             list: "{herdr} pane list".into(),
             start:
                 "{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}"
