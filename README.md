@@ -497,7 +497,7 @@ Match System, Light, Dark, Darcula, Solarized Dark and Nord: the same set and co
   - **Waking:** when a run exits, a wrapper calls `drovr hook finished`, which wakes the agent again if a message or answer is waiting for it.
   - **Permissions:** prompts go to the Inbox through `--permission-prompt-tool mcp__drovr__approve`.
 - **herdr agents** (`backend = "herdr"`):
-  - **Runs:** an interactive Claude Code session in a herdr pane, started with `herdr agent start <name> --kind claude --pane <id> -- <claude args>` and driven with `herdr agent prompt` and `herdr agent read`.
+  - **Runs:** an interactive Claude Code session in its own herdr tab, started with `herdr agent start <name> --kind claude --pane <id> -- <claude args>` and driven with `herdr agent prompt` and `herdr agent read`.
   - **State:** comes from `herdr agent get` (`.result.agent.agent_status`).
   - **Permissions:** you approve them in the pane, as usual.
   - **Long prompts:** macOS rejects typed terminal lines over about 1 KB, so long prompts (a whole Jira ticket, say) and long commands are written to a file, and the pane gets a short line pointing at it.
@@ -650,6 +650,7 @@ The `[herdr]` keys are command templates. Values substituted into `{placeholders
 | --- | --- |
 | `command` | `herdr`: the herdr binary, which `{herdr}` stands for in the others |
 | `split` | `{herdr} pane split --current --direction right --cwd {cwd} --no-focus` |
+| `agent_pane` | `{herdr} tab create --cwd {cwd} --label {name} --no-focus`: opens the pane an agent starts in |
 | `list` | `{herdr} pane list`: finds the focused pane (see below) |
 | `start` | `{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}` |
 | `run` | `{herdr} pane run {pane} {cmd}` |
@@ -659,7 +660,9 @@ The `[herdr]` keys are command templates. Values substituted into `{placeholders
 | `focus` | `{herdr} agent focus {target}` |
 | `stop` | `{herdr} pane close {pane}` |
 
-herdr's `--current` only works inside one of its own panes. When drovr wasn't started from a herdr pane, it runs `split` against herdr's focused pane instead, so herdr has to be running. A `split` template without `--current` runs as written.
+Each agent starts in its own herdr tab, named after it, so it gets the full width and your focus stays where it is. To put agents side by side instead, set `agent_pane` to a `pane split` template, though each split halves the width that's left. `split` opens the panes you ask for, with **Run in herdr pane** and **Open in herdr**, next to your focused pane.
+
+herdr's `--current` only works inside one of its own panes. When drovr wasn't started from a herdr pane, it runs the template against herdr's focused pane instead, so herdr has to be running. A template without `--current` runs as written.
 
 If your herdr version takes different arguments, edit these templates instead of the code.
 
@@ -763,7 +766,7 @@ Repo rules, also in [CLAUDE.md](CLAUDE.md):
 - **Jira, Confluence or Slack lookups fail:** try `drovr ask "list my open Jira tickets"`.
   - **If that fails too:** the MCP server isn't available to `claude -p` from your home folder.
   - **If it says a tool isn't allowed:** drovr didn't recognize the tool as read-only. Add its full name, e.g. `mcp__atlassian__getJiraIssue`, to `agent_queries.auto_allow`.
-- **herdr panes don't start:** check that herdr is running with a pane open, because new panes open next to the focused one. If they still fail, run the `start` template from `config.example.toml` by hand in a herdr pane, with an agent name and pane ID, and adjust the template to match what your herdr version accepts.
+- **herdr panes don't start:** check that herdr is running. A new pane's shell gets 15 seconds to reach its prompt, so if drovr says the pane wasn't ready, look for a slow shell startup. If they still fail, run the `start` template from `config.example.toml` by hand in a herdr pane, with an agent name and pane ID, and adjust the template to match what your herdr version accepts.
 - **A report shows blank:** it must be a complete HTML file. Click **Open in browser** to see what the browser makes of it.
 
 ## Security

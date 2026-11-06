@@ -29,6 +29,10 @@ const WAKE_LIMIT: usize = 15;
 /// Longest prompt typed straight into a herdr pane; longer ones go via a file.
 const HERDR_INLINE_MAX: usize = 600;
 
+/// How long a new herdr pane's shell gets to reach its prompt.
+const HERDR_READY_WAIT: Duration = Duration::from_secs(15);
+const HERDR_READY_POLL: Duration = Duration::from_millis(500);
+
 pub struct Engine {
     pub store: Store,
     pub cfg: Config,
@@ -1891,7 +1895,20 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
     /// `--current` reads `HERDR_PANE_ID`, which only herdr's own panes have, and
     /// the app usually isn't started from one. There it means the focused pane.
     fn herdr_split_from(&self, cwd: &str, inherited: Option<&str>) -> Result<String> {
-        let mut cmd = self.herdr_fill(&self.cfg.herdr.split, &[("cwd", cwd)]);
+        let cmd = self.herdr_fill(&self.cfg.herdr.split, &[("cwd", cwd)]);
+        self.herdr_new_pane(cmd, inherited)
+    }
+
+    /// The pane an agent starts in.
+    fn herdr_agent_pane(&self, agent: &Agent) -> Result<String> {
+        let cmd = self.herdr_fill(
+            &self.cfg.herdr.agent_pane,
+            &[("cwd", &agent.cwd), ("name", &agent.name)],
+        );
+        self.herdr_new_pane(cmd, std::env::var("HERDR_PANE_ID").ok().as_deref())
+    }
+
+    fn herdr_new_pane(&self, mut cmd: String, inherited: Option<&str>) -> Result<String> {
         if cmd.contains("--current") {
             let pane = match inherited.filter(|pane| !pane.is_empty()) {
                 Some(pane) => pane.to_string(),
@@ -1900,7 +1917,7 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             cmd = format!("export HERDR_PANE_ID={}; {cmd}", quote(&pane));
         }
         let out = shell::sh(&cmd, None, None, Duration::from_secs(30))?
-            .into_stdout("herdr pane split")?;
+            .into_stdout("opening a herdr pane")?;
         split_pane_id(&out).ok_or_else(|| anyhow!("couldn't find a pane id in herdr output: {out}"))
     }
 
@@ -1921,7 +1938,7 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             None => Session::New,
         };
         let args = harness::of(agent).herdr_args(&self.run_for(agent, session)?)?;
-        let pane = self.herdr_split(&agent.cwd)?;
+        let pane = self.herdr_agent_pane(agent)?;
         self.store.set_agent(&agent.name, "pane", &pane)?;
         let args: Vec<String> = args.iter().map(|a| quote(a)).collect();
         let start = self.herdr_fill(
@@ -1932,13 +1949,40 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
                 ("args", &args.join(" ")),
             ],
         );
-        shell::sh(&start, None, None, Duration::from_secs(90))?.into_stdout("herdr agent start")?;
+        self.herdr_start_when_ready(&agent.name, &start, &pane, HERDR_READY_WAIT)?;
         if agent.runs == 0 && !agent.task.is_empty() {
             self.store.set_agent(&agent.name, "runs", "1")?;
             self.herdr_prompt(&self.agent(&agent.name)?, &agent.task)?;
             self.store.set_agent(&agent.name, "run_state", "working")?;
         }
         Ok(())
+    }
+
+    /// Run `start`, which herdr refuses until the new pane's shell is at its
+    /// prompt. A pane that never gets there is empty, so it's closed.
+    fn herdr_start_when_ready(
+        &self,
+        name: &str,
+        start: &str,
+        pane: &str,
+        wait: Duration,
+    ) -> Result<()> {
+        let began = std::time::Instant::now();
+        loop {
+            let out = shell::sh(start, None, None, Duration::from_secs(90))?;
+            if out.ok() || !out.stderr.contains("agent_pane_busy") {
+                out.into_stdout("herdr agent start")?;
+                return Ok(());
+            }
+            if began.elapsed() >= wait {
+                let stop = self.herdr_fill(&self.cfg.herdr.stop, &[("pane", pane)]);
+                let _ = shell::sh(&stop, None, None, Duration::from_secs(10));
+                self.store.set_agent(name, "pane", "")?;
+                let reason = out.into_stdout("herdr agent start").unwrap_err();
+                bail!("herdr's new pane wasn't ready, so drovr closed it: {reason}");
+            }
+            std::thread::sleep(HERDR_READY_POLL);
+        }
     }
 
     /// herdr types prompts into the terminal, and macOS rejects any input
@@ -2785,6 +2829,11 @@ esac
                 r#"{"id":"cli:pane:split","result":{"pane":{"agent_status":"unknown","cwd":"/private/tmp","focused":false,"pane_id":"w1:p4","tab_id":"w1:t1","workspace_id":"w1"},"type":"pane_info"}}"#,
                 Some("w1:p4"),
             ),
+            // Real `herdr tab create` output.
+            (
+                r#"{"id":"cli:tab:create","result":{"root_pane":{"agent_status":"unknown","cwd":"/private/tmp","focused":false,"pane_id":"w1:pP","tab_id":"w1:tD","workspace_id":"w1"},"tab":{"focused":false,"label":"zz-shape","number":13,"pane_count":1,"tab_id":"w1:tD","workspace_id":"w1"},"type":"tab_created"}}"#,
+                Some("w1:pP"),
+            ),
             (r#"{"pane":"w2:p1"}"#, Some("w2:p1")),
             (r#"{"id":"w3:p1"}"#, Some("w3:p1")),
             ("w4:p1\n", Some("w4:p1")),
@@ -2873,6 +2922,110 @@ esac
             assert!(err.contains("herdr"), "{case}: {err}");
             assert!(err.contains(want), "{case}: {err}");
             assert!(!err.contains("requires HERDR_PANE_ID"), "{case}: {err}");
+        }
+    }
+
+    /// An engine whose `herdr` logs each call and answers like the real one,
+    /// with `agent start` failing with `code` for its first `fails` tries.
+    fn engine_with_slow_shell(case: &str, code: &str, fails: u32) -> (Engine, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-herdr-ready-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls");
+        let tries = dir.join("tries");
+        let stub = dir.join("herdr");
+        std::fs::write(
+            &stub,
+            format!(
+                r#"echo "$*" >> {log}
+case "$1 $2" in
+"tab create") printf '%s' '{{"result":{{"root_pane":{{"pane_id":"w1:p7"}},"tab":{{"tab_id":"w1:t7"}}}}}}' ;;
+"pane split") printf '%s' '{{"result":{{"pane":{{"pane_id":"w1:p8"}}}}}}' ;;
+"agent start")
+  echo x >> {tries}
+  if [ "$(wc -l < {tries})" -le {fails} ]; then
+    echo '{{"error":{{"code":"{code}"}}}}' >&2
+    exit 1
+  fi
+  ;;
+esac
+"#,
+                log = log.display(),
+                tries = tries.display()
+            ),
+        )
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.herdr.command = format!("sh {}", stub.display());
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let engine = Engine::with(store, cfg, "drovr".into());
+        engine
+            .store
+            .add_agent(&Agent {
+                name: "a".into(),
+                backend: "herdr".into(),
+                cwd: "/tmp".into(),
+                ..Agent::default()
+            })
+            .unwrap();
+        engine.store.set_agent("a", "pane", "w1:p7").unwrap();
+        (engine, log)
+    }
+
+    #[test]
+    fn an_agent_starts_in_its_own_tab_and_commands_stay_beside_you() {
+        let (engine, log) = engine_with_slow_shell("tab", "", 0);
+        let agent = engine.agent("a").unwrap();
+        assert_eq!(engine.herdr_agent_pane(&agent).unwrap(), "w1:p7");
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "tab create --cwd /tmp --label a --no-focus\n"
+        );
+        assert!(engine.cfg.herdr.split.contains("pane split"));
+    }
+
+    #[test]
+    fn starting_in_a_new_pane_waits_for_its_shell() {
+        let busy = "agent_pane_busy";
+        for (case, code, fails, wait_ms, started, starts, closed, pane) in [
+            ("ready", busy, 0, 5000, true, 1, false, "w1:p7"),
+            ("slow", busy, 2, 5000, true, 3, false, "w1:p7"),
+            ("never", busy, 99, 300, false, 2, true, ""),
+            (
+                "other",
+                "agent_not_ready",
+                99,
+                5000,
+                false,
+                1,
+                false,
+                "w1:p7",
+            ),
+        ] {
+            let (engine, log) = engine_with_slow_shell(case, code, fails);
+            let start = engine.herdr_fill(
+                &engine.cfg.herdr.start,
+                &[("name", "a"), ("pane", "w1:p7"), ("args", "")],
+            );
+            let got =
+                engine.herdr_start_when_ready("a", &start, "w1:p7", Duration::from_millis(wait_ms));
+            assert_eq!(got.is_ok(), started, "{case}: {got:?}");
+            if let Err(e) = got {
+                assert!(e.to_string().contains(code), "{case}: {e}");
+            }
+            let calls = std::fs::read_to_string(&log).unwrap();
+            assert_eq!(
+                calls.matches("agent start").count(),
+                starts,
+                "{case}: {calls}"
+            );
+            assert_eq!(
+                calls.contains("pane close w1:p7"),
+                closed,
+                "{case}: {calls}"
+            );
+            assert_eq!(engine.agent("a").unwrap().pane, pane, "{case}");
         }
     }
 

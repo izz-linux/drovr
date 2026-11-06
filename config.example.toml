@@ -84,6 +84,7 @@ timeout_seconds = 600
 [herdr]
 command = "herdr"
 split = "{herdr} pane split --current --direction right --cwd {cwd} --no-focus"
+agent_pane = "{herdr} tab create --cwd {cwd} --label {name} --no-focus"
 list = "{herdr} pane list"
 start = "{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}"
 run = "{herdr} pane run {pane} {cmd}"
