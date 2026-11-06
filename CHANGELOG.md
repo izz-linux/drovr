@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.2](https://github.com/izz-linux/drovr/compare/v0.10.1...v0.10.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* focus an agent's live herdr pane instead of opening a second session ([#34](https://github.com/izz-linux/drovr/issues/34)) ([56011e9](https://github.com/izz-linux/drovr/commit/56011e98fe744d631057918b84d086446a207682))
+* open herdr panes when drovr isn't started from one ([#33](https://github.com/izz-linux/drovr/issues/33)) ([75c720d](https://github.com/izz-linux/drovr/commit/75c720dffe6c9497d35114d69c9266ee90183246))
+* start each herdr agent in its own tab and wait for its shell ([#37](https://github.com/izz-linux/drovr/issues/37)) ([78ab7e9](https://github.com/izz-linux/drovr/commit/78ab7e9bd18f6100f1c334de37fbde6461ebb18a))
+
 ## [0.10.1](https://github.com/izz-linux/drovr/compare/v0.10.0...v0.10.1) (2026-11-05)
 
 
