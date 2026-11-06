@@ -336,7 +336,11 @@ pub struct Commands {
 #[serde(default)]
 pub struct Herdr {
     pub command: String,
+    /// With `--current`, drovr splits the pane it was started in, or else the
+    /// focused pane, found with `list`.
     pub split: String,
+    /// Lists panes as JSON.
+    pub list: String,
     /// Starts Claude Code in a pane. `{args}` is inserted already shell-quoted.
     pub start: String,
     pub run: String,
@@ -344,6 +348,8 @@ pub struct Herdr {
     pub read: String,
     pub stop: String,
     pub get: String,
+    /// Shows a running agent's pane. `{target}` is the pane.
+    pub focus: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -564,6 +570,7 @@ impl Default for Herdr {
         Herdr {
             command: "herdr".into(),
             split: "{herdr} pane split --current --direction right --cwd {cwd} --no-focus".into(),
+            list: "{herdr} pane list".into(),
             start:
                 "{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}"
                     .into(),
@@ -572,6 +579,7 @@ impl Default for Herdr {
             read: "{herdr} agent read {target} --source recent-unwrapped --lines {lines}".into(),
             stop: "{herdr} pane close {pane}".into(),
             get: "{herdr} agent get {target}".into(),
+            focus: "{herdr} agent focus {target}".into(),
         }
     }
 }

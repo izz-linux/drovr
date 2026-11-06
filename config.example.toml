@@ -84,12 +84,14 @@ timeout_seconds = 600
 [herdr]
 command = "herdr"
 split = "{herdr} pane split --current --direction right --cwd {cwd} --no-focus"
+list = "{herdr} pane list"
 start = "{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}"
 run = "{herdr} pane run {pane} {cmd}"
 prompt = "{herdr} agent prompt {target} {text}"
 read = "{herdr} agent read {target} --source recent-unwrapped --lines {lines}"
 stop = "{herdr} pane close {pane}"
 get = "{herdr} agent get {target}"
+focus = "{herdr} agent focus {target}"
 
 # ---- Sources -------------------------------------------------------------
 # provider = "agent"   : a one-shot Claude agent uses the Jira/Confluence/Slack MCPs you already have

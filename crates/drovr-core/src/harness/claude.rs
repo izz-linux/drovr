@@ -291,7 +291,7 @@ mod tests {
         let at = args.iter().position(|a| a == "--settings").unwrap();
         let s: Value = serde_json::from_str(&args[at + 1]).unwrap();
         assert_eq!(s["autoMemoryDirectory"], "/m/memory");
-        assert_eq!(s["permissions"]["deny"][0], "Write(//m/memory/**)");
+        assert_eq!(s["permissions"]["deny"], json!(["Edit(//m/memory/**)"]));
     }
 
     #[test]

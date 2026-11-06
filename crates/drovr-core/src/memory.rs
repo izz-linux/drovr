@@ -27,9 +27,10 @@ pub fn settings(cfg: &Config, agent: &Agent) -> Option<String> {
     let dir = dir(cfg)?;
     let mut s = json!({ "autoMemoryDirectory": dir.display().to_string() });
     if !writes(agent) {
-        // `//` starts an absolute path in a permission rule.
+        // `//` starts an absolute path in a permission rule. Claude Code applies
+        // Edit rules to Write too, and warns about a Write rule on a path.
         let rule = format!("/{}/**", dir.display());
-        s["permissions"] = json!({ "deny": [format!("Write({rule})"), format!("Edit({rule})")] });
+        s["permissions"] = json!({ "deny": [format!("Edit({rule})")] });
     }
     Some(s.to_string())
 }
@@ -102,7 +103,7 @@ mod tests {
             parse(settings(&cfg, &agent("worker"))),
             json!({
                 "autoMemoryDirectory": "/m/memory",
-                "permissions": { "deny": ["Write(//m/memory/**)", "Edit(//m/memory/**)"] }
+                "permissions": { "deny": ["Edit(//m/memory/**)"] }
             })
         );
         let worker = prompt(&cfg, &agent("worker"));
