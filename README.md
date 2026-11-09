@@ -246,6 +246,17 @@ Reports are everything you need to look at and review, saved as HTML in `~/.clau
 
 Markdown files in the folder are ignored.
 
+### Sharing a report as a claude.ai artifact
+
+Claude Code publishes pages to claude.ai with its artifact tools (`Artifact`, `ArtifactComments` and `ArtifactData`), which only interactive sessions have. Headless agents run `claude -p`, which doesn't have them, so a headless agent can't publish an artifact and may tell you the tool or skill is missing. drovr doesn't block these tools: the same thing happens with `claude -p` outside drovr.
+
+To publish a report, or any local HTML file, as a claude.ai artifact:
+
+1. **Use an interactive session:**
+   - **New agent or group:** set **Run in** to **herdr pane**, so it runs interactively in herdr.
+   - **Headless agent:** if it's working, stop it, then click **Open in herdr**. That reopens the same conversation interactively, in a new herdr pane. Without herdr, run `drovr attach <agent>` and paste the command it prints into any terminal.
+2. **Ask for it:** give the agent the file's path, such as `~/.claude/plans/<group>/<report>.html`, and ask it to publish the file as a claude.ai artifact.
+
 ### The record (timeline)
 
 drovr keeps a record of everything that happens on a ticket, so you can look back at how the work went and, later, run a retro on it.
@@ -496,6 +507,7 @@ Match System, Light, Dark, Darcula, Solarized Dark and Nord: the same set and co
   - **Runs:** each prompt is a detached `claude -p --output-format stream-json --resume <session>` run. Runs keep going if you close the app.
   - **Waking:** when a run exits, a wrapper calls `drovr hook finished`, which wakes the agent again if a message or answer is waiting for it.
   - **Permissions:** prompts go to the Inbox through `--permission-prompt-tool mcp__drovr__approve`.
+  - **No claude.ai artifacts:** `claude -p` doesn't have Claude Code's artifact tools. See [Sharing a report as a claude.ai artifact](#sharing-a-report-as-a-claudeai-artifact).
 - **herdr agents** (`backend = "herdr"`):
   - **Runs:** an interactive Claude Code session in its own herdr tab, started with `herdr agent start <name> --kind claude --pane <id> -- <claude args>` and driven with `herdr agent prompt` and `herdr agent read`.
   - **Costs and run records:** Claude Code only reports an interactive session's cost to its status line, so a herdr agent's status line is `drovr status-line <agent>`, which saves the figures and shows the agent's name. It replaces your own `statusLine` in that session only. drovr adds up the cost and records each run when herdr says the agent went from working to idle, so the app, retros and the build stage's checkpoint all see it. These sessions don't report tokens per run or turns, so retros show those as 0.
@@ -767,6 +779,7 @@ Repo rules, also in [CLAUDE.md](CLAUDE.md):
 - **Jira, Confluence or Slack lookups fail:** try `drovr ask "list my open Jira tickets"`.
   - **If that fails too:** the MCP server isn't available to `claude -p` from your home folder.
   - **If it says a tool isn't allowed:** drovr didn't recognize the tool as read-only. Add its full name, e.g. `mcp__atlassian__getJiraIssue`, to `agent_queries.auto_allow`.
+- **An agent can't publish a claude.ai artifact:** it's running headless, and `claude -p` doesn't have the artifact tools. See [Sharing a report as a claude.ai artifact](#sharing-a-report-as-a-claudeai-artifact).
 - **herdr panes don't start:** check that herdr is running. A new pane's shell gets 15 seconds to reach its prompt, so if drovr says the pane wasn't ready, look for a slow shell startup. If they still fail, run the `start` template from `config.example.toml` by hand in a herdr pane, with an agent name and pane ID, and adjust the template to match what your herdr version accepts.
 - **A report shows blank:** it must be a complete HTML file. Click **Open in browser** to see what the browser makes of it.
 
