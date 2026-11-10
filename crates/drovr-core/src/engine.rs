@@ -450,10 +450,11 @@ impl Engine {
         let a = self.agent(name)?;
         // The repo holding the plans folder (often ~/.claude) is every
         // agent's: show only the part this one worked in.
-        let shared = [
+        let mut shared = vec![
             self.cfg.reports.path(),
             crate::config::user_home().join(".claude"),
         ];
+        shared.extend(self.cfg.reports.tickets_path());
         Ok(crate::review::repos(&a.cwd, &self.transcripts(&a), &shared))
     }
 
@@ -524,15 +525,17 @@ impl Engine {
         } else {
             self.store.agents(Some(&agent.group_name))?
         };
-        let plans_dir = match &group {
-            Some(g) => self
-                .cfg
-                .reports
-                .path()
-                .join(g.plans_folder())
-                .display()
-                .to_string(),
-            None => String::new(),
+        // A solo agent without a ticket publishes to the plans folder itself
+        // and isn't told about it.
+        let ticketed = self
+            .cfg
+            .reports
+            .ticket_path(&self.ticket_of(agent))
+            .is_some();
+        let plans_dir = if group.is_some() || ticketed {
+            self.reports_dir(agent)?.display().to_string()
+        } else {
+            String::new()
         };
         let mut text = prompts::system_prompt(
             agent,
@@ -1460,6 +1463,10 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
                 folders.insert(folder_of(&a.group_name));
             }
         }
+        // With a tickets folder, every folder is the ticket's one record.
+        if self.cfg.reports.tickets_path().is_some() && !folders.is_empty() {
+            folders = [String::new()].into();
+        }
         let mut event = json!({ "source": "watcher" });
         if let (Some(e), Value::Object(fields)) = (event.as_object_mut(), data) {
             e.extend(fields);
@@ -1512,6 +1519,35 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             .group(group)?
             .map(|g| g.plans_folder().to_string())
             .unwrap_or_else(|| group.to_string()))
+    }
+
+    /// The ticket an agent works: its own, else its group's. Empty for none.
+    pub fn ticket_of(&self, agent: &Agent) -> String {
+        let group = match agent.group_name.as_str() {
+            "" => String::new(),
+            g => self
+                .store
+                .group(g)
+                .ok()
+                .flatten()
+                .map(|g| g.ticket)
+                .unwrap_or_default(),
+        };
+        ledger::tickets_in(&agent.ticket)
+            .into_iter()
+            .chain(ledger::tickets_in(&group))
+            .next()
+            .unwrap_or_default()
+    }
+
+    /// The folder an agent's reports go in: its ticket's in the tickets
+    /// folder when that's set, else its group's plans folder.
+    pub fn reports_dir(&self, agent: &Agent) -> Result<PathBuf> {
+        crate::reports::dir_for(
+            &self.cfg,
+            &self.plans_folder(&agent.group_name)?,
+            &self.ticket_of(agent),
+        )
     }
 
     /// An orchestrator asks for a worker. Returns the worker, or the inbox item

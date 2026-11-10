@@ -142,6 +142,7 @@ dir = ""                      # an auto memory folder every Claude Code agent re
 
 [reports]
 dir = "~/.claude/plans"       # HTML reports; a group's go in <dir>/<group>/
+tickets_dir = ""              # e.g. "~/notes/tickets": a ticket's reports, record and handoffs go in <tickets_dir>/<ticket>/
 
 [terminal]                    # the terminal panel (⌃`) under an agent's output
 shell = ""                    # empty: $SHELL, else /bin/zsh; runs as a login shell

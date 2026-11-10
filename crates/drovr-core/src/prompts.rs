@@ -127,7 +127,7 @@ Start from the previous stage's handoff if your task names one. When your stage 
     }
     if !plans_dir.is_empty() {
         s += &format!(
-            "\nThe group's plans folder is `{plans_dir}`. Read the plans, designs and notes there for context; `publish_report` saves your reports to it.\n"
+            "\nYour plans folder is `{plans_dir}`. Read the plans, designs and notes there for context; `publish_report` saves your reports to it.\n"
         );
     }
     let others: Vec<_> = peers.iter().filter(|p| p.name != agent.name).collect();

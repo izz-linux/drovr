@@ -39,9 +39,13 @@ pub fn tickets_in(text: &str) -> Vec<String> {
     out
 }
 
-/// A ticket's folder: in `folder` (a group's plans folder) when given, else
-/// in the plans folder itself.
+/// A ticket's folder: its own in the tickets folder when that's set, else in
+/// `folder` (a group's plans folder) when given, else in the plans folder
+/// itself.
 pub fn dir(cfg: &Config, folder: &str, ticket: &str) -> PathBuf {
+    if let Some(d) = cfg.reports.ticket_path(ticket) {
+        return d;
+    }
     let root = cfg.reports.path();
     let base = if folder.is_empty() {
         root
@@ -170,6 +174,13 @@ pub fn list(cfg: &Config) -> Vec<Record> {
         }
         for t in subdirs(&entry.path()) {
             add(&t.path(), &name, &t.file_name().to_string_lossy());
+        }
+    }
+    // The tickets folder's are named for their ticket, lowercased.
+    if let Some(tickets) = cfg.reports.tickets_path() {
+        for entry in subdirs(&tickets) {
+            let name = entry.file_name().to_string_lossy().to_uppercase();
+            add(&entry.path(), "", &name);
         }
     }
     out.sort_by(|a, b| b.updated.total_cmp(&a.updated));
@@ -387,6 +398,31 @@ mod tests {
         assert_eq!(got("SRE-1"), (20.0, 10.0));
         assert_eq!(got("SRE-2"), (20.0, 50.0));
         assert_eq!(got("SRE-3"), (0.0, 10.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tickets_folder_holds_each_tickets_record() {
+        let dir = std::env::temp_dir().join(format!("drovr-ledger-t-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        cfg.reports.tickets_dir = dir.join("tickets").display().to_string();
+
+        // Whichever group works it, a ticket has one record.
+        append(
+            &cfg,
+            "sre-3229",
+            "SRE-3229",
+            &json!({ "kind": "run_start" }),
+        )
+        .unwrap();
+        append(&cfg, "other", "SRE-3229", &json!({ "kind": "message" })).unwrap();
+        assert!(is_record(&dir.join("tickets/sre-3229")));
+        let records = list(&cfg);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].ticket, "SRE-3229");
+        assert_eq!(timeline(&cfg, "SRE-3229").len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
