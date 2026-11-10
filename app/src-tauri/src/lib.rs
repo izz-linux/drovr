@@ -401,6 +401,12 @@ async fn open_in_herdr(name: String) -> Res<String> {
     blocking(move |e| e.open_in_herdr(&name)).await
 }
 
+/// Continue an agent's session in your own terminal (terminal.external).
+#[tauri::command]
+async fn open_in_terminal(name: String) -> Res<String> {
+    blocking(move |e| e.open_in_terminal(&name)).await
+}
+
 // -- inbox --------------------------------------------------------------------
 
 #[tauri::command]
@@ -903,6 +909,7 @@ pub fn run() {
             remove_group,
             attach_command,
             open_in_herdr,
+            open_in_terminal,
             inbox_answer,
             inbox_reject,
             inbox_mark_ran,

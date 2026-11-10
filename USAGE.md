@@ -153,7 +153,7 @@ drovr msgs pay-api
 
 - **Reports** (⌘3): HTML reports in `~/.claude/plans/`, grouped by folder, newest first, with new ones marked; if any are unread, the newest opens straight away. Folders collapse and expand with a click, and stay that way; a collapsed folder opens on its own when Reports takes you to an unread report in it. A revised report replaces the earlier copy, whichever agent published it, and older copies of the same title are deleted; an agent keeps earlier versions only when you ask it to, and those fold under the newest. Open one, then send feedback to an agent from the bottom bar.
 - **Code review** (⌘7): pick an agent to see each repo and worktree it worked in, with what changed on its branch (committed or not) and the diffs. It works when the agent started in a folder above your repos. Send feedback about a file. If your plans folder is in a git repo (say `~/.claude`), only the part this agent worked in is shown there.
-- **Agents:** each agent's full output, tool calls and cost. **Open in herdr** opens its session interactively, or focuses its pane if it's already running in herdr. Use **Copy attach cmd** for any terminal.
+- **Agents:** each agent's full output, tool calls and cost. **Open in terminal** continues its conversation in your own terminal (`terminal.external`); **Open in herdr** opens it in a herdr pane, or focuses its pane if it's already running there; **Copy cmd** copies the command for any terminal.
 - **Timeline:** with `workflow.enabled`, everything that happened on a ticket (see [Read a ticket's timeline](#read-a-tickets-timeline)).
 
 ```sh
@@ -303,6 +303,7 @@ Agent and group names are lowercase letters, digits, `-` and `_`, starting with 
 | `drovr run <id> [local\|herdr]` | Run a proposed command; with `local`, the output goes back to the agent |
 | `drovr msgs [group]` | Show the message bus |
 | `drovr ask <question…>` | Ask a one-shot agent that uses your MCP servers |
+| `drovr term <agent>` | Continue an agent's session in your terminal (`terminal.external`) |
 | `drovr config` | Print where drovr reads its config and keeps its data, as JSON |
 | `drovr help` | Show this list |
 

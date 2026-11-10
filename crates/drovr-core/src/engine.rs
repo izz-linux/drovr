@@ -1884,6 +1884,41 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         ))
     }
 
+    /// Continue an agent's session in your own terminal, with
+    /// `terminal.external`. Returns the script it runs.
+    pub fn open_in_terminal(&self, name: &str) -> Result<String> {
+        let agent = self.agent(name)?;
+        if let Some(pane) = self.focus_live_pane(&agent)? {
+            return Ok(format!(
+                "{name} is still running in herdr pane {pane}; showed it there"
+            ));
+        }
+        if agent.run_state == "working" {
+            bail!("{name} is mid-run; stop it first so two sessions don't write to the same conversation");
+        }
+        let cmd = self.attach_command(name)?;
+        let dir = home().join("agents").join(name);
+        std::fs::create_dir_all(&dir)?;
+        let script = dir.join("open.command");
+        // The shell stays open after Claude Code exits, so the window does too.
+        std::fs::write(
+            &script,
+            format!("#!/bin/zsh -l\n{cmd}\nexec \"${{SHELL:-/bin/zsh}}\" -l\n"),
+        )?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
+        }
+        let template = match self.cfg.terminal.external.trim() {
+            "" => "open -a Terminal {script}",
+            t => t,
+        };
+        let path = script.display().to_string();
+        let line = shell::fill(template, &[("script", &path)], &["script"]);
+        shell::sh(&line, None, None, Duration::from_secs(30))?.into_stdout("terminal.external")?;
+        Ok(path)
+    }
+
     /// Open a headless agent's session interactively in a new herdr pane.
     pub fn open_in_herdr(&self, name: &str) -> Result<String> {
         let agent = self.agent(name)?;

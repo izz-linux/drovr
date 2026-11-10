@@ -31,6 +31,7 @@ usage:
   drovr attach <agent>                       print the command to open its session interactively
   drovr msgs [group]                         the message bus
   drovr ask <question...>                    ask an agent with your MCPs (Slack, Jira, …)
+  drovr term <agent>                         continue an agent's session in your terminal (terminal.external)
   drovr config                               where drovr reads its config and keeps its data
   drovr mcp --agent <name>                   (internal) MCP server for an agent
   drovr hook finished <agent>                (internal) called when a headless run exits";
@@ -262,6 +263,7 @@ fn run() -> Result<()> {
                 Sources::with_progress(&engine.cfg, &progress).ask(&rest(&args, 1), None)?
             );
         }
+        "term" => println!("{}", engine.open_in_terminal(arg(&args, 1, "agent")?)?),
         "config" => println!(
             "{}",
             json!({ "config": drovr_core::config::config_path(), "home": drovr_core::config::home() })
