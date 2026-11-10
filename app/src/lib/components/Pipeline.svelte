@@ -85,11 +85,11 @@
         </button>
       {/each}
     </td>
-    <td>{#if w}<button class="chip warn" onclick={() => (app.view = "inbox")}>⚑ {w}</button>{/if}</td>
+    <td>{#if w}<button title="Items waiting for you on this ticket, in the Inbox" class="chip warn" onclick={() => (app.view = "inbox")}>⚑ {w}</button>{/if}</td>
     <td class="num">{agents.length ? `$${cost(agents).toFixed(2)}` : ""}</td>
     <td class="actions">
-      {#if agents.length}<button class="ghost" onclick={() => (app.timeline = key)}>Timeline</button>
-      {:else if t}<button onclick={() => dispatch(key)}>Dispatch…</button>{/if}
+      {#if agents.length}<button title="Everything that happened on this ticket" class="ghost" onclick={() => (app.timeline = key)}>Timeline</button>
+      {:else if t}<button title="Hand this ticket to agents" onclick={() => dispatch(key)}>Dispatch…</button>{/if}
     </td>
   </tr>
 {/snippet}
@@ -99,7 +99,7 @@
     <h2 class="grow">Your sprint <span class="muted small">{open.length} open · {done.length} done</span></h2>
     <span class="muted small" class:err={ws?.jira.error} title={ws?.jira.error || ""}>Jira {ws?.jira.error ? "⚠" : ""} read {since(ws?.jira.at ?? 0)}</span>
     <span class="muted small" class:err={ws?.github.error} title={ws?.github.error || ""}>GitHub {ws?.github.error ? "⚠" : ""} read {since(ws?.github.at ?? 0)}</span>
-    <button onclick={refreshNow} disabled={busy}>{busy ? "Reading…" : "Refresh now"}</button>
+    <button title="Read Jira and GitHub now instead of waiting for the watcher" onclick={refreshNow} disabled={busy}>{busy ? "Reading…" : "Refresh now"}</button>
   </header>
   {#if ws?.jira.error}<div class="banner err">Jira: {ws.jira.error}</div>{/if}
   {#if ws?.github.error}<div class="banner err">GitHub: {ws.github.error}</div>{/if}
@@ -107,7 +107,7 @@
   <div class="scroll grow">
     <Retros />
     {#if !ws || (!ws.jira.at && !tickets.length)}
-      <div class="empty">The watcher hasn't read Jira yet. It reads the tickets matching <code>watch.jql</code> through your Jira command (<code>jira.provider = "command"</code>, e.g. twg), and their PRs from <code>watch.github_repos</code> with gh. <button onclick={refreshNow} disabled={busy}>Read now</button></div>
+      <div class="empty">The watcher hasn't read Jira yet. It reads the tickets matching <code>watch.jql</code> through your Jira command (<code>jira.provider = "command"</code>, e.g. twg), and their PRs from <code>watch.github_repos</code> with gh. <button title="Read Jira and GitHub now instead of waiting for the watcher" onclick={refreshNow} disabled={busy}>Read now</button></div>
     {:else}
       <table>
         <thead><tr><th>Ticket</th><th>Jira</th><th>Agents</th><th>Pull requests</th><th>Waiting</th><th>Cost</th><th></th></tr></thead>

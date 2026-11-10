@@ -118,8 +118,8 @@
 
 <Modal title="New agent" onclose={close} dirty={!!task.trim() || !!ticket.trim() || !!ticketNotes.trim()}>
   <div class="source">
-    <button class:on={source === "new"} onclick={() => (source = "new")}>New session</button>
-    <button class:on={source === "existing"} onclick={() => (source = "existing")}>Existing Claude session</button>
+    <button title="Start a fresh conversation" class:on={source === "new"} onclick={() => (source = "new")}>New session</button>
+    <button title="Continue one of your Claude Code sessions, with drovr's tools added" class:on={source === "existing"} onclick={() => (source = "existing")}>Existing Claude session</button>
   </div>
 
   {#if resuming}
@@ -179,7 +179,7 @@
 
   {#snippet footer()}
     <button onclick={close}>Cancel</button>
-    <button class="primary" disabled={busy || !ready} onclick={go}>{busy ? "Starting…" : "Start"}</button>
+    <button title="Start the agent" class="primary" disabled={busy || !ready} onclick={go}>{busy ? "Starting…" : "Start"}</button>
   {/snippet}
 </Modal>
 

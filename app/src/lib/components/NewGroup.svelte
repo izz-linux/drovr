@@ -88,7 +88,7 @@
 
   {#snippet footer()}
     <button onclick={close}>Cancel</button>
-    <button class="primary" disabled={busy || !name || (lead && (!goal.trim() || !backend))} onclick={go}>
+    <button title="Create the group, and start its orchestrator if you asked for one" class="primary" disabled={busy || !name || (lead && (!goal.trim() || !backend))} onclick={go}>
       {busy ? "Creating…" : lead ? "Create and start lead" : "Create, then add agents"}
     </button>
   {/snippet}

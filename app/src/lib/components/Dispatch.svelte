@@ -47,13 +47,13 @@
 <Modal title={`Hand off ${ticket.key}`} onclose={() => (app.dispatching = null)} dirty={!!notes.trim()}>
   <p class="muted">{ticket.summary}</p>
   <div class="modes">
-    <button class:on={mode === "solo"} onclick={() => (mode = "solo")}>
+    <button title="One agent works the ticket on its own" class:on={mode === "solo"} onclick={() => (mode = "solo")}>
       <strong>Single agent</strong><span class="muted">One agent works the ticket and reports back.</span>
     </button>
-    <button class:on={mode === "group"} onclick={() => (mode = "group")}>
+    <button title="A new group, led by an orchestrator that spawns workers" class:on={mode === "group"} onclick={() => (mode = "group")}>
       <strong>New group + orchestrator</strong><span class="muted">A lead plans the work, spawns workers that coordinate, and brings you decisions.</span>
     </button>
-    <button class:on={mode === "existing"} onclick={() => (mode = "existing")} disabled={!app.snap.groups.length}>
+    <button title="Hand the ticket to a group that's already running" class:on={mode === "existing"} onclick={() => (mode = "existing")} disabled={!app.snap.groups.length}>
       <strong>Existing group</strong><span class="muted">{app.snap.groups.length ? "Give it to a group you already have; its lead brings in the others." : "You have no groups yet."}</span>
     </button>
   </div>
@@ -84,7 +84,7 @@
   <textarea id="d-notes" rows="4" bind:value={notes} placeholder="Constraints, approach, where to look, what not to touch…"></textarea>
   {#snippet footer()}
     <button onclick={() => (app.dispatching = null)}>Cancel</button>
-    <button class="primary" disabled={busy || (mode === "existing" ? !recipient : !name || !backend)} onclick={go}>{busy ? "Starting…" : "Start"}</button>
+    <button title="Start working the ticket this way" class="primary" disabled={busy || (mode === "existing" ? !recipient : !name || !backend)} onclick={go}>{busy ? "Starting…" : "Start"}</button>
   {/snippet}
 </Modal>
 

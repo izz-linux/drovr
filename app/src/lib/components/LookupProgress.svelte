@@ -26,7 +26,7 @@
     <span class="spinner" aria-hidden="true"></span>
     <strong class="grow">{label}</strong>
     <span class="muted">{seconds}s</span>
-    <button class="ghost" onclick={() => api.cancelLookups()}>Cancel</button>
+    <button title="Stop this lookup" class="ghost" onclick={() => api.cancelLookups()}>Cancel</button>
   </div>
   <div class="muted step">{step || "Starting…"}</div>
   {#if seconds > 20}<div class="muted hint">Lookups go through your MCP servers with a one-shot agent, so they take a little while. The model is <code>agent_queries.model</code> in Settings.</div>{/if}

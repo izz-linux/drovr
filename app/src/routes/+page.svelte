@@ -4,6 +4,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { app, refresh, type View } from "#lib/state.svelte.ts";
   import { initTheme } from "#lib/theme.svelte.ts";
+  import Tooltip from "#lib/components/Tooltip.svelte";
   import Agents from "#lib/components/Agents.svelte";
   import Inbox from "#lib/components/Inbox.svelte";
   import Jira from "#lib/components/Jira.svelte";
@@ -20,16 +21,16 @@
   import Pipeline from "#lib/components/Pipeline.svelte";
 
   // Pipeline is part of the ticket workflow (workflow.enabled).
-  const nav: { id: View; label: string; key: string }[] = $derived([
-    { id: "agents", label: "Agents", key: "1" },
-    { id: "inbox", label: "Inbox", key: "2" },
-    { id: "reports", label: "Reports", key: "3" },
-    { id: "jira", label: "Jira", key: "4" },
-    { id: "search", label: "Slack · Confluence", key: "5" },
-    { id: "bus", label: "Message bus", key: "6" },
-    { id: "review", label: "Code review", key: "7" },
-    { id: "settings", label: "Settings", key: "8" },
-    ...(app.defaults?.workflow ? [{ id: "pipeline" as View, label: "Pipeline", key: "9" }] : []),
+  const nav: { id: View; label: string; key: string; tip: string }[] = $derived([
+    { id: "agents", label: "Agents", key: "1", tip: "Every agent and group: their output, status and controls" },
+    { id: "inbox", label: "Inbox", key: "2", tip: "Decisions, commands and permissions waiting for you" },
+    { id: "reports", label: "Reports", key: "3", tip: "Reports agents published for you to review" },
+    { id: "jira", label: "Jira", key: "4", tip: "Your sprint and tickets; hand one to agents" },
+    { id: "search", label: "Slack · Confluence", key: "5", tip: "Ask a question across Slack, Confluence and your other tools" },
+    { id: "bus", label: "Message bus", key: "6", tip: "Messages agents send each other" },
+    { id: "review", label: "Code review", key: "7", tip: "What an agent changed in each repo, with diffs" },
+    { id: "settings", label: "Settings", key: "8", tip: "drovr's configuration" },
+    ...(app.defaults?.workflow ? [{ id: "pipeline" as View, label: "Pipeline", key: "9", tip: "Your sprint's tickets through the workflow stages" }] : []),
   ]);
 
   // Both ⌘ and Ctrl work; show the one people press on this platform.
@@ -69,7 +70,7 @@
     <div class="brand"><img src="/drovr.svg" alt="" width="22" height="22" />drovr</div>
     <nav>
       {#each nav as n}
-        <button class="nav" class:active={app.view === n.id} aria-current={app.view === n.id ? "page" : undefined} onclick={() => (app.view = n.id)} title={`${mod}${n.key}`}>
+        <button class="nav" class:active={app.view === n.id} aria-current={app.view === n.id ? "page" : undefined} onclick={() => (app.view = n.id)} title={n.key ? `${n.tip} (${mod}${n.key})` : n.tip}>
           <span>{n.label}</span>
           {#if n.id === "inbox" && app.snap.inbox.length}<span class="badge">{app.snap.inbox.length}</span>{/if}
           {#if n.id === "reports" && app.snap.unseen_reports}<span class="badge new">{app.snap.unseen_reports}</span>{/if}
@@ -78,8 +79,8 @@
       {/each}
     </nav>
     <div class="actions">
-      <button class="primary" onclick={() => (app.newAgentOpen = true)}>New agent <span class="kbd">{mod}N</span></button>
-      <button onclick={() => (app.newGroupOpen = true)}>New group <span class="kbd">{mod}G</span></button>
+      <button class="primary" onclick={() => (app.newAgentOpen = true)} title="Start one agent on a task, in a folder you choose">New agent <span class="kbd">{mod}N</span></button>
+      <button onclick={() => (app.newGroupOpen = true)} title="Start a group of agents that coordinate, optionally led by an orchestrator">New group <span class="kbd">{mod}G</span></button>
     </div>
     <div class="foot muted">
       <div><span class="dot cyan"></span>{working} working</div>
@@ -107,6 +108,7 @@
 {#if app.dispatching}<Dispatch />{/if}
 {#if app.shortcutsOpen}<Shortcuts {mod} />{/if}
 {#if app.timeline}<Timeline />{/if}
+<Tooltip />
 <div class="toast-region" role="status" aria-live="polite">{#if app.toast}<div class="toast">{app.toast}</div>{/if}</div>
 
 <style>
