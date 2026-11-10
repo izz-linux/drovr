@@ -243,12 +243,20 @@
   {/each}
 
   {#if showResolved}
-    <h3 class="muted">Recently resolved</h3>
+    <div class="row">
+      <h3 class="muted grow">Recently resolved</h3>
+      {#if app.snap.recent.length}
+        <button class="ghost small" onclick={() => act(() => api.clearResolved(), "Cleared")}
+          title="Hide everything resolved so far from this list. Nothing is deleted: tickets' records and retros keep it.">Clear</button>
+      {/if}
+    </div>
     {#each app.snap.recent as item}
       <div class="resolved">
         <span class="pill">{item.kind}</span> <strong>{item.agent}</strong> {item.title}
         <span class="muted">→ {item.status}{item.answer ? `: ${item.answer.split("\n")[0].slice(0, 120)}` : ""}</span>
       </div>
+    {:else}
+      <div class="muted small">Nothing resolved since you last cleared.</div>
     {/each}
   {/if}
 </div>

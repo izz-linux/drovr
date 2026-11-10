@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS report_meta (
     seen INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL DEFAULT ''
 );
+-- Small settings the app keeps for you, e.g. when you last cleared the Inbox.
+CREATE TABLE IF NOT EXISTS prefs (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS notes (
     group_name TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -174,6 +179,8 @@ pub struct Item {
     pub status: String,
     pub answer: String,
     pub delivered: bool,
+    /// When it was resolved; None while it's pending.
+    pub answered_ts: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +247,7 @@ fn item_row(r: &Row) -> rusqlite::Result<Item> {
         status: r.get("status")?,
         answer: r.get("answer")?,
         delivered: r.get::<_, i64>("delivered")? != 0,
+        answered_ts: r.get("answered_ts")?,
     })
 }
 
@@ -433,6 +441,24 @@ impl Store {
             return Ok(None);
         }
         Ok(self.agent(name)?.map(|a| a.runs))
+    }
+
+    pub fn pref(&self, key: &str) -> Result<String> {
+        Ok(self
+            .db
+            .query_row("SELECT value FROM prefs WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    pub fn set_pref(&self, key: &str, value: &str) -> Result<()> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO prefs (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     pub fn remove_agent(&self, name: &str) -> Result<()> {
@@ -699,6 +725,19 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefs_keep_the_last_value() {
+        let dir = std::env::temp_dir().join(format!("drovr-prefs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let st = Store::open(&dir.join("t.db")).unwrap();
+        assert_eq!(st.pref("inbox_cleared").unwrap(), "");
+        st.set_pref("inbox_cleared", "12.5").unwrap();
+        st.set_pref("inbox_cleared", "13").unwrap();
+        assert_eq!(st.pref("inbox_cleared").unwrap(), "13");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn queued_messages_until_read() {
