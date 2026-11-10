@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Auto-wakes allowed per agent in ten minutes, so two agents messaging each
 /// other can't loop forever on your API bill.
@@ -32,6 +32,9 @@ const HERDR_INLINE_MAX: usize = 600;
 /// How long a new herdr pane's shell gets to reach its prompt.
 const HERDR_READY_WAIT: Duration = Duration::from_secs(15);
 const HERDR_READY_POLL: Duration = Duration::from_millis(500);
+
+/// How long herdr gets to answer after `herdr.launch` starts it.
+const HERDR_LAUNCH_WAIT: Duration = Duration::from_secs(20);
 
 /// herdr can still report an agent as idle just after it's been prompted, so
 /// a run this new, in seconds, isn't over yet.
@@ -1943,7 +1946,39 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         self.herdr_new_pane(cmd, std::env::var("HERDR_PANE_ID").ok().as_deref())
     }
 
-    fn herdr_new_pane(&self, mut cmd: String, inherited: Option<&str>) -> Result<String> {
+    /// Open a pane, starting herdr first with `herdr.launch` if it isn't
+    /// running.
+    fn herdr_new_pane(&self, cmd: String, inherited: Option<&str>) -> Result<String> {
+        match self.herdr_try_new_pane(cmd.clone(), inherited) {
+            Err(e) if format!("{e:#}").contains("server_not_running") && self.herdr_launch()? => {
+                self.herdr_try_new_pane(cmd, inherited)
+            }
+            other => other,
+        }
+    }
+
+    /// Run `herdr.launch` and wait for herdr to answer. False when it's not set.
+    fn herdr_launch(&self) -> Result<bool> {
+        if self.cfg.herdr.launch.trim().is_empty() {
+            return Ok(false);
+        }
+        let launch = self.herdr_fill(&self.cfg.herdr.launch, &[]);
+        shell::sh(&launch, None, None, Duration::from_secs(30))?.into_stdout("herdr.launch")?;
+        let list = self.herdr_fill(&self.cfg.herdr.list, &[]);
+        let until = Instant::now() + HERDR_LAUNCH_WAIT;
+        while Instant::now() < until {
+            if shell::sh(&list, None, None, Duration::from_secs(10))?.ok() {
+                return Ok(true);
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        bail!(
+            "started herdr with herdr.launch, but it didn't answer within {}s",
+            HERDR_LAUNCH_WAIT.as_secs()
+        )
+    }
+
+    fn herdr_try_new_pane(&self, mut cmd: String, inherited: Option<&str>) -> Result<String> {
         if cmd.contains("--current") {
             let pane = match inherited.filter(|pane| !pane.is_empty()) {
                 Some(pane) => pane.to_string(),
@@ -1960,7 +1995,9 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         let cmd = self.herdr_fill(&self.cfg.herdr.list, &[]);
         let out = shell::sh(&cmd, None, None, Duration::from_secs(10))?
             .into_stdout("herdr pane list")
-            .map_err(|e| anyhow!("couldn't find a herdr pane to split. Is herdr running? {e}"))?;
+            .map_err(|e| {
+                anyhow!("couldn't find a herdr pane to split. Is herdr running? Start it with `herdr`, or set herdr.launch so drovr starts it. {e}")
+            })?;
         focused_pane(&out)
             .ok_or_else(|| anyhow!("herdr has no focused pane to split. Open herdr and try again."))
     }
@@ -3085,6 +3122,25 @@ esac
             assert!(err.contains(want), "{case}: {err}");
             assert!(!err.contains("requires HERDR_PANE_ID"), "{case}: {err}");
         }
+    }
+
+    #[test]
+    fn starts_herdr_with_launch_when_it_isnt_running() {
+        // `list` fails as herdr does with no server until `launch` has run.
+        let up = std::env::temp_dir().join(format!("drovr-herdr-up-{}", std::process::id()));
+        let _ = std::fs::remove_file(&up);
+        let list = format!(
+            r#"if [ -e {up} ]; then printf '%s' '{{"result":{{"panes":[{{"focused":true,"pane_id":"w1:p1"}}]}}}}'; else echo '{{"error":{{"code":"server_not_running"}}}}' >&2; exit 1; fi"#,
+            up = up.display()
+        );
+        let off = engine_with_herdr_stub("launch-off", &list, "");
+        let err = off.herdr_split_from("/tmp", None).unwrap_err().to_string();
+        assert!(err.contains("herdr.launch"), "{err}");
+
+        let mut on = engine_with_herdr_stub("launch-on", &list, "");
+        on.cfg.herdr.launch = format!("touch {}", up.display());
+        assert_eq!(on.herdr_split_from("/tmp", None).unwrap(), "beside-w1:p1");
+        let _ = std::fs::remove_file(&up);
     }
 
     /// An engine whose `herdr` logs each call and answers like the real one,

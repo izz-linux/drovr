@@ -352,6 +352,10 @@ pub struct Herdr {
     pub get: String,
     /// Shows a running agent's pane. `{target}` is the pane.
     pub focus: String,
+    /// Starts herdr where you can see it, for when drovr needs a pane and no
+    /// herdr is running: e.g. an iTerm window running herdr. drovr then waits
+    /// for it and carries on. Empty: you start herdr yourself.
+    pub launch: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -583,6 +587,7 @@ impl Default for Herdr {
             stop: "{herdr} pane close {pane}".into(),
             get: "{herdr} agent get {target}".into(),
             focus: "{herdr} agent focus {target}".into(),
+            launch: String::new(),
         }
     }
 }

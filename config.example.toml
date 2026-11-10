@@ -93,6 +93,9 @@ read = "{herdr} agent read {target} --source recent-unwrapped --lines {lines}"
 stop = "{herdr} pane close {pane}"
 get = "{herdr} agent get {target}"
 focus = "{herdr} agent focus {target}"
+# Start herdr when drovr needs a pane and it isn't running, e.g. in an iTerm window. Empty: start it yourself.
+# launch = "osascript -e 'tell application \"iTerm\" to create window with default profile command \"/opt/homebrew/bin/herdr\"'"
+launch = ""
 
 # ---- Sources -------------------------------------------------------------
 # provider = "agent"   : a one-shot Claude agent uses the Jira/Confluence/Slack MCPs you already have
