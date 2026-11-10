@@ -228,12 +228,43 @@ fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
     for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
         if entry.path().is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') {
+            if !name.starts_with('.') && name != ARCHIVE {
                 visit(&entry.path(), &name);
             }
         }
     }
     out
+}
+
+/// Archived reports go in an `archive/` folder beside them, out of the list.
+pub const ARCHIVE: &str = "archive";
+
+/// Move a listed report into the `archive/` folder beside it. Returns where
+/// it went.
+pub fn archive(cfg: &Config, store: &Store, path: &str) -> Result<PathBuf> {
+    let from = PathBuf::from(path);
+    if !report_files(&cfg.reports.path())
+        .iter()
+        .any(|(p, _)| p == &from)
+    {
+        anyhow::bail!("{path} isn't a report drovr lists");
+    }
+    let dir = from.parent().unwrap_or(Path::new(".")).join(ARCHIVE);
+    std::fs::create_dir_all(&dir)?;
+    let mut to = dir.join(from.file_name().unwrap_or_default());
+    let stem = to
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut n = 2;
+    while to.exists() {
+        to = dir.join(format!("{stem}-{n}.html"));
+        n += 1;
+    }
+    std::fs::rename(&from, &to)?;
+    store.forget_report(path)?;
+    Ok(to)
 }
 
 /// `folder` as it's spelled on disk. A disk that ignores case treats `sre-1`
@@ -681,6 +712,22 @@ mod tests {
             b
         );
         assert!(!a.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archiving_takes_a_report_out_of_the_list() {
+        let dir = std::env::temp_dir().join(format!("drovr-archive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let p = publish(&cfg, &store, "g", "lead", "Plan", "s", "<p>x</p>", false).unwrap();
+        let to = archive(&cfg, &store, &p.display().to_string()).unwrap();
+        assert!(to.ends_with("plans/g/archive/plan.html"));
+        assert!(list(&cfg, &store).unwrap().is_empty());
+        assert!(archive(&cfg, &store, "/etc/hosts").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
