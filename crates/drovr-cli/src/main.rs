@@ -31,6 +31,7 @@ usage:
   drovr attach <agent>                       print the command to open its session interactively
   drovr msgs [group]                         the message bus
   drovr ask <question...>                    ask an agent with your MCPs (Slack, Jira, …)
+  drovr archive <agent> | archive done       put an agent away (keeping its output), or every finished one
   drovr config                               where drovr reads its config and keeps its data
   drovr mcp --agent <name>                   (internal) MCP server for an agent
   drovr hook finished <agent>                (internal) called when a headless run exits";
@@ -262,6 +263,10 @@ fn run() -> Result<()> {
                 Sources::with_progress(&engine.cfg, &progress).ask(&rest(&args, 1), None)?
             );
         }
+        "archive" => match arg(&args, 1, "agent name, or done")? {
+            "done" => println!("archived {}", engine.archive_finished()?),
+            name => engine.archive(name)?,
+        },
         "config" => println!(
             "{}",
             json!({ "config": drovr_core::config::config_path(), "home": drovr_core::config::home() })

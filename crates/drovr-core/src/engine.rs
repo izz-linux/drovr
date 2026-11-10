@@ -1235,6 +1235,37 @@ impl Engine {
         Ok(())
     }
 
+    /// Put an agent away. It keeps its output and session, and comes back if
+    /// it's woken.
+    pub fn archive(&self, name: &str) -> Result<()> {
+        if self.agent(name)?.run_state == "working" {
+            bail!("{name} is working; stop it or let it finish first");
+        }
+        self.store.archive_agent(name)
+    }
+
+    pub fn unarchive(&self, name: &str) -> Result<()> {
+        self.store.unarchive_agent(name)
+    }
+
+    /// Archive every agent that's finished: done, stopped or failed, with
+    /// nothing waiting for you. Returns how many.
+    pub fn archive_finished(&self) -> Result<usize> {
+        let archived = self.store.archived()?;
+        let mut n = 0;
+        for a in self.store.agents(None)? {
+            let finished = matches!(
+                self.display_state(&a).as_str(),
+                "done" | "stopped" | "error"
+            );
+            if finished && !archived.contains(&a.name) {
+                self.store.archive_agent(&a.name)?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     /// State as shown to the human: `blocked` wins when the agent is waiting on them.
     pub fn display_state(&self, agent: &Agent) -> String {
         if self.store.pending_count(&agent.name).unwrap_or(0) > 0 {

@@ -72,8 +72,14 @@
     };
   }
 
+  const isArchived = (name: string) => app.snap.archived.includes(name);
   const agents = $derived(
-    app.snap.agents.filter((a) => !filter || `${a.name} ${a.group_name} ${a.ticket} ${a.status}`.toLowerCase().includes(filter.toLowerCase())),
+    app.snap.agents
+      .filter((a) => app.showArchived || !isArchived(a.name))
+      .filter((a) => !filter || `${a.name} ${a.group_name} ${a.ticket} ${a.status}`.toLowerCase().includes(filter.toLowerCase())),
+  );
+  const finished = $derived(
+    app.snap.agents.filter((a) => !isArchived(a.name) && ["done", "stopped", "error"].includes(a.state)).length,
   );
   const grouped = $derived.by(() => {
     const out: { group: string; agents: Agent[] }[] = [];
@@ -86,7 +92,8 @@
     // Groups you created that have no agents yet still show, so you can add some.
     if (!filter) {
       for (const g of app.snap.groups) {
-        if (!out.some((x) => x.group === g.name)) out.push({ group: g.name, agents: [] });
+        const hasAny = app.snap.agents.some((a) => a.group_name === g.name);
+        if (!hasAny && !out.some((x) => x.group === g.name)) out.push({ group: g.name, agents: [] });
       }
     }
     return out.sort((a, b) => (a.group === "" ? 1 : b.group === "" ? -1 : a.group.localeCompare(b.group)));
@@ -204,6 +211,11 @@
     }
   }
 
+  async function archiveFinished() {
+    const n = await act(() => api.archiveFinished());
+    if (n !== undefined) toast(n ? `Archived ${n} finished agent${n > 1 ? "s" : ""}` : "Nothing finished to archive");
+  }
+
   // Enter sends; Shift+Enter adds a new line. Enter while an input method is
   // composing (e.g. picking a Japanese candidate) belongs to the IME.
   function onKey(e: KeyboardEvent) {
@@ -235,6 +247,10 @@
   <section class="list">
     <div class="head">
       <input placeholder="Filter agents" bind:value={filter} />
+      <button class="ghost" disabled={!finished} onclick={archiveFinished}
+        title="Archive every done, stopped or failed agent. They keep their output and session, and come back if they're woken.">Archive done</button>
+      <button class="ghost" class:on={app.showArchived} disabled={!app.snap.archived.length} onclick={() => (app.showArchived = !app.showArchived)}
+        title={app.showArchived ? "Hide archived agents" : "Show archived agents in the list"}>Archived {app.snap.archived.length || ""}</button>
       <button class="ghost" title={allCollapsed ? "Expand all groups" : "Collapse all groups"}
         onclick={() => setCollapsed(Object.fromEntries(grouped.map((g) => [g.group, !allCollapsed])))}>{allCollapsed ? "⊞" : "⊟"}</button>
     </div>
@@ -283,7 +299,7 @@
           </div>
         {/if}
         {#each isCollapsed(g.group) ? [] : g.agents as a}
-          <button class="agent" class:sel={a.name === app.selected} class:lead={a.role === "orchestrator"} onclick={() => (app.selected = a.name)}>
+          <button class="agent" class:sel={a.name === app.selected} class:lead={a.role === "orchestrator"} class:archived={isArchived(a.name)} onclick={() => (app.selected = a.name)}>
             <div class="row">
               <span class="name grow">{a.role === "orchestrator" ? "★ " : ""}{a.name}</span>
               {#if a.stage}<span class="pill stage" title="Its stage in the ticket workflow">{a.stage}</span>{/if}
@@ -316,6 +332,12 @@
             <button onclick={() => (app.timeline = currentTickets[0])} title={`Everything that happened on ${currentTickets.join(", ")}, for review and the retro`}>Timeline</button>
           {/if}
           <button class:on={app.termOpen} onclick={() => (app.termOpen = !app.termOpen)} title="Show or hide the terminal (⌃`)">Terminal</button>
+          {#if isArchived(current.name)}
+            <button class="ghost" onclick={() => act(() => api.unarchiveAgent(current!.name), "Back in the list")} title="Put it back in the agent list">Unarchive</button>
+          {:else}
+            <button class="ghost" disabled={current.state === "working"} onclick={() => act(() => api.archiveAgent(current!.name), `Archived ${current!.name}`)}
+              title="Take it out of the list, keeping its output and session. It comes back if it's woken.">Archive</button>
+          {/if}
           <button class="ghost danger" class:armed={arming === `a:${current.name}`} title="Stop and remove this agent and its output"
             onclick={() => { const n = current!.name; twice(`a:${n}`, () => removeAgent(n)); }}>{arming === `a:${current.name}` ? "Remove?" : "✕"}</button>
         </div>
@@ -407,6 +429,7 @@
   .agent { display: block; width: 100%; text-align: left; background: transparent; border: none; border-left: 2px solid transparent; border-radius: 0; padding: 7px 12px; }
   .agent.sel { background: var(--panel-2); border-left-color: var(--accent); }
   .agent.lead .name { color: var(--purple); }
+  .agent.archived { opacity: .55; }
   .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
   .status { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .detail { display: flex; flex-direction: column; min-height: 0; min-width: 0; }

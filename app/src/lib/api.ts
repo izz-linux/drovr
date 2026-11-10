@@ -31,7 +31,7 @@ export type Item = {
   id: number; ts: number; agent: string; kind: string; title: string; body: string;
   options: string[]; payload: any; status: string; answer: string; delivered: boolean;
 };
-export type Snapshot = { agents: Agent[]; groups: Group[]; inbox: Item[]; recent: Item[]; unseen_reports: number; herdr: boolean; codex: boolean };
+export type Snapshot = { agents: Agent[]; archived: string[]; groups: Group[]; inbox: Item[]; recent: Item[]; unseen_reports: number; herdr: boolean; codex: boolean };
 export type ReportFile = { path: string; folder: string; title: string; modified: number; agent: string; summary: string; seen: boolean };
 export type Line = { kind: string; text: string };
 export type Message = { id: number; ts: number; sender: string; recipient: string; group_name: string; body: string };
@@ -118,6 +118,9 @@ export const api = {
   removeGroup: (group: string) => invoke<string>("remove_group", { group }),
   attachCommand: (name: string) => invoke<string>("attach_command", { name }),
   openInHerdr: (name: string) => invoke<string>("open_in_herdr", { name }),
+  archiveAgent: (name: string) => invoke<void>("archive_agent", { name }),
+  unarchiveAgent: (name: string) => invoke<void>("unarchive_agent", { name }),
+  archiveFinished: () => invoke<number>("archive_finished"),
   answer: (id: number, answer: string) => invoke<void>("inbox_answer", { id, answer }),
   reject: (id: number, reason: string) => invoke<void>("inbox_reject", { id, reason }),
   termWorkspace: (name: string) => invoke<string>("term_workspace", { name }),
