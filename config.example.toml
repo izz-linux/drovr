@@ -30,6 +30,18 @@ extra_args = []
 [notifications]
 enabled = true                # a macOS notification when something new lands in the Inbox while drovr is in the background
 
+[remote]                      # the phone page and push notifications (see README: Phone access)
+enabled = false               # serve it while the app runs; `drovr serve` runs it without the app
+bind = "0.0.0.0:7979"         # every network the Mac is on; a Tailscale IP keeps it to your tailnet
+token = ""                    # empty: drovr makes one; `drovr remote` prints the link with it
+public_url = ""               # how your phone reaches it, e.g. "https://drovr.example.com:7979"
+ntfy_topic = ""               # push notifications through ntfy; pick a hard-to-guess topic
+ntfy_server = "https://ntfy.sh"
+ntfy_token_env = ""           # env var with an ntfy access token, for a protected topic
+push_details = true           # false: notifications say only that something is waiting
+tls_cert = ""                 # HTTPS: the certificate and its chain, e.g. "~/certs/izznoland.dev/fullchain.pem"
+tls_key = ""                  # and its private key, e.g. "~/certs/izznoland.dev/privkey.pem"
+
 [workflow]
 enabled = false               # the ticket workflow: each ticket's record (ledger.jsonl), the timeline, record_decision, the watcher and Pipeline, and stages for groups created while it's on; false = as before
 

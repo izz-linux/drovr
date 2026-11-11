@@ -153,6 +153,7 @@ export const api = {
     invoke<boolean | null>("push_github_moved", { root, branch, tracking }),
   configInfo: () => invoke<{ path: string; home: string; text: string; effective: string }>("config_info"),
   saveConfig: (text: string) => invoke<void>("save_config", { text }),
+  remoteInfo: () => invoke<RemoteInfo>("remote_info"),
   reports: () => invoke<{ dir: string; files: ReportFile[] }>("reports"),
   reportSeen: (path: string) => invoke<void>("report_seen", { path }),
   reportsAllSeen: () => invoke<void>("reports_all_seen"),
@@ -188,4 +189,15 @@ export function ago(ts: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
+}
+
+/** The phone page ([remote] in the config). */
+export interface RemoteInfo {
+  enabled: boolean;
+  /** What the server in this app is doing; empty when it wasn't started. */
+  status: string;
+  /** The sign-in link, with the token; empty when the page is off. */
+  link: string;
+  qr_svg: string;
+  push: boolean;
 }

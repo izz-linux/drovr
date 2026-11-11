@@ -1,6 +1,6 @@
 [package]
 name = "drovr-core"
-version = "0.10.3"
+version = "0.11.0"
 edition = "2021"
 license = "MIT"
 
@@ -15,3 +15,9 @@ uuid = { version = "1", features = ["v4"] }
 ureq = { version = "2", features = ["json"] }
 base64 = "0.22"
 libc = "0.2"
+tiny_http = "0.12"
+url = "2"
+# The same rustls and ring ureq already uses, for the phone page's HTTPS.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

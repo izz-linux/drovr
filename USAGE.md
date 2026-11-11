@@ -198,6 +198,22 @@ drovr resume pay-api-sweeper "Continue with the cleanup"
 drovr rm pay-api-sweeper
 ```
 
+### Check in from your phone
+
+With `[remote] enabled = true` (README → [Phone access](README.md#phone-access)), drovr serves a page for your phone with the Inbox, agents and their output, code review, reports and the message bus.
+
+1. Restart drovr, then scan the QR code in Settings → **Phone** (or from `drovr remote`). It signs the phone in.
+2. **Inbox** has the same actions as the app's. Running a proposed command asks you to confirm first.
+3. **Agents:** tap one to see its output, prompt it, stop or resume it, or open **Code review** for its diffs.
+4. For notifications, subscribe to a hard-to-guess topic in the ntfy app, set `remote.ntfy_topic` to it, and run `drovr remote --test`. Tapping a notification opens that item.
+5. For HTTPS with your own certificate, set `remote.tls_cert` (`fullchain.pem`), `remote.tls_key` (`privkey.pem`) and `remote.public_url` (`https://drovr.example.com:7979`, a name the certificate covers that points at the Mac), then restart drovr. Renewed certificates are picked up without a restart.
+
+```sh
+drovr remote          # the sign-in link and QR code
+drovr remote --test   # send a test notification
+drovr serve           # the page and notifications without the app
+```
+
 ### Run an agent with Codex (experimental)
 
 1. Install the Codex CLI and log in (`codex login`).
@@ -305,6 +321,8 @@ Agent and group names are lowercase letters, digits, `-` and `_`, starting with 
 | `drovr msgs [group]` | Show the message bus |
 | `drovr ask <question…>` | Ask a one-shot agent that uses your MCP servers |
 | `drovr config` | Print where drovr reads its config and keeps its data, as JSON |
+| `drovr remote [--test]` | Print the phone page's sign-in link and its QR code, and whether the page and notifications are on; `--test` sends a test notification |
+| `drovr serve` | Serve the phone page and send notifications without the app (see `[remote]` in the config) |
 | `drovr help` | Show this list |
 
 Agents and run wrappers call three internal commands: `drovr mcp --agent <name>` is an agent's MCP server, `drovr hook finished <agent>` runs when a headless run exits, and `drovr status-line <agent>` is a herdr agent's Claude Code status line, which saves its cost.

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/izz-linux/drovr/compare/v0.10.3...v0.11.0) (2026-11-11)
+
+
+### Features
+
+* serve a phone page with push notifications and optional HTTPS ([#48](https://github.com/izz-linux/drovr/issues/48)) ([50749e3](https://github.com/izz-linux/drovr/commit/50749e37975b3f40f160c31adf6db2839f6949d5))
+
 ## [0.10.3](https://github.com/izz-linux/drovr/compare/v0.10.2...v0.10.3) (2026-11-06)
 
 

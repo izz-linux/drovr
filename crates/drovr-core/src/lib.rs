@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod memory;
 pub mod prompts;
 pub mod push;
+pub mod remote;
 pub mod reports;
 pub mod retro;
 pub mod review;
