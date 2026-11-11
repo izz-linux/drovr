@@ -112,8 +112,8 @@
     {#if error}<div class="error-banner" style="padding: 8px 12px">{error}</div>{/if}
     {#if mode === "preview" && file && info}
       <div class="row bar"><code class="grow">{file}</code>
-        <button onclick={() => frameKey++}>Reload</button>
-        <button onclick={() => api.openPath(full(file)).catch((e) => toast(String(e)))}>Open in browser</button>
+        <button title="Load the preview again" onclick={() => frameKey++}>Reload</button>
+        <button title="Open this page in your default browser" onclick={() => api.openPath(full(file)).catch((e) => toast(String(e)))}>Open in browser</button>
       </div>
       {#key frameKey}<iframe title={file} src={api.fileSrc(full(file))}></iframe>{/key}
     {:else}
@@ -126,7 +126,7 @@
     {#if agent}
       <form class="row bar" onsubmit={(e) => { e.preventDefault(); sendFeedback(); }}>
         <input class="grow" bind:value={feedback} placeholder={`Feedback for ${agent.name}${file ? ` about ${file}` : ""}…`} />
-        <button class="primary" type="submit" disabled={!feedback.trim()}>Send feedback</button>
+        <button title="Send your feedback on this change to the agent" class="primary" type="submit" disabled={!feedback.trim()}>Send feedback</button>
       </form>
     {/if}
   </section>

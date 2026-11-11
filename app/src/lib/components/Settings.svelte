@@ -71,7 +71,7 @@
         <textarea id="cfg" rows="28" bind:value={text} spellcheck="false" onkeydown={onKey}></textarea>
         <div class="row" style="margin-top: 8px">
           <button class="primary" disabled={!dirty} onclick={save} title="Save (⌘S)">Save</button>
-          {#if dirty}<button onclick={() => (text = info!.text || "")}>Revert</button>{/if}
+          {#if dirty}<button title="Throw away your unsaved edits" onclick={() => (text = info!.text || "")}>Revert</button>{/if}
           <span class="muted">{dirty ? "Unsaved changes. " : ""}Validated before saving.</span>
         </div>
       </div>

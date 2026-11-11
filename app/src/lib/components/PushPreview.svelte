@@ -80,7 +80,7 @@
     <div class="body">
       <div class="row" class:notice={stale}>
         <span class="grow">{stale ? "Command changed" : ""}</span>
-        <button disabled={loading} onclick={() => load(false)}>Refresh</button>
+        <button title="Read the push's diff again" disabled={loading} onclick={() => load(false)}>Refresh</button>
       </div>
       {#if loading && !preview}
         <div class="muted small">Loading…</div>

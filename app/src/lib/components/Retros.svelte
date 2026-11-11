@@ -89,9 +89,9 @@
     <div class="retro">
       <div class="row">
         <strong class="grow">{r.tickets.join(", ")}</strong>
-        <span class="muted small">{ago(r.started)} ago · <button class="link" onclick={() => select(r.agent)}>{r.agent}</button> {agentState(r.agent)}</span>
+        <span class="muted small">{ago(r.started)} ago · <button title="Go to the retro's agent" class="link" onclick={() => select(r.agent)}>{r.agent}</button> {agentState(r.agent)}</span>
         {#if finished}<button class="ghost small" onclick={() => (open[r.dir] = !open[r.dir])}>{open[r.dir] ? "▾" : "▸"} {summary(r)}</button>{/if}
-        {#if pending.length > 1}<button onclick={() => approveAll(r)}>Approve all ({pending.length})</button>{/if}
+        {#if pending.length > 1}<button title="Approve and apply every pending proposal" onclick={() => approveAll(r)}>Approve all ({pending.length})</button>{/if}
       </div>
       {#if !finished || open[r.dir]}
       {#if !r.proposals.length}<div class="muted small">No proposals yet{agentState(r.agent) === "working" ? "; it's still looking" : ""}.</div>{/if}
@@ -101,8 +101,8 @@
             <span class="pill">{p.kind.replace("_", " ")}</span>
             <strong class="grow">{p.title}</strong>
             {#if p.status === "pending"}
-              <button class="primary" onclick={() => decide(r, p, true)}>Approve</button>
-              <button class="ghost" onclick={() => decide(r, p, false)}>Dismiss</button>
+              <button title="Apply this proposal" class="primary" onclick={() => decide(r, p, true)}>Approve</button>
+              <button title="Drop this proposal; the next retro is told you did" class="ghost" onclick={() => decide(r, p, false)}>Dismiss</button>
             {:else}<span class="muted small">{p.status}</span>{/if}
           </div>
           {#if p.why}<div class="why">{p.why}</div>{/if}
@@ -151,7 +151,7 @@
     <input placeholder="Anything to look at in particular (optional)" bind:value={note} />
     {#snippet footer()}
       <button onclick={() => (starting = false)}>Cancel</button>
-      <button class="primary" disabled={!Object.values(picked).some(Boolean)} onclick={start}>Start retro</button>
+      <button title="Start an agent that reviews these tickets' records and proposes changes" class="primary" disabled={!Object.values(picked).some(Boolean)} onclick={start}>Start retro</button>
     {/snippet}
   </Modal>
 {/if}

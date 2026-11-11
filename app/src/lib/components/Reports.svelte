@@ -140,7 +140,7 @@
           {#each list as r (r.key)}
             {@render item(r.f, false)}
             {#if r.older.length}
-              <button class="older" onclick={() => (expanded[r.key] = !expanded[r.key])}>
+              <button title="Show or hide the earlier versions of this report" class="older" onclick={() => (expanded[r.key] = !expanded[r.key])}>
                 <span class="caret">{expanded[r.key] ? "▾" : "▸"}</span>
                 {r.older.length} earlier {r.older.length === 1 ? "version" : "versions"}
                 {#if r.older.some((f) => !f.seen)}<span class="dot"></span>{/if}
@@ -161,9 +161,9 @@
     {#if current}
       <div class="row bar">
         <strong class="grow t" title={current.path}>{current.title}</strong>
-        <button onclick={() => frameKey++}>Reload</button>
-        <button onclick={() => api.openPath(current!.path).catch((e) => toast(String(e)))}>Open in browser</button>
-        <button onclick={() => api.openPath(folderPath(current!.folder)).catch((e) => toast(String(e)))}>Show folder</button>
+        <button onclick={() => frameKey++} title="Load the page again, after an agent revised it">Reload</button>
+        <button onclick={() => api.openPath(current!.path).catch((e) => toast(String(e)))} title="Open this report in your default browser">Open in browser</button>
+        <button onclick={() => api.openPath(folderPath(current!.folder)).catch((e) => toast(String(e)))} title="Show the folder this report is in, in Finder">Show folder</button>
       </div>
       {#key frameKey}<iframe title={current.title} src={api.fileSrc(current.path)}></iframe>{/key}
       <form class="row bar foot" onsubmit={(e) => { e.preventDefault(); sendFeedback(); }}>
@@ -172,8 +172,8 @@
           {#each app.snap.agents as a}<option value={a.name}>{a.name}</option>{/each}
         </select>
         <input class="grow" bind:value={feedback} placeholder={target ? `Feedback for ${target}…` : "Pick an agent to reply to"} />
-        <button class="primary" type="submit" disabled={!target || !feedback.trim()}>Send</button>
-        {#if current.agent}<button type="button" class="ghost" onclick={() => select(current!.agent)}>View {current.agent}</button>{/if}
+        <button title="Send your feedback on this report to the agent" class="primary" type="submit" disabled={!target || !feedback.trim()}>Send</button>
+        {#if current.agent}<button title="Go to the agent that published this report" type="button" class="ghost" onclick={() => select(current!.agent)}>View {current.agent}</button>{/if}
       </form>
     {:else}
       <div class="empty">Pick a report to review it.</div>
