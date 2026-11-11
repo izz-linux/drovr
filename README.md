@@ -672,7 +672,7 @@ The `[herdr]` keys are command templates. Values substituted into `{placeholders
 | `get` | `{herdr} agent get {target}` |
 | `focus` | `{herdr} agent focus {target}` |
 | `stop` | `{herdr} pane close {pane}` |
-| `launch` | empty: starts herdr where you can see it when drovr needs a pane and herdr isn't running, e.g. `osascript -e 'tell application "iTerm" to create window with default profile command "/opt/homebrew/bin/herdr"'`. drovr waits up to 20 seconds for it, then carries on |
+| `launch` | empty: starts herdr where you can see it when drovr needs a pane and herdr isn't running, e.g. `osascript -e 'tell application "iTerm" to create window with default profile command "/opt/homebrew/bin/herdr"'`. It has to return at once, so start herdr through `open` or `osascript` rather than running it directly. The path to herdr is written out because `{herdr}` is shell-quoted, which would break inside the AppleScript string. drovr waits up to 20 seconds for it, then carries on |
 
 Each agent starts in its own herdr tab, named after it, so it gets the full width and your focus stays where it is. To put agents side by side instead, set `agent_pane` to a `pane split` template, though each split halves the width that's left. `split` opens the panes you ask for, with **Run in herdr pane** and **Open in herdr**, next to your focused pane.
 

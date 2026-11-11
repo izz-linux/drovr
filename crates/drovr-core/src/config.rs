@@ -354,7 +354,9 @@ pub struct Herdr {
     pub focus: String,
     /// Starts herdr where you can see it, for when drovr needs a pane and no
     /// herdr is running: e.g. an iTerm window running herdr. drovr then waits
-    /// for it and carries on. Empty: you start herdr yourself.
+    /// for it and carries on. It has to return at once (`open`, `osascript`):
+    /// a command that runs herdr in the foreground blocks drovr until it
+    /// times out. Empty: you start herdr yourself.
     pub launch: String,
 }
 
