@@ -228,7 +228,7 @@ fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
     for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
         if entry.path().is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') && name != ARCHIVE {
+            if !name.starts_with('.') {
                 visit(&entry.path(), &name);
             }
         }
@@ -236,8 +236,9 @@ fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
     out
 }
 
-/// Archived reports go in an `archive/` folder beside them, out of the list.
-pub const ARCHIVE: &str = "archive";
+/// Archived reports go in a `.archive/` folder beside them. Dot-folders
+/// aren't listed, and a group can't be named that, so none is hidden by it.
+pub const ARCHIVE: &str = ".archive";
 
 /// Move a listed report into the `archive/` folder beside it. Returns where
 /// it went.
@@ -257,9 +258,14 @@ pub fn archive(cfg: &Config, store: &Store, path: &str) -> Result<PathBuf> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+    let ext = to
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let mut n = 2;
     while to.exists() {
-        to = dir.join(format!("{stem}-{n}.html"));
+        to = dir.join(format!("{stem}-{n}.{ext}"));
         n += 1;
     }
     std::fs::rename(&from, &to)?;
@@ -725,9 +731,31 @@ mod tests {
         let store = Store::open(&dir.join("t.db")).unwrap();
         let p = publish(&cfg, &store, "g", "lead", "Plan", "s", "<p>x</p>", false).unwrap();
         let to = archive(&cfg, &store, &p.display().to_string()).unwrap();
-        assert!(to.ends_with("plans/g/archive/plan.html"));
+        assert!(to.ends_with("plans/g/.archive/plan.html"));
         assert!(list(&cfg, &store).unwrap().is_empty());
         assert!(archive(&cfg, &store, "/etc/hosts").is_err());
+
+        // A second report by the same name gets a suffix, keeping its extension.
+        let htm = dir.join("plans/g/plan.htm");
+        std::fs::write(&htm, "<p>y</p>").unwrap();
+        std::fs::write(dir.join("plans/g/.archive/plan.htm"), "old").unwrap();
+        let to = archive(&cfg, &store, &htm.display().to_string()).unwrap();
+        assert!(to.ends_with("plans/g/.archive/plan-2.htm"), "{to:?}");
+
+        // A solo report in the plans folder itself archives beside it.
+        let solo = publish(&cfg, &store, "", "api", "Notes", "s", "<p>z</p>", false).unwrap();
+        let to = archive(&cfg, &store, &solo.display().to_string()).unwrap();
+        assert!(to.ends_with("plans/.archive/notes.html"), "{to:?}");
+        assert!(list(&cfg, &store).unwrap().is_empty());
+
+        // A group named `archive` keeps its reports.
+        let g = publish(
+            &cfg, &store, "archive", "lead", "Kept", "s", "<p>k</p>", false,
+        )
+        .unwrap();
+        let files = list(&cfg, &store).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, g.display().to_string());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
