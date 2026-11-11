@@ -186,7 +186,6 @@
 <style>
   .where { text-transform: none; letter-spacing: 0; opacity: 0.8; margin-left: 4px; }
   .source { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .source button.on { border-color: var(--accent); color: var(--accent); }
   .sid { margin-top: 6px; font-family: var(--mono); font-size: 12px; }
   .small { font-size: 12px; margin: 4px 0 0; }
   .error { color: var(--red); }

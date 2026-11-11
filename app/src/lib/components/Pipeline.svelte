@@ -141,7 +141,7 @@
   .key .sum { margin-top: 2px; }
   .key .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
   .link { background: none; border: none; padding: 0; color: var(--accent); font-weight: 600; }
-  .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: transparent; margin: 0 4px 4px 0; display: inline-flex; gap: 5px; align-items: center; }
+  .chip { margin: 0 4px 4px 0; display: inline-flex; gap: 5px; align-items: center; }
   .chip .pill { font-size: 10px; padding: 0 5px; }
   .pr span { font-size: 11px; }
   .ci.c-success, .ok { color: var(--green); }

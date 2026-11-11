@@ -187,8 +187,6 @@
   .bar { gap: 8px; align-items: center; flex-wrap: wrap; }
   .bar select { width: 140px; }
   .filters { display: flex; gap: 4px; flex-wrap: wrap; }
-  .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: transparent; }
-  .chip.on { border-color: var(--accent); color: var(--accent); }
   .totals { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; margin: 10px 0 4px; }
   .list { margin-top: 6px; max-height: calc(100vh - 230px); overflow: auto; border-top: 1px solid var(--border); }
   .day { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 10px 2px 4px; }

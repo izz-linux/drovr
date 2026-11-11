@@ -432,6 +432,5 @@
   footer { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); align-items: flex-end; }
   .cost { color: var(--yellow); border-color: var(--yellow); }
   .stage { color: var(--green); border-color: var(--green); }
-  button.on { border-color: var(--accent); color: var(--accent); }
   button.armed, button.armed:hover { background: var(--red); color: #fff; border-color: var(--red); opacity: 1; }
 </style>

@@ -84,7 +84,6 @@
   .page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .bar { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); align-items: center; }
   .tabs { display: flex; gap: 2px; }
-  .tabs button.on { border-color: var(--accent); color: var(--accent); }
   .share { padding: 6px 14px; font-size: 12px; border-bottom: 1px solid var(--border); }
   .pad { padding: 8px 14px; }
   .body { flex: 1; padding: 12px 14px; min-height: 0; }

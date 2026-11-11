@@ -92,6 +92,5 @@
   .modes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
   .small { font-size: 12px; margin: 6px 0 0; }
   .modes button { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px; }
-  .modes button.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel-2)); }
   .modes span { font-size: 12px; }
 </style>
