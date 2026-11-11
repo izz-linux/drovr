@@ -586,6 +586,17 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Resolved items newer than `since` (when they were resolved, or made
+    /// when that's unknown), newest first: the Inbox's history after Clear.
+    pub fn resolved_since(&self, since: f64, limit: i64) -> Result<Vec<Item>> {
+        let mut stmt = self.db.prepare(
+            "SELECT * FROM inbox WHERE status != 'pending' AND COALESCE(answered_ts, ts) > ?1 \
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![since, limit], item_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn pending_count(&self, agent: &str) -> Result<i64> {
         Ok(self.db.query_row(
             "SELECT COUNT(*) FROM inbox WHERE agent = ?1 AND status = 'pending' AND kind != 'done'",
@@ -725,6 +736,52 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_hides_what_was_resolved_before_it() {
+        let dir = std::env::temp_dir().join(format!("drovr-resolved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let st = Store::open(&dir.join("t.db")).unwrap();
+        // (made, resolved, status): resolved before Clear at 50, made before
+        // it but resolved after, still pending, and resolved with no time.
+        let cases = [
+            (10.0, Some(20.0), "done"),
+            (30.0, Some(60.0), "done"),
+            (70.0, None, "pending"),
+            (80.0, None, "dismissed"),
+        ];
+        for (i, (ts, answered, status)) in cases.iter().enumerate() {
+            let id = st
+                .add_item(
+                    "api",
+                    "decision",
+                    &format!("item {i}"),
+                    "",
+                    &[],
+                    &Value::Null,
+                )
+                .unwrap();
+            st.db
+                .execute(
+                    "UPDATE inbox SET ts = ?1, answered_ts = ?2, status = ?3 WHERE id = ?4",
+                    params![ts, answered, status, id],
+                )
+                .unwrap();
+        }
+        let titles = |items: Vec<Item>| items.into_iter().map(|i| i.title).collect::<Vec<_>>();
+        assert_eq!(
+            titles(st.resolved_since(50.0, 30).unwrap()),
+            ["item 3", "item 1"]
+        );
+        // Never cleared: everything resolved, newest first, up to the limit.
+        assert_eq!(
+            titles(st.resolved_since(0.0, 30).unwrap()),
+            ["item 3", "item 1", "item 0"]
+        );
+        assert_eq!(titles(st.resolved_since(0.0, 1).unwrap()), ["item 3"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn prefs_keep_the_last_value() {

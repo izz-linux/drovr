@@ -781,6 +781,7 @@ mod tests {
             status: status.into(),
             answer: String::new(),
             delivered: false,
+            answered_ts: None,
         }
     }
 

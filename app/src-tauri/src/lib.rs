@@ -71,15 +71,7 @@ async fn snapshot() -> Res<Snapshot> {
             .collect();
         // Clear in the Inbox hides what was resolved before it.
         let cleared: f64 = e.store.pref("inbox_cleared")?.parse().unwrap_or(0.0);
-        let recent = e
-            .store
-            .items(None, 60)?
-            .into_iter()
-            .filter(|i| i.status != "pending")
-            .filter(|i| i.answered_ts.unwrap_or(i.ts) > cleared)
-            .rev()
-            .take(30)
-            .collect();
+        let recent = e.store.resolved_since(cleared, 30)?;
         Ok(Snapshot {
             agents,
             groups: e.store.groups()?,
