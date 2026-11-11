@@ -2961,6 +2961,48 @@ esac
     }
 
     #[test]
+    fn archive_done_skips_blocked_and_working_agents() {
+        let dir = std::env::temp_dir().join(format!("drovr-archive-done-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let engine = Engine::with(store, Config::default(), "drovr".into());
+        for (name, state) in [("done", "done"), ("blocked", "done"), ("busy", "working")] {
+            engine
+                .store
+                .add_agent(&Agent {
+                    name: name.into(),
+                    run_state: state.into(),
+                    ..Agent::default()
+                })
+                .unwrap();
+        }
+        // A pending item makes an agent blocked: it's waiting on you.
+        engine
+            .store
+            .add_item(
+                "blocked",
+                "decision",
+                "Which?",
+                "",
+                &[],
+                &serde_json::Value::Null,
+            )
+            .unwrap();
+        assert_eq!(
+            engine.display_state(&engine.agent("blocked").unwrap()),
+            "blocked"
+        );
+
+        assert!(engine.archive("busy").is_err());
+        assert_eq!(engine.archive_finished().unwrap(), 1);
+        assert_eq!(engine.store.archived().unwrap(), ["done"]);
+        // Already archived: nothing more to do.
+        assert_eq!(engine.archive_finished().unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn opening_a_live_herdr_agent_focuses_its_pane() {
         for state in ["idle", "working"] {
             let (engine, log) = engine_with_logging_herdr(&format!("live-{state}"), 0, 0);

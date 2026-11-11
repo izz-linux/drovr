@@ -211,6 +211,13 @@
     }
   }
 
+  /** Archive one agent; if it was selected, move to the next one in the list. */
+  async function archiveOne(name: string) {
+    const next = agents.find((a) => a.name !== name && !isArchived(a.name))?.name ?? "";
+    await act(() => api.archiveAgent(name), `Archived ${name}`);
+    if (!app.showArchived && isArchived(name) && app.selected === name) app.selected = next;
+  }
+
   async function archiveFinished() {
     const n = await act(() => api.archiveFinished());
     if (n !== undefined) toast(n ? `Archived ${n} finished agent${n > 1 ? "s" : ""}` : "Nothing finished to archive");
@@ -335,8 +342,8 @@
           {#if isArchived(current.name)}
             <button class="ghost" onclick={() => act(() => api.unarchiveAgent(current!.name), "Back in the list")} title="Put it back in the agent list">Unarchive</button>
           {:else}
-            <button class="ghost" disabled={current.state === "working"} onclick={() => act(() => api.archiveAgent(current!.name), `Archived ${current!.name}`)}
-              title="Take it out of the list, keeping its output and session. It comes back if it's woken.">Archive</button>
+            <button class="ghost" disabled={current.state === "working" || current.state === "blocked"} onclick={() => archiveOne(current!.name)}
+              title={current.state === "blocked" ? "It's waiting on you in the Inbox; answer that first" : "Take it out of the list, keeping its output and session. It comes back if it's woken."}>Archive</button>
           {/if}
           <button class="ghost danger" class:armed={arming === `a:${current.name}`} title="Stop and remove this agent and its output"
             onclick={() => { const n = current!.name; twice(`a:${n}`, () => removeAgent(n)); }}>{arming === `a:${current.name}` ? "Remove?" : "✕"}</button>
