@@ -103,7 +103,7 @@ cargo install --path crates/drovr-cli
 | Slack · Confluence | 5 | Search, read, send results to an agent, or ask a free-form question |
 | Message bus | 6 | Agents' messages to each other, and each group's shared notes, with a filter |
 | Code review | 7 | Changed files and diffs in each repo and worktree an agent worked in |
-| Settings | 8 | Theme, and your config file |
+| Settings | 8 | Theme, the phone page's sign-in link, and your config file |
 | Pipeline | 9 | Your sprint, its PRs and the agents on each ticket, and the retros (only with `workflow.enabled`) |
 
 A ticket's **Timeline** opens over any view, from an agent's header, a group, or Pipeline.
@@ -480,6 +480,47 @@ For any agent, this lists every git repo and worktree it worked in, so it works 
 
 **Send feedback** prompts the agent with your comments about a file, naming the repo. Long diffs (a lockfile, generated code) stay fast: only the lines in view are drawn. An untracked file over 1 MiB isn't shown, and a longer one stops at 2000 lines with a note.
 
+### Phone access
+
+drovr can serve a small web page for your phone, so you can check in and answer things while you're away from your Mac. It shows the same things the app does:
+
+- **Inbox:** everything waiting on you, with the same actions as the app: allow or deny, answer a decision, run or reject a proposed command, start or decline a worker, approve or send back a handoff, post a Jira draft, save a Confluence page.
+- **Agents:** each agent's state, cost and output. Prompt it (queued if it's busy), send a queued message now or take it back, stop or resume it.
+- **Code review:** each repo an agent worked in, its changed files and their diffs.
+- **Reports:** the plans folder, newest first. Opening one marks it read, as in the app.
+- **Message bus:** agents' messages and each group's shared notes. You can post too.
+
+**Turn it on:**
+
+1. In Settings (or `~/.config/drovr/config.toml`), set `[remote] enabled = true`, then restart drovr.
+2. Settings → **Phone** shows a sign-in link and a QR code. Scan the code with your phone. The link carries the access token, and opening it once signs that phone in for a year. `drovr remote` prints the same link and QR code in a terminal.
+3. Optionally, add the page to your home screen (Share → Add to Home Screen) so it opens like an app.
+
+**Away from home:** the page listens on every network the Mac is on (`remote.bind = "0.0.0.0:7979"`), so it works on the same Wi-Fi as is. For anywhere else, install [Tailscale](https://tailscale.com) on the Mac and the phone, and set `remote.public_url` to the Mac's Tailscale name (e.g. `http://my-mac.tail1234.ts.net:7979`) so links and notifications use it. Setting `remote.bind` to the Mac's Tailscale address (`100.x.y.z:7979`) keeps the page off your other networks.
+
+**HTTPS:** without a certificate the page is plain HTTP, so anyone on the same network could read the token. To use your own certificate (say a Let's Encrypt wildcard for `*.example.com`):
+
+1. Point a name the certificate covers at the Mac, e.g. a DNS record `drovr.example.com` → the Mac's LAN or Tailscale address. It only needs to resolve where your phone looks it up, so a private DNS server or split DNS is fine.
+2. Set `remote.tls_cert` to the certificate with its chain (`fullchain.pem`) and `remote.tls_key` to its private key (`privkey.pem`), and `remote.public_url` to `https://drovr.example.com:7979`. Restart drovr.
+
+```toml
+[remote]
+enabled = true
+public_url = "https://drovr.example.com:7979"
+tls_cert = "~/certs/example.com/fullchain.pem"
+tls_key = "~/certs/example.com/privkey.pem"
+```
+
+- **Keys:** PKCS#8, RSA and EC (SEC1) keys all work, whichever your ACME client (certbot, acme.sh, lego) writes. drovr has to be able to read both files: certbot keeps them under `/etc/letsencrypt/live/`, readable only by root, so copy them somewhere yours with a deploy hook, or point drovr at a copy.
+- **Renewals:** drovr reads the files again when they change, so a renewed certificate is used from the next connection, with no restart. If a renewal leaves the files unreadable or mismatched, drovr keeps serving the certificate it had and says why on its output.
+- **What it is:** TLS 1.2 and 1.3 through rustls (the same library drovr already uses for its outgoing requests). The TLS listener takes `remote.bind`, and the page's own server listens only on the Mac's loopback address behind it. The sign-in cookie is marked `Secure`, so it's only ever sent over HTTPS.
+- `tailscale serve --bg 7979` is another way to get HTTPS, with Tailscale's certificate for your `ts.net` name.
+
+**Push notifications** go through [ntfy](https://ntfy.sh). Install the ntfy app on your phone, subscribe to a topic name that's hard to guess, and set `remote.ntfy_topic` to it. drovr then notifies you of each new Inbox item and each new report, and tapping a notification opens that item on the page. More than three items at once arrive as one notification. Run `drovr remote --test` to check it works.
+
+- **Privacy:** anyone who knows the topic can read what's posted to it on ntfy.sh. Notifications carry the agent's name and the item's title; `remote.push_details = false` sends only that something is waiting. You can also run your own ntfy server (`remote.ntfy_server`), or protect a topic and give drovr its access token through `remote.ntfy_token_env`.
+- **Only one process notifies:** the page and notifications run in whichever process holds the port: the app, or `drovr serve` if you'd rather keep them going without the app open (say, from a launchd job). `drovr serve` also notices runs that died, as the app does, but it doesn't run the ticket workflow's watcher.
+
 ### Themes
 
 Match System, Light, Dark, Darcula, Solarized Dark and Nord: the same set and colors as local-wiki. Choose one from **View → Theme** or in Settings. Your choice is saved, and Match System follows macOS light/dark.
@@ -544,6 +585,7 @@ Agents read text other people write (tickets, pages, Slack messages), and that t
 - **Agents' tools:** `WebFetch` isn't auto-allowed: with `Read` also allowed, an agent could otherwise send any file anywhere without asking.
 - **Datadog reads:** with `datadog.pup` on, only a single plain `pup` command with no write words runs without asking, and always with `--read-only`. Anything that chains, pipes, redirects or substitutes comes to you.
 - **Lookups:** they run unattended, so they get only read-only tools that can't reach arbitrary web addresses: no fetchers, browsers or scrapers. `agent_queries.servers` can limit them further to named MCP servers.
+- **The phone page** (off by default): every API call needs the access token, from the cookie the sign-in link sets or an `Authorization: Bearer` header, plus an `X-Drovr` header, which a page on another site can't send. The diff endpoint only reads repos Code review lists for that agent. Reports are served sandboxed, with no origin, so a report's scripts can't read the cookie or call the API; they're served under a key that changes each time the server starts, and only from the plans folder. Anyone with the token can do what you can in the Inbox, including run proposed commands, so keep the link private, and use HTTPS (`remote.tls_cert`) or Tailscale on any network you don't trust: over plain HTTP the token crosses the network readable. To sign every phone out, delete `remote-token` in drovr's data folder (or change `remote.token`) and restart drovr.
 
 ### MCP tools agents get
 
@@ -590,6 +632,16 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `claude.command`, `claude.extra_args` | `"claude"`, `[]` | How agents are launched |
 | `codex.command`, `codex.model`, `codex.sandbox`, `codex.extra_args` | `"codex"`, `""`, `"workspace-write"`, `[]` | How Codex agents are launched; an empty model is Codex's default |
 | `notifications.enabled` | `true` | A macOS notification when something new lands in the Inbox while drovr is in the background |
+| `remote.enabled` | `false` | Serve the phone page while the app runs (see [Phone access](#phone-access)) |
+| `remote.bind` | `"0.0.0.0:7979"` | The address and port it listens on; a Tailscale address keeps it to your tailnet |
+| `remote.token` | `""` | The access token; empty means drovr makes one and keeps it in `remote-token` in its data folder |
+| `remote.public_url` | `""` | How your phone reaches the page, for the sign-in link and notifications; empty means `http://<this Mac>.local:<port>` (`https://` with a certificate). With HTTPS, use a name the certificate covers. |
+| `remote.ntfy_topic` | `""` | The ntfy topic push notifications go to; empty turns them off |
+| `remote.ntfy_server` | `"https://ntfy.sh"` | The ntfy server |
+| `remote.ntfy_token_env` | `""` | An environment variable holding an ntfy access token, for a protected topic |
+| `remote.push_details` | `true` | Put the agent and the item's title in notifications; `false` says only that something is waiting |
+| `remote.tls_cert` | `""` | Serve HTTPS with this certificate and its chain (a PEM file, like Let's Encrypt's `fullchain.pem`); set with `remote.tls_key` |
+| `remote.tls_key` | `""` | The certificate's private key (a PEM file, like `privkey.pem`) |
 | `workflow.enabled` | `false` | The ticket workflow: each ticket's record, the timeline, `record_decision`, the watcher and Pipeline. Off, drovr works as before (see [The record](#the-record-timeline)) |
 | `watch.jql` | your open sprint | The tickets the watcher follows |
 | `watch.github_repos` | `[]` | Where to look for their PRs: `owner/repo` or `owner/*` |
@@ -697,6 +749,7 @@ If your herdr version takes different arguments, edit these templates instead of
 | State (agents, messages, inbox, notes) | `~/.local/share/drovr/drovr.db` |
 | Each agent's run logs, prompts and MCP config | `~/.local/share/drovr/agents/<name>/` |
 | Worktrees (if `defaults.worktrees`) | `~/.local/share/drovr/worktrees/<name>/` |
+| The phone page's access token (if `remote.token` is empty) | `~/.local/share/drovr/remote-token` |
 | Reports | `~/.claude/plans/` (`<group>/` for groups) |
 | A ticket's record | `~/.claude/plans/<group>/<TICKET>/ledger.jsonl` (`~/.claude/plans/<TICKET>/` for a solo agent) |
 | Saved theme | `~/Library/Application Support/com.drovr.cockpit/session.json` (the app's identifier is `com.drovr.cockpit`; before 1.0.0 it was `com.drovr.app`, and drovr moves that folder's contents over on first launch) |
@@ -714,6 +767,7 @@ drovr inbox && drovr answer 7 "24h"       # see and answer what's waiting on you
 drovr adopt <session-id> my-agent         # continue a Claude Code session as a drovr agent
 drovr new --harness codex fix-ci ~/code/api "Make CI green"   # a Codex agent (experimental)
 drovr config                              # where drovr reads its config and keeps its data
+drovr remote                              # the phone page's sign-in link and QR code
 ```
 
 The full command list, with examples and the workflows they fit into, is in **[USAGE.md](USAGE.md#cli-reference)**.
