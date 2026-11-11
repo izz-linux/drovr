@@ -22,6 +22,7 @@ pub struct Config {
     pub reports: Reports,
     pub terminal: Terminal,
     pub notifications: Notifications,
+    pub remote: Remote,
     pub workflow: Workflow,
     pub watch: Watch,
     pub stages: Stages,
@@ -234,6 +235,80 @@ pub struct Notifications {
 impl Default for Notifications {
     fn default() -> Self {
         Notifications { enabled: true }
+    }
+}
+
+/// The phone page: a small web server for the Inbox, agents, reports and
+/// code review, and push notifications through ntfy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Remote {
+    /// Serve the page while the app runs (or `drovr serve` without it).
+    pub enabled: bool,
+    /// The address and port it listens on. `0.0.0.0` is every network the
+    /// Mac is on; a Tailscale address keeps it to your tailnet.
+    pub bind: String,
+    /// The access token. Empty: drovr makes one and keeps it in
+    /// `remote-token` in its data folder.
+    pub token: String,
+    /// How your phone reaches the page, e.g. `http://my-mac.tail1234.ts.net:7979`.
+    /// Used for the link `drovr remote` prints and in push notifications.
+    /// Empty: this Mac's `.local` name and the port.
+    pub public_url: String,
+    /// The ntfy topic push notifications go to; empty turns them off. Anyone
+    /// who knows it can read them, so make it hard to guess.
+    pub ntfy_topic: String,
+    /// The ntfy server.
+    pub ntfy_server: String,
+    /// An environment variable holding an ntfy access token, for a protected
+    /// topic or your own server.
+    pub ntfy_token_env: String,
+    /// Put the agent and the item's title in notifications. False sends
+    /// only that something is waiting.
+    pub push_details: bool,
+    /// Serve HTTPS with this certificate: a PEM file with the certificate
+    /// and its chain (Let's Encrypt's `fullchain.pem`). Set with `tls_key`.
+    pub tls_cert: String,
+    /// The certificate's private key, a PEM file (`privkey.pem`).
+    pub tls_key: String,
+}
+
+impl Remote {
+    /// The certificate and key files when HTTPS is on: both set, `~` expanded.
+    pub fn tls_files(&self) -> anyhow::Result<Option<(PathBuf, PathBuf)>> {
+        match (self.tls_cert.trim(), self.tls_key.trim()) {
+            ("", "") => Ok(None),
+            ("", _) | (_, "") => {
+                anyhow::bail!("set both remote.tls_cert and remote.tls_key, or neither")
+            }
+            (cert, key) => Ok(Some((expand_tilde(cert).into(), expand_tilde(key).into()))),
+        }
+    }
+
+    /// `https` when a certificate is set, else `http`.
+    pub fn scheme(&self) -> &'static str {
+        if self.tls_cert.trim().is_empty() || self.tls_key.trim().is_empty() {
+            "http"
+        } else {
+            "https"
+        }
+    }
+}
+
+impl Default for Remote {
+    fn default() -> Self {
+        Remote {
+            enabled: false,
+            bind: "0.0.0.0:7979".into(),
+            token: String::new(),
+            public_url: String::new(),
+            ntfy_topic: String::new(),
+            ntfy_server: "https://ntfy.sh".into(),
+            ntfy_token_env: String::new(),
+            push_details: true,
+            tls_cert: String::new(),
+            tls_key: String::new(),
+        }
     }
 }
 
@@ -512,6 +587,7 @@ impl Default for Config {
             reports: Reports::default(),
             terminal: Terminal::default(),
             notifications: Notifications::default(),
+            remote: Remote::default(),
             datadog: Datadog::default(),
             memory: Memory::default(),
             workflow: Workflow::default(),

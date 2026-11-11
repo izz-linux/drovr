@@ -1,0 +1,8 @@
+{
+  "name": "drovr",
+  "short_name": "drovr",
+  "start_url": "/#inbox",
+  "display": "standalone",
+  "background_color": "#1e1e1e",
+  "theme_color": "#181818"
+}

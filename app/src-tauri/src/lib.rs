@@ -801,6 +801,41 @@ fn openable(p: &Path) -> bool {
 
 // -- settings -----------------------------------------------------------------
 
+/// The phone page: whether it's on, its sign-in link and QR code.
+#[derive(Serialize)]
+struct RemoteInfo {
+    enabled: bool,
+    /// What the server in this app is doing; empty when it wasn't started.
+    status: String,
+    link: String,
+    qr_svg: String,
+    push: bool,
+}
+
+#[tauri::command]
+async fn remote_info() -> Res<RemoteInfo> {
+    blocking(|e| {
+        let r = &e.cfg.remote;
+        let link = if r.enabled {
+            drovr_core::remote::link(&e.cfg)?
+        } else {
+            String::new()
+        };
+        Ok(RemoteInfo {
+            enabled: r.enabled,
+            status: drovr_core::remote::status(),
+            qr_svg: if link.is_empty() {
+                String::new()
+            } else {
+                drovr_core::remote::qr_svg(&link)
+            },
+            link,
+            push: !r.ntfy_topic.trim().is_empty(),
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 async fn config_info() -> Res<Value> {
     blocking(|e| {
@@ -878,6 +913,16 @@ pub fn run() {
         }
         std::thread::sleep(Duration::from_secs(15));
     });
+    // The phone page and push notifications ([remote] in the config).
+    if let Ok(cfg) = drovr_core::Config::load() {
+        if cfg.remote.enabled {
+            std::thread::spawn(move || {
+                if let Err(e) = drovr_core::remote::serve(&cfg) {
+                    eprintln!("drovr: phone page: {e:#}");
+                }
+            });
+        }
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -941,6 +986,7 @@ pub fn run() {
             push_github_moved,
             config_info,
             save_config,
+            remote_info,
             reports,
             report_seen,
             reports_all_seen,
