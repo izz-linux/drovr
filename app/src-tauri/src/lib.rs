@@ -403,7 +403,7 @@ async fn open_in_herdr(name: String) -> Res<String> {
 
 /// Continue an agent's session in your own terminal (terminal.external).
 #[tauri::command]
-async fn open_in_terminal(name: String) -> Res<String> {
+async fn open_in_terminal(name: String) -> Res<drovr_core::engine::Opened> {
     blocking(move |e| e.open_in_terminal(&name)).await
 }
 

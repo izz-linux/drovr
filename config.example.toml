@@ -149,7 +149,7 @@ font_family = ""              # empty: the app's monospace font; e.g. "MesloLGS 
 font_size = 13
 option_as_meta = false        # true: Option sends Esc+, like iTerm2's "Esc+" setting
 copy_on_select = true         # selecting text copies it, like iTerm2
-external = ""                 # Agents → Open in terminal; {script} resumes the session. Empty: open -a Terminal {script}
+external = ""                 # Agents → Open in terminal; {script} resumes the session, unquoted. Empty: open -a Terminal "{script}"
 # external = "osascript -e 'tell application \"iTerm\" to create window with default profile command \"/bin/zsh -l {script}\"'"
 
 [agent_queries]

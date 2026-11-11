@@ -66,6 +66,16 @@ pub struct Engine {
     cli: PathBuf,
 }
 
+/// What Open in terminal did.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Opened {
+    /// The agent is still running in this herdr pane, which is now shown.
+    Pane(String),
+    /// A terminal was opened with this script.
+    Terminal(String),
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NewAgent {
@@ -1884,17 +1894,38 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         ))
     }
 
-    /// Continue an agent's session in your own terminal, with
-    /// `terminal.external`. Returns the script it runs.
-    pub fn open_in_terminal(&self, name: &str) -> Result<String> {
-        let agent = self.agent(name)?;
-        if let Some(pane) = self.focus_live_pane(&agent)? {
-            return Ok(format!(
-                "{name} is still running in herdr pane {pane}; showed it there"
-            ));
+    /// Before you open an agent's session yourself: its live herdr pane,
+    /// shown and returned, when it has one; otherwise refused while it's
+    /// mid-run, so two sessions don't write to one conversation.
+    fn live_pane_or_idle(&self, agent: &Agent) -> Result<Option<String>> {
+        if let Some(pane) = self.focus_live_pane(agent)? {
+            return Ok(Some(pane));
         }
         if agent.run_state == "working" {
-            bail!("{name} is mid-run; stop it first so two sessions don't write to the same conversation");
+            bail!(
+                "{} is mid-run; stop it first so two sessions don't write to the same conversation",
+                agent.name
+            );
+        }
+        Ok(None)
+    }
+
+    /// The command Open in terminal runs: `terminal.external`, or a new
+    /// Terminal window.
+    fn terminal_template(&self) -> &str {
+        match self.cfg.terminal.external.trim() {
+            "" => "open -a Terminal \"{script}\"",
+            t => t,
+        }
+    }
+
+    /// Continue an agent's session in your own terminal, with
+    /// `terminal.external`. An agent still live in a herdr pane is shown
+    /// there instead.
+    pub fn open_in_terminal(&self, name: &str) -> Result<Opened> {
+        let agent = self.agent(name)?;
+        if let Some(pane) = self.live_pane_or_idle(&agent)? {
+            return Ok(Opened::Pane(pane));
         }
         let cmd = self.attach_command(name)?;
         let dir = home().join("agents").join(name);
@@ -1909,24 +1940,17 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
         }
-        let template = match self.cfg.terminal.external.trim() {
-            "" => "open -a Terminal {script}",
-            t => t,
-        };
         let path = script.display().to_string();
-        let line = shell::fill(template, &[("script", &path)], &["script"]);
+        let line = shell::fill(self.terminal_template(), &[("script", &path)], &["script"]);
         shell::sh(&line, None, None, Duration::from_secs(30))?.into_stdout("terminal.external")?;
-        Ok(path)
+        Ok(Opened::Terminal(path))
     }
 
     /// Open a headless agent's session interactively in a new herdr pane.
     pub fn open_in_herdr(&self, name: &str) -> Result<String> {
         let agent = self.agent(name)?;
-        if let Some(pane) = self.focus_live_pane(&agent)? {
+        if let Some(pane) = self.live_pane_or_idle(&agent)? {
             return Ok(pane);
-        }
-        if agent.run_state == "working" {
-            bail!("{name} is mid-run; stop it first so two sessions don't write to the same conversation");
         }
         let cmd = self.attach_command(name)?;
         let pane = self.herdr_split(&agent.cwd)?;
@@ -2945,8 +2969,27 @@ esac
         .unwrap();
         let mut cfg = Config::default();
         cfg.herdr.command = format!("sh {}", stub.display());
+        // Open in terminal logs the script it would open instead of opening one.
+        cfg.terminal.external = format!("echo terminal {{script}} >> {}", log.display());
         let store = Store::open(&dir.join("t.db")).unwrap();
         (Engine::with(store, cfg, "drovr".into()), log)
+    }
+
+    /// Opens agent `a`'s session, returning the pane it showed, or
+    /// `terminal` when a terminal was opened instead.
+    type Open = fn(&Engine) -> Result<String>;
+
+    /// Open in herdr and Open in terminal.
+    fn openers() -> [(&'static str, Open); 2] {
+        [
+            ("herdr", |e| e.open_in_herdr("a")),
+            ("terminal", |e| {
+                Ok(match e.open_in_terminal("a")? {
+                    Opened::Pane(pane) => pane,
+                    Opened::Terminal(_) => "terminal".into(),
+                })
+            }),
+        ]
     }
 
     fn add_herdr_test_agent(engine: &Engine, backend: &str, pane: &str, state: &str) -> Agent {
@@ -2966,15 +3009,19 @@ esac
 
     #[test]
     fn opening_a_live_herdr_agent_focuses_its_pane() {
-        for state in ["idle", "working"] {
-            let (engine, log) = engine_with_logging_herdr(&format!("live-{state}"), 0, 0);
-            add_herdr_test_agent(&engine, "herdr", "w1:p2", state);
-            assert_eq!(engine.open_in_herdr("a").unwrap(), "w1:p2", "{state}");
-            assert_eq!(
-                std::fs::read_to_string(&log).unwrap(),
-                "agent get w1:p2\nagent focus w1:p2\n",
-                "{state}"
-            );
+        for (how, open) in openers() {
+            for state in ["idle", "working"] {
+                let case = format!("live-{how}-{state}");
+                let (engine, log) = engine_with_logging_herdr(&case, 0, 0);
+                add_herdr_test_agent(&engine, "herdr", "w1:p2", state);
+                assert_eq!(open(&engine).unwrap(), "w1:p2", "{case}");
+                // Shown in its pane, and no terminal opened.
+                assert_eq!(
+                    std::fs::read_to_string(&log).unwrap(),
+                    "agent get w1:p2\nagent focus w1:p2\n",
+                    "{case}"
+                );
+            }
         }
     }
 
@@ -3007,14 +3054,51 @@ esac
 
     #[test]
     fn opening_a_working_agent_without_a_live_pane_is_refused() {
-        for (case, backend, get) in [("gone-busy", "herdr", 1), ("busy", "headless", 0)] {
-            let (engine, log) = engine_with_logging_herdr(case, get, 0);
-            add_herdr_test_agent(&engine, backend, "w1:p2", "working");
-            let err = engine.open_in_herdr("a").unwrap_err().to_string();
-            assert!(err.contains("mid-run"), "{case}: {err}");
-            let calls = std::fs::read_to_string(&log).unwrap_or_default();
-            assert!(!calls.contains("split"), "{case}: {calls}");
+        for (how, open) in openers() {
+            for (case, backend, get) in [("gone-busy", "herdr", 1), ("busy", "headless", 0)] {
+                let case = format!("{case}-{how}");
+                let (engine, log) = engine_with_logging_herdr(&case, get, 0);
+                add_herdr_test_agent(&engine, backend, "w1:p2", "working");
+                let err = open(&engine).unwrap_err().to_string();
+                assert!(err.contains("mid-run"), "{case}: {err}");
+                let calls = std::fs::read_to_string(&log).unwrap_or_default();
+                assert!(!calls.contains("split"), "{case}: {calls}");
+                assert!(!calls.contains("terminal"), "{case}: {calls}");
+            }
         }
+    }
+
+    #[test]
+    fn open_in_terminal_writes_a_script_that_resumes_the_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let (engine, log) = engine_with_logging_herdr("terminal-script", 0, 0);
+        add_herdr_test_agent(&engine, "headless", "", "idle");
+        engine.store.set_agent("a", "session_id", "s-1").unwrap();
+        let Opened::Terminal(script) = engine.open_in_terminal("a").unwrap() else {
+            panic!("expected a terminal");
+        };
+        let text = std::fs::read_to_string(&script).unwrap();
+        assert!(text.starts_with("#!/bin/zsh -l\ncd /tmp && "), "{text}");
+        assert!(text.contains("--resume s-1"), "{text}");
+        assert!(text.ends_with("exec \"${SHELL:-/bin/zsh}\" -l\n"), "{text}");
+        let mode = std::fs::metadata(&script).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+        // terminal.external ran, with the script's path filled in.
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            format!("terminal {script}\n")
+        );
+    }
+
+    #[test]
+    fn the_default_terminal_quotes_the_script() {
+        let dir = std::env::temp_dir().join(format!("drovr-term-default-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let engine = Engine::with(store, Config::default(), "drovr".into());
+        assert_eq!(engine.terminal_template(), "open -a Terminal \"{script}\"");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

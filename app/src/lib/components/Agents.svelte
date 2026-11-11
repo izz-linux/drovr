@@ -200,14 +200,20 @@
 
   async function openInTerminal() {
     if (!current) return;
-    await act(() => api.openInTerminal(current.name), `Opened ${current.name} in your terminal`);
+    const name = current.name;
+    const r = await act(() => api.openInTerminal(name));
+    if (r) toast(r.pane ? `${name} is still running in herdr pane ${r.pane}; showed it there` : `Opened ${name} in your terminal`);
   }
 
   async function copyAttach() {
     if (!current) return;
-    const cmd = await api.attachCommand(current.name);
-    await navigator.clipboard.writeText(cmd);
-    toast("Copied a command that continues this session in any terminal");
+    try {
+      const cmd = await api.attachCommand(current.name);
+      await navigator.clipboard.writeText(cmd);
+      toast("Copied a command that continues this session in any terminal");
+    } catch (e) {
+      toast(String(e));
+    }
   }
 
   // Enter sends; Shift+Enter adds a new line. Enter while an input method is

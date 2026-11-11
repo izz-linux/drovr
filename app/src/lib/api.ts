@@ -118,7 +118,8 @@ export const api = {
   removeGroup: (group: string) => invoke<string>("remove_group", { group }),
   attachCommand: (name: string) => invoke<string>("attach_command", { name }),
   openInHerdr: (name: string) => invoke<string>("open_in_herdr", { name }),
-  openInTerminal: (name: string) => invoke<string>("open_in_terminal", { name }),
+  /** `pane` when it's still live in herdr (shown there), `terminal` (its script) when a terminal opened. */
+  openInTerminal: (name: string) => invoke<{ pane?: string; terminal?: string }>("open_in_terminal", { name }),
   answer: (id: number, answer: string) => invoke<void>("inbox_answer", { id, answer }),
   reject: (id: number, reason: string) => invoke<void>("inbox_reject", { id, reason }),
   termWorkspace: (name: string) => invoke<string>("term_workspace", { name }),

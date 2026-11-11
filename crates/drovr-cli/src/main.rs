@@ -263,7 +263,15 @@ fn run() -> Result<()> {
                 Sources::with_progress(&engine.cfg, &progress).ask(&rest(&args, 1), None)?
             );
         }
-        "term" => println!("{}", engine.open_in_terminal(arg(&args, 1, "agent")?)?),
+        "term" => {
+            let name = arg(&args, 1, "agent")?;
+            match engine.open_in_terminal(name)? {
+                drovr_core::engine::Opened::Pane(pane) => {
+                    println!("{name} is still running in herdr pane {pane}; showed it there")
+                }
+                drovr_core::engine::Opened::Terminal(script) => println!("{script}"),
+            }
+        }
         "config" => println!(
             "{}",
             json!({ "config": drovr_core::config::config_path(), "home": drovr_core::config::home() })
