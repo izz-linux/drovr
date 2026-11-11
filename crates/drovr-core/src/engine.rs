@@ -2464,6 +2464,85 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_agents_ticket_is_its_own_else_its_groups() {
+        let dir = std::env::temp_dir().join(format!("drovr-ticket-of-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let engine = Engine::with(store, Config::default(), "drovr".into());
+        engine
+            .store
+            .add_group("g", "", "SRE-9", "/tmp", "g", false)
+            .unwrap();
+        engine
+            .store
+            .add_group("plain", "", "", "/tmp", "plain", false)
+            .unwrap();
+        for (ticket, group, want) in [
+            ("SRE-1", "g", "SRE-1"),
+            ("", "g", "SRE-9"),
+            ("", "plain", ""),
+            ("", "", ""),
+            // Several tickets: the first is where its reports go.
+            ("SRE-1, SRE-2", "", "SRE-1"),
+        ] {
+            let agent = Agent {
+                name: "a".into(),
+                ticket: ticket.into(),
+                group_name: group.into(),
+                ..Agent::default()
+            };
+            assert_eq!(engine.ticket_of(&agent), want, "{ticket:?} in {group:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_watcher_writes_a_ticket_event_once_with_a_tickets_folder() {
+        for (case, tickets, files) in [("one", true, 1), ("each", false, 2)] {
+            let dir = std::env::temp_dir()
+                .join(format!("drovr-watch-once-{}-{case}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut cfg = Config::default();
+            cfg.workflow.enabled = true;
+            cfg.reports.dir = dir.join("plans").display().to_string();
+            if tickets {
+                cfg.reports.tickets_dir = dir.join("tickets").display().to_string();
+            }
+            let store = Store::open(&dir.join("t.db")).unwrap();
+            let engine = Engine::with(store, cfg, "drovr".into());
+            // Two groups worked the same ticket.
+            for g in ["g1", "g2"] {
+                engine
+                    .store
+                    .add_group(g, "", "SRE-5", "/tmp", g, true)
+                    .unwrap();
+            }
+            engine.record_ticket("SRE-5", "jira_changed", json!({ "status": "In Review" }));
+
+            let mut records = vec![];
+            let mut stack = vec![dir.clone()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    if e.path().is_dir() {
+                        stack.push(e.path());
+                    } else if e.file_name() == "ledger.jsonl" {
+                        records.push(std::fs::read_to_string(e.path()).unwrap());
+                    }
+                }
+            }
+            // With a tickets folder, one record with the event once; without,
+            // each group's folder has its own, as before.
+            assert_eq!(records.len(), files, "{case}: {records:?}");
+            for r in &records {
+                assert_eq!(r.lines().count(), 1, "{case}: {r}");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
     fn an_agent_runs_on_its_model_then_its_stages_then_the_default() {
         let mut cfg = Config::default();
         cfg.stages
