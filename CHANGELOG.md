@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/izz-linux/drovr/compare/v0.11.0...v0.11.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* give the phone page drovr's icon on the Home Screen ([#50](https://github.com/izz-linux/drovr/issues/50)) ([7ad014e](https://github.com/izz-linux/drovr/commit/7ad014e728156f9063771541b030a1d7c1ab0e63))
+
 ## [0.11.0](https://github.com/izz-linux/drovr/compare/v0.10.3...v0.11.0) (2026-11-11)
 
 
