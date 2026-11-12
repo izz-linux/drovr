@@ -118,6 +118,7 @@ export const api = {
   removeGroup: (group: string) => invoke<string>("remove_group", { group }),
   attachCommand: (name: string) => invoke<string>("attach_command", { name }),
   openInHerdr: (name: string) => invoke<string>("open_in_herdr", { name }),
+  archiveReport: (path: string) => invoke<string>("archive_report", { path }),
   answer: (id: number, answer: string) => invoke<void>("inbox_answer", { id, answer }),
   reject: (id: number, reason: string) => invoke<void>("inbox_reject", { id, reason }),
   termWorkspace: (name: string) => invoke<string>("term_workspace", { name }),

@@ -711,6 +711,17 @@ async fn report_seen(path: String) -> Res<()> {
     blocking(move |e| e.store.mark_report_seen(&path)).await
 }
 
+/// Move a report into the `archive/` folder beside it.
+#[tauri::command]
+async fn archive_report(path: String) -> Res<String> {
+    blocking(move |e| {
+        Ok(drovr_core::reports::archive(&e.cfg, &e.store, &path)?
+            .display()
+            .to_string())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn reports_all_seen() -> Res<()> {
     blocking(|e| e.store.mark_all_reports_seen()).await
@@ -948,6 +959,7 @@ pub fn run() {
             remove_group,
             attach_command,
             open_in_herdr,
+            archive_report,
             inbox_answer,
             inbox_reject,
             inbox_mark_ran,

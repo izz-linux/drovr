@@ -236,6 +236,43 @@ fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
     out
 }
 
+/// Archived reports go in a `.archive/` folder beside them. Dot-folders
+/// aren't listed, and a group can't be named that, so none is hidden by it.
+pub const ARCHIVE: &str = ".archive";
+
+/// Move a listed report into the `archive/` folder beside it. Returns where
+/// it went.
+pub fn archive(cfg: &Config, store: &Store, path: &str) -> Result<PathBuf> {
+    let from = PathBuf::from(path);
+    if !report_files(&cfg.reports.path())
+        .iter()
+        .any(|(p, _)| p == &from)
+    {
+        anyhow::bail!("{path} isn't a report drovr lists");
+    }
+    let dir = from.parent().unwrap_or(Path::new(".")).join(ARCHIVE);
+    std::fs::create_dir_all(&dir)?;
+    let mut to = dir.join(from.file_name().unwrap_or_default());
+    let stem = to
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let ext = to
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut n = 2;
+    while to.exists() {
+        to = dir.join(format!("{stem}-{n}.{ext}"));
+        n += 1;
+    }
+    std::fs::rename(&from, &to)?;
+    store.forget_report(path)?;
+    Ok(to)
+}
+
 /// `folder` as it's spelled on disk. A disk that ignores case treats `sre-1`
 /// and `SRE-1` as one folder, but paths compare as text, so a report has to be
 /// recorded under the spelling the list reads back.
@@ -681,6 +718,44 @@ mod tests {
             b
         );
         assert!(!a.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archiving_takes_a_report_out_of_the_list() {
+        let dir = std::env::temp_dir().join(format!("drovr-archive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+        let p = publish(&cfg, &store, "g", "lead", "Plan", "s", "<p>x</p>", false).unwrap();
+        let to = archive(&cfg, &store, &p.display().to_string()).unwrap();
+        assert!(to.ends_with("plans/g/.archive/plan.html"));
+        assert!(list(&cfg, &store).unwrap().is_empty());
+        assert!(archive(&cfg, &store, "/etc/hosts").is_err());
+
+        // A second report by the same name gets a suffix, keeping its extension.
+        let htm = dir.join("plans/g/plan.htm");
+        std::fs::write(&htm, "<p>y</p>").unwrap();
+        std::fs::write(dir.join("plans/g/.archive/plan.htm"), "old").unwrap();
+        let to = archive(&cfg, &store, &htm.display().to_string()).unwrap();
+        assert!(to.ends_with("plans/g/.archive/plan-2.htm"), "{to:?}");
+
+        // A solo report in the plans folder itself archives beside it.
+        let solo = publish(&cfg, &store, "", "api", "Notes", "s", "<p>z</p>", false).unwrap();
+        let to = archive(&cfg, &store, &solo.display().to_string()).unwrap();
+        assert!(to.ends_with("plans/.archive/notes.html"), "{to:?}");
+        assert!(list(&cfg, &store).unwrap().is_empty());
+
+        // A group named `archive` keeps its reports.
+        let g = publish(
+            &cfg, &store, "archive", "lead", "Kept", "s", "<p>k</p>", false,
+        )
+        .unwrap();
+        let files = list(&cfg, &store).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, g.display().to_string());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
