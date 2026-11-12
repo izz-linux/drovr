@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS report_meta (
     seen INTEGER NOT NULL DEFAULT 0,
     title TEXT NOT NULL DEFAULT ''
 );
+-- Small settings the app keeps for you, e.g. when you last cleared the Inbox.
+CREATE TABLE IF NOT EXISTS prefs (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS notes (
     group_name TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -174,6 +179,8 @@ pub struct Item {
     pub status: String,
     pub answer: String,
     pub delivered: bool,
+    /// When it was resolved; None while it's pending.
+    pub answered_ts: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +247,7 @@ fn item_row(r: &Row) -> rusqlite::Result<Item> {
         status: r.get("status")?,
         answer: r.get("answer")?,
         delivered: r.get::<_, i64>("delivered")? != 0,
+        answered_ts: r.get("answered_ts")?,
     })
 }
 
@@ -435,6 +443,24 @@ impl Store {
         Ok(self.agent(name)?.map(|a| a.runs))
     }
 
+    pub fn pref(&self, key: &str) -> Result<String> {
+        Ok(self
+            .db
+            .query_row("SELECT value FROM prefs WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    pub fn set_pref(&self, key: &str, value: &str) -> Result<()> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO prefs (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     pub fn remove_agent(&self, name: &str) -> Result<()> {
         self.db
             .execute("DELETE FROM agents WHERE name = ?1", [name])?;
@@ -557,6 +583,17 @@ impl Store {
              ORDER BY id",
         )?;
         let rows = stmt.query_map(params![status, limit], item_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Resolved items newer than `since` (when they were resolved, or made
+    /// when that's unknown), newest first: the Inbox's history after Clear.
+    pub fn resolved_since(&self, since: f64, limit: i64) -> Result<Vec<Item>> {
+        let mut stmt = self.db.prepare(
+            "SELECT * FROM inbox WHERE status != 'pending' AND COALESCE(answered_ts, ts) > ?1 \
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![since, limit], item_row)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -699,6 +736,65 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_hides_what_was_resolved_before_it() {
+        let dir = std::env::temp_dir().join(format!("drovr-resolved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let st = Store::open(&dir.join("t.db")).unwrap();
+        // (made, resolved, status): resolved before Clear at 50, made before
+        // it but resolved after, still pending, and resolved with no time.
+        let cases = [
+            (10.0, Some(20.0), "done"),
+            (30.0, Some(60.0), "done"),
+            (70.0, None, "pending"),
+            (80.0, None, "dismissed"),
+        ];
+        for (i, (ts, answered, status)) in cases.iter().enumerate() {
+            let id = st
+                .add_item(
+                    "api",
+                    "decision",
+                    &format!("item {i}"),
+                    "",
+                    &[],
+                    &Value::Null,
+                )
+                .unwrap();
+            st.db
+                .execute(
+                    "UPDATE inbox SET ts = ?1, answered_ts = ?2, status = ?3 WHERE id = ?4",
+                    params![ts, answered, status, id],
+                )
+                .unwrap();
+        }
+        let titles = |items: Vec<Item>| items.into_iter().map(|i| i.title).collect::<Vec<_>>();
+        assert_eq!(
+            titles(st.resolved_since(50.0, 30).unwrap()),
+            ["item 3", "item 1"]
+        );
+        // Never cleared: everything resolved, newest first, up to the limit.
+        assert_eq!(
+            titles(st.resolved_since(0.0, 30).unwrap()),
+            ["item 3", "item 1", "item 0"]
+        );
+        assert_eq!(titles(st.resolved_since(0.0, 1).unwrap()), ["item 3"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefs_keep_the_last_value() {
+        let dir = std::env::temp_dir().join(format!("drovr-prefs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let st = Store::open(&dir.join("t.db")).unwrap();
+        assert_eq!(st.pref("inbox_cleared").unwrap(), "");
+        st.set_pref("inbox_cleared", "12.5").unwrap();
+        st.set_pref("inbox_cleared", "13").unwrap();
+        assert_eq!(st.pref("inbox_cleared").unwrap(), "13");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn queued_messages_until_read() {

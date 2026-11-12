@@ -69,14 +69,9 @@ async fn snapshot() -> Res<Snapshot> {
                 agent: a,
             })
             .collect();
-        let recent = e
-            .store
-            .items(None, 60)?
-            .into_iter()
-            .filter(|i| i.status != "pending")
-            .rev()
-            .take(30)
-            .collect();
+        // Clear in the Inbox hides what was resolved before it.
+        let cleared: f64 = e.store.pref("inbox_cleared")?.parse().unwrap_or(0.0);
+        let recent = e.store.resolved_since(cleared, 30)?;
         Ok(Snapshot {
             agents,
             groups: e.store.groups()?,
@@ -399,6 +394,16 @@ async fn attach_command(name: String) -> Res<String> {
 #[tauri::command]
 async fn open_in_herdr(name: String) -> Res<String> {
     blocking(move |e| e.open_in_herdr(&name)).await
+}
+
+/// Hide everything resolved so far from the Inbox's history.
+#[tauri::command]
+async fn clear_resolved() -> Res<()> {
+    blocking(|e| {
+        e.store
+            .set_pref("inbox_cleared", &drovr_core::store::now().to_string())
+    })
+    .await
 }
 
 // -- inbox --------------------------------------------------------------------
@@ -948,6 +953,7 @@ pub fn run() {
             remove_group,
             attach_command,
             open_in_herdr,
+            clear_resolved,
             inbox_answer,
             inbox_reject,
             inbox_mark_ran,
