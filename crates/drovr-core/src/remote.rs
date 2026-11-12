@@ -27,6 +27,13 @@ const INDEX: &str = include_str!("remote/index.html");
 const APP_JS: &str = include_str!("remote/app.js");
 const APP_CSS: &str = include_str!("remote/app.css");
 const MANIFEST: &str = include_str!("remote/manifest.json");
+/// The app's icon, for browser tabs.
+const FAVICON: &str = include_str!("remote/favicon.svg");
+/// Full-bleed and opaque, cut from `remote/touch-icon.svg`: iOS rounds the
+/// corners itself, and draws transparent ones black.
+const TOUCH_ICON: &[u8] = include_bytes!("remote/apple-touch-icon.png");
+const ICON_192: &[u8] = include_bytes!("remote/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("remote/icon-512.png");
 const COOKIE: &str = "drovr_remote";
 /// The most a request body may be: prompts and answers, not uploads.
 const MAX_BODY: u64 = 1 << 20;
@@ -253,6 +260,14 @@ fn page(ctype: &str, body: &str) -> Resp {
         .with_header(header("X-Frame-Options", "DENY"))
 }
 
+/// An icon: public, like the page itself, and fine to cache.
+fn icon(png: &'static [u8]) -> Resp {
+    Response::from_data(png.to_vec())
+        .with_header(header("Content-Type", "image/png"))
+        .with_header(header("X-Content-Type-Options", "nosniff"))
+        .with_header(header("Cache-Control", "public, max-age=86400"))
+}
+
 fn json_reply(status: u16, v: &Value) -> Resp {
     reply(status, "application/json", v.to_string())
 }
@@ -264,6 +279,12 @@ fn route(req: &mut Request, path: &str, q: &HashMap<String, String>, st: &State)
         "/app.js" if get => page("text/javascript; charset=utf-8", APP_JS),
         "/app.css" if get => page("text/css; charset=utf-8", APP_CSS),
         "/manifest.json" if get => page("application/manifest+json", MANIFEST),
+        "/favicon.svg" if get => page("image/svg+xml", FAVICON),
+        // iOS asks for /apple-touch-icon.png when you add the page to the
+        // Home Screen, before (and even without) reading the page's link.
+        "/apple-touch-icon.png" | "/apple-touch-icon-precomposed.png" if get => icon(TOUCH_ICON),
+        "/icon-192.png" if get => icon(ICON_192),
+        "/icon-512.png" if get => icon(ICON_512),
         "/login" if get => login(q.get("token").map(String::as_str).unwrap_or(""), st),
         p if get && p.starts_with("/plans/") => plans_file(&p["/plans/".len()..], st),
         p if p.starts_with("/api/") => {
@@ -880,6 +901,20 @@ mod tests {
         let n = item_note(&r, &i, "http://m:1");
         assert!(!n.message.contains("Bash"));
         assert_eq!(n.title, "drovr");
+    }
+
+    #[test]
+    fn icons_are_the_sizes_they_claim() {
+        // A PNG's width and height are big-endian at bytes 16..24.
+        let size = |png: &[u8]| {
+            assert_eq!(&png[1..4], b"PNG");
+            let n = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+            (n(&png[16..20]), n(&png[20..24]))
+        };
+        assert_eq!(size(TOUCH_ICON), (180, 180));
+        assert_eq!(size(ICON_192), (192, 192));
+        assert_eq!(size(ICON_512), (512, 512));
+        assert!(INDEX.contains(r#"rel="apple-touch-icon" href="/apple-touch-icon.png""#));
     }
 
     #[test]
