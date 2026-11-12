@@ -8,7 +8,7 @@ A lightweight macOS desktop cockpit (Tauri + Svelte) for running Claude Code age
 
 - **One inbox:** agents bring you their decisions, proposed commands and permission requests there.
 - **Agents coordinate:** they message each other directly when their work overlaps.
-- **Reports:** agents save HTML reports for you to review in `~/.claude/plans/`.
+- **Reports:** agents save HTML reports for you to review in `~/.claude/plans/`, or with `reports.tickets_dir` set, each ticket's in its own folder beside your notes.
 - **Where agents run:** drovr runs them itself, or in [herdr](https://herdr.dev) panes next to your terminal.
 - **Which CLI runs them:** Claude Code, or OpenAI's Codex CLI (experimental). See [Harnesses](#harnesses-claude-code-and-codex).
 - **A ticket workflow (optional, off by default):** a record and timeline of each ticket's work, a watcher that follows your sprint and its PRs, stages with handoffs you approve, Jira and Confluence updates you review before they're posted, and a retro you start. One switch, `workflow.enabled`; see [The record](#the-record-timeline).
@@ -236,6 +236,7 @@ Answering wakes the agent if it's idle.
 Reports are everything you need to look at and review, saved as HTML in `~/.claude/plans/` (change with `reports.dir`). Links in reports, agent output and the Inbox open in your default browser, never inside drovr.
 
 - **Where agents save:** agents publish with the `publish_report` tool. A group's reports go in `~/.claude/plans/<group>/`, so all the plans and designs for one piece of work stay together. A solo agent's go in the root folder. Agents are asked to give reports light and dark colors with `prefers-color-scheme`, so a report follows your macOS appearance rather than the theme chosen in drovr.
+- **A folder per ticket:** set `reports.tickets_dir` (say `~/notes/tickets`) and an agent working a ticket, its own or its group's, publishes to `<tickets_dir>/<ticket>/` instead (the key lowercased, `sre-3330/`). The ticket's record and handoffs go there too, so everything about one ticket sits in one folder, whichever group worked it. An agent with several tickets records to each, and publishes its reports to the first one's folder. The Reports view lists those folders beside the plans folder's. Records written before you set it stay in `plans/<group>/<TICKET>/`; the timeline still merges them, and you can move those folders into `tickets_dir` (lowercased) so each ticket has one.
 - **Revisions replace:** when any agent publishes a title that's already in that folder, the new version replaces the newest copy's file and shows as unread again, and any older copies of it are deleted. Titles match ignoring case and punctuation, on the title they were published under or the page's `<title>`. Files you put in the folder yourself are never replaced. An agent keeps the earlier version (`keep_versions`) only when you ask it to; those copies fold under the newest one as **earlier versions**.
 - **Order:** newest first, in each folder and across folders.
 - **What the view lists:** every `.html` file in the folder and its subfolders, including ones you or other tools put there. They're grouped by folder, newest first.
@@ -263,7 +264,7 @@ drovr keeps a record of everything that happens on a ticket, so you can look bac
 
 **It's off by default, as one switch:** `workflow.enabled = true` (in `[workflow]`) turns on the whole ticket workflow together: the record and timeline, agents' `record_decision` and `draft_jira_update` tools, the watcher and Pipeline (⌘9), stages in groups created from then on, and the retro. Set it back to `false` and drovr works exactly as before: nothing more is recorded or polled, agents get the old tools from their next run, and the timeline buttons and Pipeline go away. Records already written stay on disk. The switch takes effect when you save it in Settings; agents pick it up on their next run.
 
-The record is plain files: `ledger.jsonl` in the ticket's own folder, one JSON event per line, only ever appended to. The folder is in the group's plans folder (`~/.claude/plans/<group>/<TICKET>/`), or in the plans folder itself for a solo agent's ticket (`~/.claude/plans/<TICKET>/`). You can read the file in any editor, keep it in git, or hand it to an agent.
+The record is plain files: `ledger.jsonl` in the ticket's own folder, one JSON event per line, only ever appended to. The folder is in the group's plans folder (`~/.claude/plans/<group>/<TICKET>/`), or in the plans folder itself for a solo agent's ticket (`~/.claude/plans/<TICKET>/`). With `reports.tickets_dir` set it's `<tickets_dir>/<ticket>/` for everyone. You can read the file in any editor, keep it in git, or hand it to an agent.
 
 - **Which agents:** an agent's events go to its own tickets (its **Ticket** field, e.g. `SRE-3230, SRE-3253`), or to its group's ticket when it has none. An agent with no ticket has no record.
 - **What's recorded:**
@@ -579,7 +580,7 @@ The CLI that runs an agent is its harness. Everything that depends on one CLI is
 
 Agents read text other people write (tickets, pages, Slack messages), and that text can try to steer them. drovr limits what a misled agent, or a page it wrote, can do:
 
-- **Files previews and the window can load:** the app's asset protocol serves only the plans folder and the repos you open in Code review, never the rest of your disk. Previews themselves aren't sandboxed, so a report's scripts can read other files in those places.
+- **Files previews and the window can load:** the app's asset protocol serves only the plans folder (and `reports.tickets_dir`, when set) and the repos you open in Code review, never the rest of your disk. Previews themselves aren't sandboxed, so a report's scripts can read other files in those places. So point `tickets_dir` at a folder of its own, not your whole notes folder or home.
 - **Content security policy:** the window loads only drovr's own scripts and styles, and no remote images, so Markdown in agent output (`![](https://…?data=…)`) can't send what an agent read to someone else's server.
 - **Opening files:** **Open in browser** and **Show folder** open only HTML pages and plain folders in those places, never an app, a script or a `.command` file.
 - **Agents' tools:** `WebFetch` isn't auto-allowed: with `Read` also allowed, an agent could otherwise send any file anywhere without asking.
@@ -670,6 +671,7 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `datadog.pup` | `false` | Agents query Datadog with `pup`: read-only pup commands run without asking (with `--read-only` added), writes come to the Inbox (see [Datadog](#datadog)) |
 | `datadog.site` | `""` | Your Datadog site if it isn't US1, e.g. `"us5.datadoghq.com"`; passed to agents and lookups as `DD_SITE` |
 | `memory.dir` | `""` | An auto memory folder every Claude Code agent reads, wherever it works; leads and solo agents write it, and workers send what's worth keeping to their lead (see [Shared memory](#shared-memory)). Empty: Claude Code's own memory per project |
+| `reports.tickets_dir` | `""` | When set, a ticket's reports, record and handoffs go in `<tickets_dir>/<ticket>/` |
 | `[herdr]` | herdr's documented CLI | The herdr command templates (see below) |
 | `jira`, `confluence`, `slack` | `provider = "agent"` | How lookups reach each service (see below) |
 | `jira.default_query` | your open tickets | The JQL the Jira view lists when its search box is empty. Jira only: Confluence and Slack don't use it |
@@ -751,7 +753,7 @@ If your herdr version takes different arguments, edit these templates instead of
 | Worktrees (if `defaults.worktrees`) | `~/.local/share/drovr/worktrees/<name>/` |
 | The phone page's access token (if `remote.token` is empty) | `~/.local/share/drovr/remote-token` |
 | Reports | `~/.claude/plans/` (`<group>/` for groups) |
-| A ticket's record | `~/.claude/plans/<group>/<TICKET>/ledger.jsonl` (`~/.claude/plans/<TICKET>/` for a solo agent) |
+| A ticket's record | `~/.claude/plans/<group>/<TICKET>/ledger.jsonl` (`~/.claude/plans/<TICKET>/` for a solo agent; `<tickets_dir>/<ticket>/` when `reports.tickets_dir` is set) |
 | Saved theme | `~/Library/Application Support/com.drovr.cockpit/session.json` (the app's identifier is `com.drovr.cockpit`; before 1.0.0 it was `com.drovr.app`, and drovr moves that folder's contents over on first launch) |
 
 **Removing an agent** deletes its folder under `agents/`. It leaves its worktree, its branch, its reports and its tickets' records in place.

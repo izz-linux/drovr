@@ -2,7 +2,9 @@
 //!
 //! The folder is the source of truth: every `.html` file in it, or in one
 //! level of subfolders, is a report, whoever wrote it. A group's reports go in
-//! `<plans>/<group>/`, a solo agent's in `<plans>/` itself.
+//! `<plans>/<group>/`, a solo agent's in `<plans>/` itself. With
+//! `reports.tickets_dir` set, a ticket's go in its folder there instead, and
+//! those folders are listed too.
 
 use crate::config::Config;
 use crate::engine::slug;
@@ -15,8 +17,11 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportFile {
     pub path: String,
-    /// Subfolder under the plans folder; empty for the root.
+    /// Subfolder under the plans folder (or the tickets folder); empty for
+    /// the root.
     pub folder: String,
+    /// The folder it's in.
+    pub dir: String,
     pub title: String,
     pub modified: f64,
     /// Set when an agent published it through drovr.
@@ -51,8 +56,11 @@ fn folder_path(cfg: &Config, folder: &str) -> Result<PathBuf> {
 /// Write `html` to `folder` inside the plans folder (the root when empty)
 /// under a name derived from `title`, never overwriting another report.
 pub fn save(cfg: &Config, folder: &str, title: &str, html: &str) -> Result<PathBuf> {
-    let dir = folder_path(cfg, folder)?;
-    std::fs::create_dir_all(&dir)?;
+    save_in(&folder_path(cfg, folder)?, title, html)
+}
+
+fn save_in(dir: &Path, title: &str, html: &str) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
     let base = slug(title);
     let mut path = dir.join(format!("{base}.html"));
     let mut n = 2;
@@ -81,18 +89,44 @@ pub fn publish(
     html: &str,
     keep_versions: bool,
 ) -> Result<PathBuf> {
+    let dir = dir_for(cfg, folder, "")?;
+    publish_in(cfg, store, &dir, agent, title, summary, html, keep_versions)
+}
+
+/// Where reports go: `ticket`'s folder in the tickets folder when that's set
+/// and there's a ticket, else `folder` inside the plans folder, spelled as it
+/// is on disk.
+pub fn dir_for(cfg: &Config, folder: &str, ticket: &str) -> Result<PathBuf> {
+    if !ticket.is_empty() {
+        if let Some(d) = cfg.reports.ticket_path(ticket) {
+            check_folder(ticket)?;
+            return Ok(d);
+        }
+    }
     folder_path(cfg, folder)?;
-    let root = cfg.reports.path();
-    repair_paths(store, &report_files(&root))?;
     let folder = if folder.is_empty() {
         String::new()
     } else {
-        disk_folder(&root, folder)
+        disk_folder(&cfg.reports.path(), folder)
     };
-    let folder = folder.as_str();
-    let dir = folder_path(cfg, folder)?;
+    folder_path(cfg, &folder)
+}
+
+/// [`publish`] into `dir`, from [`dir_for`].
+#[allow(clippy::too_many_arguments)]
+pub fn publish_in(
+    cfg: &Config,
+    store: &Store,
+    dir: &Path,
+    agent: &str,
+    title: &str,
+    summary: &str,
+    html: &str,
+    keep_versions: bool,
+) -> Result<PathBuf> {
+    repair_paths(store, &report_files(cfg))?;
     let path = if keep_versions {
-        save(cfg, folder, title, html)?
+        save_in(dir, title, html)?
     } else {
         let keys: Vec<String> = [Some(title.to_string()), title_in(html)]
             .into_iter()
@@ -107,7 +141,7 @@ pub fn publish(
             .filter(|m| !m.agent.is_empty())
             .map(|m| (PathBuf::from(&m.path), m.title))
             .filter(|(p, t)| {
-                p.parent() == Some(dir.as_path())
+                p.parent() == Some(dir)
                     && p.is_file()
                     && [t.clone(), title_of(p)]
                         .iter()
@@ -126,7 +160,7 @@ pub fn publish(
                 }
                 newest.clone()
             }
-            None => save(cfg, folder, title, html)?,
+            None => save_in(dir, title, html)?,
         }
     };
     store.publish_report(&path.display().to_string(), agent, title, summary)?;
@@ -189,7 +223,7 @@ fn title_in(html: &str) -> Option<String> {
 }
 
 pub fn list(cfg: &Config, store: &Store) -> Result<Vec<ReportFile>> {
-    let files = report_files(&cfg.reports.path());
+    let files = report_files(cfg);
     repair_paths(store, &files)?;
     let meta: Vec<ReportMeta> = store.report_meta()?;
     let mut out: Vec<ReportFile> = files
@@ -200,6 +234,10 @@ pub fn list(cfg: &Config, store: &Store) -> Result<Vec<ReportFile>> {
             ReportFile {
                 title: title_of(&path),
                 folder,
+                dir: path
+                    .parent()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default(),
                 modified: modified(&path),
                 agent: m.map(|m| m.agent.clone()).unwrap_or_default(),
                 summary: m.map(|m| m.summary.clone()).unwrap_or_default(),
@@ -213,8 +251,9 @@ pub fn list(cfg: &Config, store: &Store) -> Result<Vec<ReportFile>> {
 }
 
 /// The HTML files the Reports list shows, each with its subfolder (empty for
-/// the plans folder itself).
-fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
+/// the plans folder itself), the tickets folder's included.
+fn report_files(cfg: &Config) -> Vec<(PathBuf, String)> {
+    let root = &cfg.reports.path();
     let mut out = vec![];
     let mut visit = |dir: &Path, folder: &str| {
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -225,11 +264,15 @@ fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
         }
     };
     visit(root, "");
-    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        if entry.path().is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') {
-                visit(&entry.path(), &name);
+    // The tickets folder's own notes aren't reports; its ticket folders are.
+    let tickets = cfg.reports.tickets_path();
+    for parent in std::iter::once(root).chain(tickets.as_ref()) {
+        for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+            if entry.path().is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.starts_with('.') {
+                    visit(&entry.path(), &name);
+                }
             }
         }
     }
@@ -681,6 +724,54 @@ mod tests {
             b
         );
         assert!(!a.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tickets_reports_go_in_its_folder() {
+        let dir = std::env::temp_dir().join(format!("drovr-ticket-reports-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = Config::default();
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        cfg.reports.tickets_dir = dir.join("tickets").display().to_string();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("t.db")).unwrap();
+
+        let to = dir_for(&cfg, "sre-3330", "SRE-3330").unwrap();
+        assert_eq!(to, dir.join("tickets/sre-3330"));
+        let p = publish_in(
+            &cfg,
+            &store,
+            &to,
+            "lead",
+            "Blueprint",
+            "s",
+            "<p>b</p>",
+            false,
+        )
+        .unwrap();
+        assert!(p.ends_with("tickets/sre-3330/blueprint.html"));
+        // A revision replaces it there, as in the plans folder.
+        let again = publish_in(
+            &cfg,
+            &store,
+            &to,
+            "lead",
+            "Blueprint",
+            "s",
+            "<p>c</p>",
+            false,
+        );
+        assert_eq!(again.unwrap(), p);
+        // Without a ticket it's the group's plans folder, as before.
+        assert_eq!(dir_for(&cfg, "g", "").unwrap(), dir.join("plans/g"));
+        assert!(dir_for(&cfg, "", "../x").is_err());
+        // Notes beside the ticket folders aren't listed.
+        std::fs::write(dir.join("tickets/notes.html"), "x").unwrap();
+        let files = list(&cfg, &store).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].folder, "sre-3330");
+        assert_eq!(files[0].dir, to.display().to_string());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

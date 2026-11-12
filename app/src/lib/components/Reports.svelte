@@ -103,8 +103,6 @@
     await act(() => api.prompt(target, msg), `Sent to ${target}`);
     feedback = "";
   }
-
-  const folderPath = (folder: string) => (folder ? `${dir}/${folder}` : dir);
 </script>
 
 {#snippet item(f: ReportFile, old: boolean)}
@@ -163,7 +161,7 @@
         <strong class="grow t" title={current.path}>{current.title}</strong>
         <button onclick={() => frameKey++}>Reload</button>
         <button onclick={() => api.openPath(current!.path).catch((e) => toast(String(e)))}>Open in browser</button>
-        <button onclick={() => api.openPath(folderPath(current!.folder)).catch((e) => toast(String(e)))}>Show folder</button>
+        <button onclick={() => api.openPath(current!.dir).catch((e) => toast(String(e)))}>Show folder</button>
       </div>
       {#key frameKey}<iframe title={current.title} src={api.fileSrc(current.path)}></iframe>{/key}
       <form class="row bar foot" onsubmit={(e) => { e.preventDefault(); sendFeedback(); }}>

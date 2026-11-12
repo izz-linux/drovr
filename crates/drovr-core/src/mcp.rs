@@ -637,11 +637,10 @@ impl Server {
                 } else {
                     bail!("pass either html or path");
                 };
-                let folder = self.engine.plans_folder(&me.group_name)?;
-                let path = crate::reports::publish(
+                let path = crate::reports::publish_in(
                     &self.engine.cfg,
                     st,
-                    &folder,
+                    &self.engine.reports_dir(&me)?,
                     &me.name,
                     &title,
                     &s("summary"),

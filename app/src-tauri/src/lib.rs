@@ -636,10 +636,16 @@ async fn push_github_moved(
 /// Every ticket with a record, most recently updated first.
 #[tauri::command]
 async fn records(app: tauri::AppHandle) -> Res<Vec<drovr_core::ledger::Record>> {
-    let (dir, list) =
-        blocking(|e| Ok((e.cfg.reports.path(), drovr_core::ledger::list(&e.cfg)))).await?;
+    let (dirs, list) = blocking(|e| {
+        let mut dirs = vec![e.cfg.reports.path()];
+        dirs.extend(e.cfg.reports.tickets_path());
+        Ok((dirs, drovr_core::ledger::list(&e.cfg)))
+    })
+    .await?;
     // So Show folder can open a ticket's folder.
-    allow_previews(&app, &dir);
+    for dir in &dirs {
+        allow_previews(&app, dir);
+    }
     Ok(list)
 }
 
@@ -690,6 +696,8 @@ async fn decide_proposal(dir: String, id: String, approve: bool) -> Res<String> 
 #[derive(Serialize)]
 struct Reports {
     dir: String,
+    /// The tickets folder; empty when tickets' reports stay in `dir`.
+    tickets_dir: String,
     files: Vec<ReportFile>,
 }
 
@@ -698,11 +706,20 @@ async fn reports(app: tauri::AppHandle) -> Res<Reports> {
     let reports = blocking(|e| {
         Ok(Reports {
             dir: e.cfg.reports.path().display().to_string(),
+            tickets_dir: e
+                .cfg
+                .reports
+                .tickets_path()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default(),
             files: drovr_core::reports::list(&e.cfg, &e.store)?,
         })
     })
     .await?;
     allow_previews(&app, Path::new(&reports.dir));
+    if !reports.tickets_dir.is_empty() {
+        allow_previews(&app, Path::new(&reports.tickets_dir));
+    }
     Ok(reports)
 }
 

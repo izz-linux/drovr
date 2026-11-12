@@ -32,7 +32,7 @@ export type Item = {
   options: string[]; payload: any; status: string; answer: string; delivered: boolean;
 };
 export type Snapshot = { agents: Agent[]; groups: Group[]; inbox: Item[]; recent: Item[]; unseen_reports: number; herdr: boolean; codex: boolean };
-export type ReportFile = { path: string; folder: string; title: string; modified: number; agent: string; summary: string; seen: boolean };
+export type ReportFile = { path: string; folder: string; dir: string; title: string; modified: number; agent: string; summary: string; seen: boolean };
 export type Line = { kind: string; text: string };
 export type Message = { id: number; ts: number; sender: string; recipient: string; group_name: string; body: string };
 /** A ticket with a record (`ledger.jsonl`) in the plans folder. */
@@ -153,7 +153,7 @@ export const api = {
   configInfo: () => invoke<{ path: string; home: string; text: string; effective: string }>("config_info"),
   saveConfig: (text: string) => invoke<void>("save_config", { text }),
   remoteInfo: () => invoke<RemoteInfo>("remote_info"),
-  reports: () => invoke<{ dir: string; files: ReportFile[] }>("reports"),
+  reports: () => invoke<{ dir: string; tickets_dir: string; files: ReportFile[] }>("reports"),
   reportSeen: (path: string) => invoke<void>("report_seen", { path }),
   reportsAllSeen: () => invoke<void>("reports_all_seen"),
   openUrl: (url: string) => openUrl(url),

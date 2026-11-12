@@ -465,12 +465,17 @@ pub struct Source {
 #[serde(default)]
 pub struct Reports {
     pub dir: String,
+    /// When set, a ticket's work goes in `<tickets_dir>/<ticket>/` (the key
+    /// lowercased): its reports, its record and its handoffs, whichever group
+    /// or agent works it. Empty keeps them in `dir` with everything else.
+    pub tickets_dir: String,
 }
 
 impl Default for Reports {
     fn default() -> Self {
         Reports {
             dir: "~/.claude/plans".into(),
+            tickets_dir: String::new(),
         }
     }
 }
@@ -519,6 +524,21 @@ impl Terminal {
 impl Reports {
     pub fn path(&self) -> PathBuf {
         PathBuf::from(expand_tilde(&self.dir))
+    }
+
+    /// The tickets folder, when `tickets_dir` is set.
+    pub fn tickets_path(&self) -> Option<PathBuf> {
+        let d = self.tickets_dir.trim();
+        (!d.is_empty()).then(|| PathBuf::from(expand_tilde(d)))
+    }
+
+    /// `ticket`'s folder in the tickets folder, when it's set.
+    pub fn ticket_path(&self, ticket: &str) -> Option<PathBuf> {
+        let ticket = ticket.trim();
+        if ticket.is_empty() {
+            return None;
+        }
+        self.tickets_path().map(|d| d.join(ticket.to_lowercase()))
     }
 }
 
