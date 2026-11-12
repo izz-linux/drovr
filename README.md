@@ -494,7 +494,7 @@ drovr can serve a small web page for your phone, so you can check in and answer 
 
 1. In Settings (or `~/.config/drovr/config.toml`), set `[remote] enabled = true`, then restart drovr.
 2. Settings → **Phone** shows a sign-in link and a QR code. Scan the code with your phone. The link carries the access token, and opening it once signs that phone in for a year. `drovr remote` prints the same link and QR code in a terminal.
-3. Optionally, add the page to your home screen (Share → Add to Home Screen) so it opens like an app.
+3. Optionally, add the page to your home screen (Share → Add to Home Screen) so it opens like an app, with drovr's icon.
 
 **Away from home:** the page listens on every network the Mac is on (`remote.bind = "0.0.0.0:7979"`), so it works on the same Wi-Fi as is. For anywhere else, install [Tailscale](https://tailscale.com) on the Mac and the phone, and set `remote.public_url` to the Mac's Tailscale name (e.g. `http://my-mac.tail1234.ts.net:7979`) so links and notifications use it. Setting `remote.bind` to the Mac's Tailscale address (`100.x.y.z:7979`) keeps the page off your other networks.
 
