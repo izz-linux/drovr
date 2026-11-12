@@ -29,7 +29,7 @@ export type View = "agents" | "inbox" | "reports" | "jira" | "search" | "bus" | 
 
 export const app = $state({
   view: "agents" as View,
-  snap: { agents: [], groups: [], inbox: [], recent: [], unseen_reports: 0, herdr: false, codex: false } as Snapshot,
+  snap: { agents: [], archived: [], groups: [], inbox: [], recent: [], unseen_reports: 0, herdr: false, codex: false } as Snapshot,
   selected: "" as string,
   error: "" as string,
   toast: "" as string,
@@ -49,6 +49,8 @@ export const app = $state({
   termMarks: {} as Record<number, { key: string; mark: number }>,
   /** Group preselected when the New agent dialog opens. */
   newAgentGroup: "",
+  /** Show archived agents in the Agents list. */
+  showArchived: false,
   /** The keyboard shortcut list (View → Keyboard Shortcuts, ⌘/). */
   shortcutsOpen: false,
   /** The ticket whose record (timeline) is open; empty when closed. */
