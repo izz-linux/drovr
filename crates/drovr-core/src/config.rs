@@ -490,6 +490,12 @@ pub struct Terminal {
     /// Copy text to the clipboard as soon as you select it, like iTerm2's
     /// "Copy to pasteboard on selection".
     pub copy_on_select: bool,
+    /// Opens an agent's session in your own terminal (Agents → Open in
+    /// terminal). `{script}` is a script that `cd`s to the agent's folder and
+    /// resumes its conversation. It goes in as is, not quoted, so it can sit
+    /// inside an AppleScript string; quote it yourself elsewhere. Empty:
+    /// `open -a Terminal "{script}"`.
+    pub external: String,
 }
 
 impl Default for Terminal {
@@ -500,6 +506,7 @@ impl Default for Terminal {
             font_size: 13,
             option_as_meta: false,
             copy_on_select: true,
+            external: String::new(),
         }
     }
 }

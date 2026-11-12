@@ -193,14 +193,26 @@
     if (app.selected === name) app.selected = app.snap.agents[0]?.name ?? "";
   }
 
-  async function attach() {
+  async function openInHerdr() {
     if (!current) return;
-    if (app.snap.herdr) {
-      await act(() => api.openInHerdr(current.name), `Opened ${current.name} in herdr`);
-    } else {
+    await act(() => api.openInHerdr(current.name), `Opened ${current.name} in herdr`);
+  }
+
+  async function openInTerminal() {
+    if (!current) return;
+    const name = current.name;
+    const r = await act(() => api.openInTerminal(name));
+    if (r) toast(r.pane ? `${name} is still running in herdr pane ${r.pane}; showed it there` : `Opened ${name} in your terminal`);
+  }
+
+  async function copyAttach() {
+    if (!current) return;
+    try {
       const cmd = await api.attachCommand(current.name);
       await navigator.clipboard.writeText(cmd);
-      toast("Copied a command to open this session in your terminal");
+      toast("Copied a command that continues this session in any terminal");
+    } catch (e) {
+      toast(String(e));
     }
   }
 
@@ -310,7 +322,11 @@
           {:else if current.state === "stopped" || current.state === "error" || current.state === "interrupted"}
             <button onclick={() => act(() => api.resume(current.name), "Resumed")}>Resume</button>
           {/if}
-          <button onclick={attach} title="Open this session interactively">{app.snap.herdr ? "Open in herdr" : "Copy attach cmd"}</button>
+          <button onclick={openInTerminal} title="Continue this agent's conversation in your own terminal (terminal.external). Stop it first if it's working.">Open in terminal</button>
+          {#if app.snap.herdr}
+            <button onclick={openInHerdr} title="Continue this agent's conversation in a new herdr pane, or show the pane it's already running in">Open in herdr</button>
+          {/if}
+          <button class="ghost" onclick={copyAttach} title="Copy a command that continues this conversation in any terminal">Copy cmd</button>
           <button onclick={() => { app.view = "review"; }}>Review</button>
           {#if currentTickets.length}
             <button onclick={() => (app.timeline = currentTickets[0])} title={`Everything that happened on ${currentTickets.join(", ")}, for review and the retro`}>Timeline</button>
