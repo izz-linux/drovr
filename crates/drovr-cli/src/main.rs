@@ -32,6 +32,10 @@ usage:
   drovr msgs [group]                         the message bus
   drovr ask <question...>                    ask an agent with your MCPs (Slack, Jira, …)
   drovr config                               where drovr reads its config and keeps its data
+  drovr remote [--test]                      the phone page's sign-in link and QR code;
+                                             --test sends a test push notification
+  drovr serve                                run the phone page and push notifications
+                                             without the app (see [remote] in the config)
   drovr mcp --agent <name>                   (internal) MCP server for an agent
   drovr hook finished <agent>                (internal) called when a headless run exits";
 
@@ -266,6 +270,53 @@ fn run() -> Result<()> {
             "{}",
             json!({ "config": drovr_core::config::config_path(), "home": drovr_core::config::home() })
         ),
+        "remote" => {
+            let cfg = &engine.cfg;
+            if args.iter().any(|a| a == "--test") {
+                drovr_core::remote::test_push(cfg)?;
+                println!(
+                    "sent a test notification to ntfy topic {}",
+                    cfg.remote.ntfy_topic.trim()
+                );
+                return Ok(());
+            }
+            let link = drovr_core::remote::link(cfg)?;
+            println!("{}", drovr_core::remote::qr_text(&link));
+            println!(
+                "Open this on your phone (it signs the phone in; keep it private):\n  {link}\n"
+            );
+            if cfg.remote.scheme() == "https" && cfg.remote.public_url.trim().is_empty() {
+                println!("HTTPS is on: set remote.public_url to the name on your certificate (e.g. https://drovr.example.com:7979), or phones will see a name mismatch.");
+            }
+            if !cfg.remote.enabled {
+                println!("The page is off: set [remote] enabled = true and restart the app, or run `drovr serve`.");
+            }
+            if cfg.remote.ntfy_topic.trim().is_empty() {
+                println!("Push notifications are off: set [remote] ntfy_topic.");
+            } else {
+                println!(
+                    "Push notifications go to ntfy topic {}.",
+                    cfg.remote.ntfy_topic.trim()
+                );
+            }
+        }
+        "serve" => {
+            let cfg = engine.cfg.clone();
+            // Notice runs that died, as the app does, in case it isn't open.
+            std::thread::spawn(|| loop {
+                if let Ok(e) = Engine::open() {
+                    let _ = e.refresh();
+                    let _ = e.refresh_herdr();
+                }
+                std::thread::sleep(std::time::Duration::from_secs(4));
+            });
+            eprintln!(
+                "drovr: serving the phone page on {}; sign in with:\n  {}",
+                cfg.remote.bind,
+                drovr_core::remote::link(&cfg)?
+            );
+            drovr_core::remote::serve(&cfg)?;
+        }
         "help" | "-h" | "--help" => println!("{USAGE}"),
         other => bail!("unknown command {other}\n\n{USAGE}"),
     }
