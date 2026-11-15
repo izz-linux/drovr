@@ -2,8 +2,8 @@
 //! phone, and push notifications through ntfy when something needs you.
 //!
 //! It's a thin layer over the same Engine calls the app's Tauri commands
-//! make: the Inbox, agents' output and prompts, reports, code review and the
-//! message bus. Every API call needs the access token (a cookie the
+//! make: the Inbox, agents' output and prompts, reports, code review and,
+//! with the ticket workflow, the Pipeline. Every API call needs the access token (a cookie the
 //! `/login?token=` link sets, or `Authorization: Bearer`) and an `X-Drovr`
 //! header, which a page on another site can't send without a CORS preflight
 //! this server never answers.
@@ -441,9 +441,6 @@ struct Args {
     target: String,
     command: String,
     path: String,
-    to: String,
-    group: String,
-    body: String,
 }
 
 fn api(
@@ -495,14 +492,11 @@ fn api(
                     .ok_or_else(|| anyhow!("{root} isn't one of this agent's repos"))?;
                 Ok(json!(review::diff(&repo.root, &qs("path"), &repo.scope)?))
             }
-            "bus" => {
-                let group = qs("group");
-                let g = (!group.is_empty()).then_some(group.as_str());
-                Ok(json!({
-                    "messages": e.store.messages(g, 300)?,
-                    "notes": if group.is_empty() { vec![] } else { e.store.notes(&group)? },
-                }))
-            }
+            // What the watcher last saw: your sprint's tickets and their PRs.
+            "pipeline" => Ok(json!({
+                "workflow": e.cfg.workflow.enabled,
+                "watch": crate::watch::load(),
+            })),
             other => bail!("unknown endpoint {other}"),
         };
     }
@@ -527,7 +521,13 @@ fn api(
             json!(e.run_command(a.id, target, command)?)
         }
         "report_seen" => json!(e.store.mark_report_seen(&a.path)?),
-        "message" => json!(e.send_from_you(&a.to, &a.group, &a.body)?),
+        // Read Jira and GitHub now, as Pipeline's Refresh now does.
+        "watch_now" => {
+            if !e.cfg.workflow.enabled {
+                bail!("the ticket workflow is off (workflow.enabled)");
+            }
+            json!(crate::watch::poll(&e, true))
+        }
         other => bail!("unknown endpoint {other}"),
     })
 }
@@ -562,6 +562,7 @@ fn snapshot(e: &Engine, st: &State) -> Result<Value> {
         "herdr": herdr_installed(e, st),
         "you": e.cfg.your_name(),
         "cost_warning_usd": e.cfg.defaults.cost_warning_usd,
+        "workflow": e.cfg.workflow.enabled,
     }))
 }
 

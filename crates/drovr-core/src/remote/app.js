@@ -1,5 +1,5 @@
 // drovr's phone page: the Inbox, agents, reports, code review and the
-// message bus, over the API in remote.rs. No build step and no libraries.
+// Pipeline, over the API in remote.rs. No build step and no libraries.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -130,7 +130,7 @@ function route() {
     state.agent = rest[0] || "";
     state.sub = rest[1] || "";
   } else {
-    state.view = ["inbox", "agents", "reports", "bus"].includes(view) ? view : "inbox";
+    state.view = ["inbox", "agents", "reports", "pipeline"].includes(view) ? view : "inbox";
   }
   for (const a of document.querySelectorAll("nav#tabs a")) {
     a.classList.toggle("on", a.dataset.view === (state.view === "agent" ? "agents" : state.view));
@@ -160,6 +160,7 @@ async function refresh() {
   $("rbadge").hidden = !state.snap.unseen_reports;
   $("rbadge").textContent = state.snap.unseen_reports;
   document.title = n ? `(${n}) drovr` : "drovr";
+  $("pipeline-tab").hidden = !state.snap.workflow;
   render();
 }
 
@@ -169,7 +170,7 @@ async function loadView() {
     if (state.view === "agent" && state.sub === "") await loadOutput();
     else if (state.view === "agent" && state.sub === "review") await loadReview();
     else if (state.view === "reports") await loadReports();
-    else if (state.view === "bus") await loadBus();
+    else if (state.view === "pipeline") await loadPipeline();
   } catch (e) {
     if (!state.signedOut) toast(String(e.message || e), true);
   }
@@ -179,7 +180,7 @@ setInterval(() => { if (!document.hidden) refresh(); }, 3000);
 setInterval(() => {
   if (document.hidden) return;
   if (state.view === "agent" && state.sub === "") loadOutput().catch(() => {});
-  if (state.view === "bus") loadBus().catch(() => {});
+  if (state.view === "pipeline") loadPipeline().catch(() => {});
 }, 3000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { refresh(); loadView(); } });
 window.addEventListener("hashchange", route);
@@ -199,7 +200,7 @@ function render() {
   else if (state.view === "agents") renderAgents();
   else if (state.view === "agent") renderAgent();
   else if (state.view === "reports") renderReports();
-  else if (state.view === "bus") renderBus();
+  else if (state.view === "pipeline") renderPipeline();
 }
 
 /** A section of `main` that's built once per view and found again by id. */
@@ -513,51 +514,122 @@ function closeReport() {
 }
 $("report-close").addEventListener("click", closeReport);
 
-// -- message bus ---------------------------------------------------------------
+// -- pipeline ------------------------------------------------------------------
 
-let busGroup = "";
+// Your sprint as the watcher sees it (Jira through your CLI, PRs through gh),
+// next to the agents working each ticket: the app's Pipeline, as cards.
+let pipe = null;
+let showDone = false;
+let reading = false;
 
-function renderBus() {
-  $("where").textContent = "Message bus";
-  const head = section("bushead", () => {
-    const pick = h("select", { onchange: (e) => { busGroup = e.target.value; loadBus(); } });
-    return h("div", {}, pick);
-  });
-  const pick = head.querySelector("select");
-  const groups = state.snap.groups.map((g) => g.name);
-  const want = ["", ...groups].join("\n");
-  if (pick.dataset.groups !== want) {
-    fill(pick, h("option", { value: "" }, "All groups"), ...groups.map((g) => h("option", { value: g }, g)));
-    pick.value = busGroup;
-    pick.dataset.groups = want;
-  }
-  section("bus", () => h("div", { style: "margin-top: 8px" }));
-  section("busform", () => {
-    const to = h("input", { placeholder: "To: an agent, @group or *" });
-    const body = h("textarea", { rows: 2, placeholder: "Message" });
-    return h("div", { class: "composer" }, to, h("div", { style: "height: 6px" }), body,
-      h("div", { class: "actions" }, h("button", { class: "primary", onclick: () => {
-        if (!to.value.trim() || !body.value.trim()) return;
-        let target = to.value.trim();
-        let group = busGroup;
-        if (target.startsWith("@")) { group = target.slice(1); target = `@${group}`; }
-        act(async () => { await call("message", { to: target, group, body: body.value }); body.value = ""; await loadBus(); }, "Sent");
-      } }, "Send")));
-  });
+/** Ticket keys in some text, upper-cased: "sre-3311 and SRE-2998" → both. */
+const ticketsIn = (text) => [...new Set((String(text || "").match(/(?<![A-Za-z0-9-])[A-Za-z][A-Za-z0-9]+-\d+(?![A-Za-z0-9-])/g) || []).map((k) => k.toUpperCase()))];
+
+/** An agent's tickets: its own, else its group's. */
+function agentTickets(a) {
+  const own = ticketsIn(a.ticket);
+  if (own.length) return own;
+  return ticketsIn(state.snap.groups.find((g) => g.name === a.group_name)?.ticket);
 }
 
-/** How drovr stores you ("human"), as your name. */
-const who = (name) => (name === "human" ? state.snap?.you || "you" : name);
+function renderPipeline() {
+  $("where").textContent = "Pipeline";
+  const box = section("pipeline", () => h("div", {}, h("div", { class: "muted" }, "Loading…")));
+  if (!pipe) return;
+  if (!pipe.workflow) {
+    fill(box, h("div", { class: "empty" }, "The ticket workflow is off. Turn on ", h("code", {}, "workflow.enabled"), " in drovr's config to follow your sprint here."));
+    return;
+  }
+  const ws = pipe.watch;
+  const tickets = Object.values(ws.tickets || {}).sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+  const prs = Object.values(ws.prs || {});
+  const open = tickets.filter((t) => t.category !== "done");
+  const done = tickets.filter((t) => t.category === "done");
+  const known = new Set(tickets.map((t) => t.key));
+  // Tickets agents are on that aren't in the sprint the watcher follows.
+  const others = [...new Set(state.snap.agents.flatMap(agentTickets))].filter((k) => !known.has(k)).sort();
 
-async function loadBus() {
-  const group = busGroup;
-  const r = await get("bus", { group });
-  const box = main.querySelector('[data-sec="bus"]');
-  if (!box || group !== busGroup) return;
-  const notes = r.notes.length ? [h("details", {}, h("summary", {}, `Shared notes (${r.notes.length})`),
-    ...r.notes.map((n) => h("div", { class: "msg small" }, h("strong", {}, n.key), ` (${n.author}): `, n.value)))] : [];
-  fill(box, ...notes, ...(r.messages.length ? [...r.messages].reverse().map((m) => h("div", { class: "msg" },
-    h("div", { class: "muted small" }, `${who(m.sender)} → ${who(m.recipient)} · ${ago(m.ts)} ago`), md(m.body))) : [h("div", { class: "empty" }, "No messages.")]));
+  const since = (c) => (c.at ? `${ago(c.at)} ago` : "not yet");
+  const head = h("div", { class: "pipe-head" },
+    h("div", { class: "row" },
+      h("h2", { class: "grow", style: "margin: 0" }, "Your sprint"),
+      h("button", { disabled: reading, onclick: refreshPipeline }, reading ? "Reading…" : "Refresh")),
+    h("div", { class: "muted small" }, `${open.length} open · ${done.length} done · Jira read ${since(ws.jira)} · GitHub read ${since(ws.github)}`),
+    ws.jira.error && h("div", { class: "err small" }, `Jira: ${ws.jira.error}`),
+    ws.github.error && h("div", { class: "err small" }, `GitHub: ${ws.github.error}`));
+
+  if (!ws.jira.at && !tickets.length) {
+    fill(box, head, h("div", { class: "empty" }, "The watcher hasn't read Jira yet. Tap Refresh to read it now."));
+    return;
+  }
+  fill(box, head,
+    open.map((t) => ticketCard(t.key, t, prs)),
+    others.map((k) => ticketCard(k, null, prs)),
+    done.length && h("button", { class: "ghost", style: "margin-top: 4px", onclick: () => { showDone = !showDone; renderPipeline(); } },
+      `${showDone ? "▾" : "▸"} Done (${done.length})`),
+    showDone && done.map((t) => ticketCard(t.key, t, prs)));
+}
+
+function ticketCard(key, t, allPrs) {
+  const agents = state.snap.agents.filter((a) => agentTickets(a).includes(key));
+  const prs = allPrs.filter((p) => (p.tickets || []).includes(key));
+  const waiting = state.snap.inbox.filter((i) => i.kind !== "done" && agents.some((a) => a.name === i.agent)).length;
+  const cost = agents.reduce((s, a) => s + (a.cost_usd || 0), 0);
+  const tone = !t ? "none" : t.category === "done" ? "done" : t.category === "indeterminate" ? "doing" : "todo";
+  const failing = prs.flatMap((p) => (p.state === "OPEN" ? p.failing || [] : []).map((name, i) =>
+    h("div", { class: "err small" }, `#${p.number} failing: `,
+      p.failing_urls?.[i] ? h("a", { href: p.failing_urls[i], target: "_blank", rel: "noopener" }, name) : name)));
+  return h("article", { class: `card ticket j-${tone}` },
+    h("div", { class: "row" },
+      t?.url ? h("a", { href: t.url, target: "_blank", rel: "noopener", class: "tkey" }, key) : h("strong", { class: "tkey" }, key),
+      t ? h("span", { class: `pill j-${tone}` }, t.status) : h("span", { class: "muted small" }, "not in the sprint"),
+      h("span", { class: "grow" }),
+      waiting ? h("a", { href: "#inbox", class: "badge", title: "Waiting in your Inbox" }, `⚑ ${waiting}`) : null,
+      agents.length ? h("span", { class: "small mono" }, `$${cost.toFixed(2)}`) : null),
+    t?.summary && h("div", { class: "tsum" }, t.summary),
+    t?.last_comment && h("div", { class: "muted small ellipsis" }, `💬 ${t.last_comment}`),
+    agents.length
+      ? h("div", { class: "chips" }, agents.map((a) => h("a", { class: `chip s-${a.state}`, href: agentHash(a.name) },
+          h("span", { class: "dot" }), `${a.role === "orchestrator" ? "★ " : ""}${a.name}${a.stage ? ` · ${a.stage}` : ""}`)))
+      : h("div", { class: "muted small" }, "No agents"),
+    prs.length ? h("div", { class: "chips" }, prs.map(prChip)) : null,
+    failing);
+}
+
+function prChip(p) {
+  const bits = [];
+  if (p.state === "MERGED") bits.push(h("span", { class: "ok" }, "merged"));
+  else if (p.state === "CLOSED") bits.push(h("span", { class: "muted" }, "closed"));
+  else {
+    const ci = { success: "✓", failure: "✗", pending: "●" }[p.ci];
+    if (ci) bits.push(h("span", { class: `ci c-${p.ci}` }, ci));
+    if (p.draft) bits.push(h("span", { class: "muted" }, "draft"));
+    const review = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "needs review" }[p.review];
+    if (review) bits.push(h("span", { class: p.review === "APPROVED" ? "ok" : p.review === "CHANGES_REQUESTED" ? "warn" : "muted" }, review));
+    if (p.mergeable === "CONFLICTING") bits.push(h("span", { class: "warn" }, "conflict"));
+  }
+  return h("a", { class: "chip pr", href: p.url, target: "_blank", rel: "noopener", title: `${p.repo}#${p.number} ${p.title}` },
+    h("strong", {}, `#${p.number}`), ...bits);
+}
+
+async function loadPipeline() {
+  pipe = await get("pipeline");
+  if (state.view === "pipeline" && !reading) renderPipeline();
+}
+
+/** Read Jira and GitHub now, as the app's Refresh now does. */
+async function refreshPipeline() {
+  reading = true;
+  renderPipeline();
+  try {
+    const watch = await call("watch_now", {});
+    pipe = { ...pipe, watch };
+  } catch (e) {
+    toast(String(e.message || e), true);
+  } finally {
+    reading = false;
+    renderPipeline();
+  }
 }
 
 // -- start ---------------------------------------------------------------------

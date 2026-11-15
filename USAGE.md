@@ -199,7 +199,7 @@ drovr rm pay-api-sweeper
 
 ### Check in from your phone
 
-With `[remote] enabled = true` (README → [Phone access](README.md#phone-access)), drovr serves a page for your phone with the Inbox, agents and their output, code review, reports and the message bus.
+With `[remote] enabled = true` (README → [Phone access](README.md#phone-access)), drovr serves a page for your phone with the Inbox, agents and their output, code review, reports and, with the ticket workflow, the Pipeline.
 
 1. Restart drovr, then scan the QR code in Settings → **Phone** (or from `drovr remote`). It signs the phone in.
 2. **Inbox** has the same actions as the app's. Running a proposed command asks you to confirm first.
