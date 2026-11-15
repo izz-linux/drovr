@@ -206,3 +206,11 @@ a.badge { text-decoration: none; }
   font-size: 14px; z-index: 20; box-shadow: 0 4px 16px rgba(0,0,0,.25);
 }
 #toast.err { background: var(--red); color: #fff; }
+
+.sheet-body { flex: 1; overflow-y: auto; padding: 14px 16px calc(env(safe-area-inset-bottom) + 24px); }
+.modes { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.modes .mode { flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.modes .mode.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.field { display: block; margin: 10px 0; }
+.field > span { display: block; margin-bottom: 4px; }
+.sheet details { margin: 10px 0; }

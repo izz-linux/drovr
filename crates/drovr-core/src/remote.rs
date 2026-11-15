@@ -493,12 +493,27 @@ fn api(
                 Ok(json!(review::diff(&repo.root, &qs("path"), &repo.scope)?))
             }
             // What the watcher last saw: your sprint's tickets and their PRs.
-            "pipeline" => Ok(json!({
-                "workflow": e.cfg.workflow.enabled,
-                "watch": crate::watch::load(),
-            })),
+            "pipeline" => {
+                let d = &e.cfg.defaults;
+                Ok(json!({
+                    "workflow": e.cfg.workflow.enabled,
+                    "watch": crate::watch::load(),
+                    // What Dispatch starts with, as in the app.
+                    "defaults": {
+                        "cwd": e.cfg.default_cwd(),
+                        "backend": d.backend,
+                        "harness": d.harness,
+                        "model": d.model,
+                        "codex_model": e.cfg.codex.model,
+                    },
+                    "codex": crate::shell::which(&e.cfg.codex.command),
+                }))
+            }
             other => bail!("unknown endpoint {other}"),
         };
+    }
+    if endpoint == "dispatch" {
+        return dispatch(&e, body);
     }
     let a: Args = serde_json::from_value(body).unwrap_or_default();
     Ok(match endpoint {
@@ -530,6 +545,25 @@ fn api(
         }
         other => bail!("unknown endpoint {other}"),
     })
+}
+
+/// Hand a ticket off, as the app's Dispatch does: read it from Jira, then
+/// start a solo agent, a new group, or give it to an existing group.
+fn dispatch(e: &Engine, body: Value) -> Result<Value> {
+    #[derive(Deserialize)]
+    struct Req {
+        key: String,
+        #[serde(flatten)]
+        how: crate::engine::Dispatch,
+    }
+    let req: Req = serde_json::from_value(body).context("what to dispatch")?;
+    let key = req.key.trim();
+    if key.is_empty() {
+        bail!("which ticket?");
+    }
+    let ticket = crate::sources::Sources::new(&e.cfg).jira_get(key)?;
+    let agent = e.dispatch(&ticket, &req.how)?;
+    Ok(json!({ "agent": agent.name, "ticket": ticket.key }))
 }
 
 fn snapshot(e: &Engine, st: &State) -> Result<Value> {
