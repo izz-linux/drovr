@@ -90,7 +90,10 @@
     window.addEventListener("focusout", hide);
     window.addEventListener("pointerdown", hide, true);
     window.addEventListener("keydown", hide, true);
-    window.addEventListener("scroll", hide, true);
+    const scrolled = (e: Event) => {
+      if (target && e.target instanceof Node && e.target.contains(target)) hide();
+    };
+    window.addEventListener("scroll", scrolled, true);
     window.addEventListener("blur", hide);
     return () => {
       hide();
@@ -100,7 +103,7 @@
       window.removeEventListener("focusout", hide);
       window.removeEventListener("pointerdown", hide, true);
       window.removeEventListener("keydown", hide, true);
-      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("scroll", scrolled, true);
       window.removeEventListener("blur", hide);
     };
   });
