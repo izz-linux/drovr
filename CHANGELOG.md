@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/izz-linux/drovr/compare/v0.11.1...v0.11.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* show the Pipeline on the phone page instead of the message bus ([#52](https://github.com/izz-linux/drovr/issues/52)) ([500b17a](https://github.com/izz-linux/drovr/commit/500b17aa9771bc35b99c940b34e04634f1a61fc9))
+
 ## [0.11.1](https://github.com/izz-linux/drovr/compare/v0.11.0...v0.11.1) (2026-11-12)
 
 
