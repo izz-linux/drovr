@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.3](https://github.com/izz-linux/drovr/compare/v0.11.2...v0.11.3) (2026-11-15)
+
+
+### Bug Fixes
+
+* dispatch tickets from the phone page's Pipeline ([#54](https://github.com/izz-linux/drovr/issues/54)) ([d741caf](https://github.com/izz-linux/drovr/commit/d741caf9f92820f7c432827798829e5ee19ac93f))
+
 ## [0.11.2](https://github.com/izz-linux/drovr/compare/v0.11.1...v0.11.2) (2026-11-15)
 
 
