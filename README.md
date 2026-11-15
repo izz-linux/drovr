@@ -34,7 +34,7 @@ A lightweight macOS desktop cockpit (Tauri + Svelte) for running Claude Code age
 
 ## Status
 
-drovr is at version 0.11.1. <!-- x-release-please-version -->
+drovr is at version 0.11.3. <!-- x-release-please-version -->
 
 **Tested so far:**
 
@@ -488,7 +488,7 @@ drovr can serve a small web page for your phone, so you can check in and answer 
 - **Agents:** each agent's state, cost and output. Prompt it (queued if it's busy), send a queued message now or take it back, stop or resume it.
 - **Code review:** each repo an agent worked in, its changed files and their diffs.
 - **Reports:** the plans folder, newest first. Opening one marks it read, as in the app.
-- **Message bus:** agents' messages and each group's shared notes. You can post too.
+- **Pipeline** (with `workflow.enabled`): your sprint as the watcher last read it, one card per ticket: its Jira status and latest comment, the agents on it (tap one to open it), its PRs with CI, review and conflict status and links to failing checks, what's waiting in your Inbox, and the cost so far. **Refresh** reads Jira and GitHub now. A ticket nobody's working on has **Dispatch…**, which hands it off as the app's Dispatch does: to a single agent, a new group with a lead, or an existing group, with your notes.
 
 **Turn it on:**
 

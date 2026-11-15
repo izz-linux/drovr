@@ -200,13 +200,14 @@ drovr rm pay-api-sweeper
 
 ### Check in from your phone
 
-With `[remote] enabled = true` (README → [Phone access](README.md#phone-access)), drovr serves a page for your phone with the Inbox, agents and their output, code review, reports and the message bus.
+With `[remote] enabled = true` (README → [Phone access](README.md#phone-access)), drovr serves a page for your phone with the Inbox, agents and their output, code review, reports and, with the ticket workflow, the Pipeline.
 
 1. Restart drovr, then scan the QR code in Settings → **Phone** (or from `drovr remote`). It signs the phone in.
 2. **Inbox** has the same actions as the app's. Running a proposed command asks you to confirm first.
 3. **Agents:** tap one to see its output, prompt it, stop or resume it, or open **Code review** for its diffs.
 4. For notifications, subscribe to a hard-to-guess topic in the ntfy app, set `remote.ntfy_topic` to it, and run `drovr remote --test`. Tapping a notification opens that item.
-5. For HTTPS with your own certificate, set `remote.tls_cert` (`fullchain.pem`), `remote.tls_key` (`privkey.pem`) and `remote.public_url` (`https://drovr.example.com:7979`, a name the certificate covers that points at the Mac), then restart drovr. Renewed certificates are picked up without a restart.
+5. With the ticket workflow, **Pipeline** shows your sprint. Tap **Dispatch…** on a ticket nobody's working on to hand it to a single agent, a new group with a lead, or an existing group.
+6. For HTTPS with your own certificate, set `remote.tls_cert` (`fullchain.pem`), `remote.tls_key` (`privkey.pem`) and `remote.public_url` (`https://drovr.example.com:7979`, a name the certificate covers that points at the Mac), then restart drovr. Renewed certificates are picked up without a restart.
 
 ```sh
 drovr remote          # the sign-in link and QR code

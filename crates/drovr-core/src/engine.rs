@@ -96,6 +96,27 @@ pub struct NewAgent {
     pub ticket_notes: String,
 }
 
+/// How to hand a ticket off (see `Engine::dispatch`). Empty fields take
+/// the defaults: the ticket's key as the name, `defaults.*` for the rest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Dispatch {
+    /// `solo`, `group` (a new group with a lead) or `existing`.
+    pub mode: String,
+    /// The new agent's or group's name.
+    pub name: String,
+    pub cwd: String,
+    pub backend: String,
+    pub harness: String,
+    /// The agent's model (the lead's, for a group).
+    pub model: String,
+    /// Your notes for the agent, added to the ticket.
+    pub notes: String,
+    /// With `existing`: the group, and the agent in it (empty: its lead).
+    pub group: String,
+    pub target: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NewGroup {
@@ -1277,6 +1298,48 @@ impl Engine {
         }
         self.add_lead(name, &spec.goal, &spec.backend, &spec.harness, &spec.model)
             .map(Some)
+    }
+
+    /// Hand a Jira ticket off, as Dispatch does in the app and on the phone
+    /// page: to a new solo agent, a new group with a lead, or an existing
+    /// group (its lead, or `target`). With `watch.dispatch_transition` set,
+    /// the ticket then moves (to In Progress).
+    pub fn dispatch(&self, ticket: &crate::sources::Ticket, d: &Dispatch) -> Result<Agent> {
+        let name = if d.name.trim().is_empty() {
+            slug(&ticket.key)
+        } else {
+            d.name.trim().to_string()
+        };
+        let model = d.model.trim().to_string();
+        let task = crate::sources::ticket_task(ticket, &d.notes, &self.cfg.your_name());
+        let agent = match d.mode.as_str() {
+            "existing" => self.hand_off_to_group(&d.group, &ticket.key, &task, &d.target),
+            "group" => self
+                .create_group(NewGroup {
+                    name,
+                    goal: task,
+                    ticket: ticket.key.clone(),
+                    cwd: d.cwd.clone(),
+                    backend: d.backend.clone(),
+                    harness: d.harness.clone(),
+                    lead: true,
+                    model,
+                    ..NewGroup::default()
+                })?
+                .ok_or_else(|| anyhow!("the orchestrator didn't start")),
+            _ => self.start_agent(NewAgent {
+                name,
+                cwd: d.cwd.clone(),
+                backend: d.backend.clone(),
+                harness: d.harness.clone(),
+                ticket: ticket.key.clone(),
+                task,
+                model,
+                ..NewAgent::default()
+            }),
+        }?;
+        crate::rules::move_on_dispatch(self, &ticket.key);
+        Ok(agent)
     }
 
     /// Give a Jira ticket to an existing group: to `target` if named,

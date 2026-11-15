@@ -7,11 +7,11 @@
 mod menu;
 mod terminal;
 
-use drovr_core::engine::{slug, Line, NewGroup};
+use drovr_core::engine::{Dispatch, Line, NewGroup};
 use drovr_core::reports::ReportFile;
 use drovr_core::review::{self, Repo};
 use drovr_core::shell::quote;
-use drovr_core::sources::{ticket_task, Page, SlackMessage, Sources, Ticket};
+use drovr_core::sources::{Page, SlackMessage, Sources, Ticket};
 use drovr_core::store::{Agent, Group, Item, Message, Note};
 use drovr_core::{config, Engine, NewAgent};
 use serde::Serialize;
@@ -509,47 +509,18 @@ async fn dispatch_ticket(
     target: String,
     model: Option<String>,
 ) -> Res<Agent> {
-    let model = model.unwrap_or_default().trim().to_string();
-    blocking(move |e| {
-        let name = if name.trim().is_empty() {
-            slug(&ticket.key)
-        } else {
-            name.trim().to_string()
-        };
-        let task = ticket_task(&ticket, &notes, &e.cfg.your_name());
-        let agent = if mode == "existing" {
-            e.hand_off_to_group(&group, &ticket.key, &task, &target)
-        } else if mode == "group" {
-            let spec = NewGroup {
-                name,
-                goal: task,
-                ticket: ticket.key.clone(),
-                cwd,
-                backend,
-                harness,
-                lead: true,
-                model,
-                ..NewGroup::default()
-            };
-            e.create_group(spec)?
-                .ok_or_else(|| anyhow::anyhow!("the orchestrator didn't start"))
-        } else {
-            e.start_agent(NewAgent {
-                name,
-                cwd,
-                backend,
-                harness,
-                ticket: ticket.key.clone(),
-                task,
-                model,
-                ..NewAgent::default()
-            })
-        }?;
-        // With watch.dispatch_transition set, the ticket moves (to In Progress).
-        drovr_core::rules::move_on_dispatch(e, &ticket.key);
-        Ok(agent)
-    })
-    .await
+    let d = Dispatch {
+        mode,
+        name,
+        cwd,
+        backend,
+        harness,
+        model: model.unwrap_or_default(),
+        notes,
+        group,
+        target,
+    };
+    blocking(move |e| e.dispatch(&ticket, &d)).await
 }
 
 #[tauri::command]
