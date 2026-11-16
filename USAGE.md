@@ -230,6 +230,16 @@ drovr group --harness opencode checkout-v2 ~/code/web "Move checkout to the new 
 
 Set `defaults.harness = "opencode"` to make OpenCode the preselected choice. **Run in → herdr pane** runs it in OpenCode's TUI in a herdr tab, where you answer its permission prompts yourself; install herdr's OpenCode integration (`herdr integration install opencode`) so herdr reports its state and session exactly. **Copy attach cmd** opens a headless one in OpenCode's TUI.
 
+#### OpenCode through a gateway or custom provider
+
+drovr leaves OpenCode's providers to your own config. The config drovr writes for an agent adds only its MCP server, system prompt and permission plugin, and OpenCode reads it on top of `~/.config/opencode/opencode.json`. Your providers, `enabled_providers`, MCP servers and the plugins in `~/.config/opencode/plugins/` (a token refresher, say) still apply to drovr's agents. Once `opencode run` works in a terminal:
+
+1. Set `opencode.model` to the gateway's model as you'd pass it to `opencode run -m`, for example `"my-gateway/anthropic/claude-sonnet-5-5"`. Leave it empty to use the `model` in your OpenCode config.
+2. If **Run with → OpenCode** says `opencode not found`, set `opencode.command` to its full path (for example `/Users/you/.opencode/bin/opencode`).
+3. Allow the gateway's MCP tools by Claude Code's names: a server `my_gateway`'s tool `search` is `mcp__my_gateway__search` in `permissions.auto_allow`.
+
+Costs come from what OpenCode reports for each step. If your OpenCode setup has no prices for a gateway's models, its runs show $0 and `defaults.cost_warning_usd` never flags them.
+
 ### Run an agent with Codex (experimental)
 
 1. Install the Codex CLI and log in (`codex login`).

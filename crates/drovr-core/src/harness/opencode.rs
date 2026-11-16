@@ -258,10 +258,23 @@ const CLI = {cli};
 const AGENT = {agent};
 const HOME = {home};
 
-export const DrovrPermissions = async () => ({{
+// MCP tools are `<server>_<tool>`, and a server's name can have `_` in it:
+// drovr is told the servers' names to split them at the right place.
+let servers;
+async function mcpServers(client) {{
+  if (servers) return servers;
+  try {{
+    const res = await client.mcp.status();
+    if (res?.data) servers = Object.keys(res.data);
+  }} catch {{}}
+  return servers ?? [];
+}}
+
+export const DrovrPermissions = async ({{ client }}) => ({{
   "tool.execute.before": async (input, output) => {{
+    const req = {{ tool: input.tool, args: output.args ?? {{}}, servers: await mcpServers(client) }};
     const proc = Bun.spawn([CLI, "hook", "permission", AGENT], {{
-      stdin: new Blob([JSON.stringify({{ tool: input.tool, args: output.args ?? {{}} }})]),
+      stdin: new Blob([JSON.stringify(req)]),
       stdout: "pipe",
       stderr: "pipe",
       env: {{ ...process.env, DROVR_HOME: HOME, DROVR_AGENT: AGENT }},
@@ -502,7 +515,15 @@ fn opencode_event(v: &Value, run: &mut Value) -> Event {
 /// `{behavior: "allow"}` or `{behavior: "deny", message}`.
 pub fn permission(engine: crate::Engine, me: &str, req: &Value) -> Result<Value> {
     let tool = req["tool"].as_str().unwrap_or("");
-    let name = claude_name(tool);
+    let servers: Vec<String> = req["servers"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let name = claude_name(tool, &servers);
     let input = claude_input(&req["args"]);
     let cfg = &engine.cfg;
     if cfg.defaults.disallowed_tools.contains(&name) {
@@ -583,9 +604,11 @@ fn normalize(p: &Path) -> PathBuf {
 }
 
 /// OpenCode's tool as Claude Code names it. MCP tools are
-/// `<server>_<tool>` in OpenCode; drovr's own are told apart exactly, and
-/// any other is split at its first `_`.
-pub fn claude_name(tool: &str) -> String {
+/// `<server>_<tool>` in OpenCode, with the server's name sanitized: one is
+/// split after the longest of `servers` (the MCP servers OpenCode has) it
+/// starts with, drovr's own are told apart exactly, and any other is split
+/// at its first `_`.
+pub fn claude_name(tool: &str, servers: &[String]) -> String {
     let builtin = match tool {
         "bash" => "Bash",
         "read" => "Read",
@@ -610,10 +633,35 @@ pub fn claude_name(tool: &str) -> String {
     if let Some(rest) = tool.strip_prefix("drovr_") {
         return format!("mcp__drovr__{rest}");
     }
+    let server = servers
+        .iter()
+        .map(|s| mcp_sanitize(s))
+        .filter(|s| {
+            tool.strip_prefix(s.as_str())
+                .is_some_and(|rest| rest.len() > 1 && rest.starts_with('_'))
+        })
+        .max_by_key(|s| s.len());
+    if let Some(server) = server {
+        return format!("mcp__{server}__{}", &tool[server.len() + 1..]);
+    }
     match tool.split_once('_') {
         Some((server, name)) => format!("mcp__{server}__{name}"),
         None => tool.to_string(),
     }
+}
+
+/// A name as OpenCode puts it in an MCP tool's name: anything but ASCII
+/// letters, digits, `_` and `-` becomes `_`.
+fn mcp_sanitize(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// OpenCode's arguments with Claude Code's names for the ones drovr reads
@@ -853,16 +901,35 @@ mod tests {
 
     #[test]
     fn asks_as_claude_code_would() {
-        assert_eq!(claude_name("bash"), "Bash");
-        assert_eq!(claude_name("apply_patch"), "Edit");
-        assert_eq!(
-            claude_name("drovr_send_message"),
-            "mcp__drovr__send_message"
-        );
-        assert_eq!(
-            claude_name("atlassian_getJiraIssue"),
-            "mcp__atlassian__getJiraIssue"
-        );
+        let servers: Vec<String> = ["my_gw", "my", "acme.docs", "drovr"]
+            .map(String::from)
+            .to_vec();
+        for (tool, servers, want) in [
+            ("bash", &servers[..], "Bash"),
+            ("apply_patch", &servers[..], "Edit"),
+            ("drovr_send_message", &[][..], "mcp__drovr__send_message"),
+            (
+                "drovr_send_message",
+                &servers[..],
+                "mcp__drovr__send_message",
+            ),
+            // No servers known: split at the first `_`.
+            (
+                "atlassian_getJiraIssue",
+                &[][..],
+                "mcp__atlassian__getJiraIssue",
+            ),
+            ("my_gw_search", &[][..], "mcp__my__gw_search"),
+            // The longest server name that fits wins.
+            ("my_gw_search", &servers[..], "mcp__my_gw__search"),
+            ("my_lookup_user", &servers[..], "mcp__my__lookup_user"),
+            // Names are sanitized as OpenCode does.
+            ("acme_docs_find", &servers[..], "mcp__acme_docs__find"),
+            // A server's name alone isn't a tool of it.
+            ("my_", &servers[..], "mcp__my__"),
+        ] {
+            assert_eq!(claude_name(tool, servers), want, "{tool}");
+        }
         assert_eq!(
             claude_input(&json!({"filePath": "/r/a"}))["file_path"],
             "/r/a"
