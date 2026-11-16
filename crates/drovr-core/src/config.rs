@@ -320,7 +320,7 @@ pub struct Defaults {
     /// interactive Claude Code or OpenCode sessions in herdr panes.
     pub backend: String,
     /// The CLI new agents run with: "claude" (Claude Code), "opencode"
-    /// (OpenCode, headless only) or "codex" (experimental, headless only).
+    /// (OpenCode) or "codex" (experimental, headless only).
     pub harness: String,
     /// Directory new agents and groups start in when none is given.
     pub cwd: String,

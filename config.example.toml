@@ -3,7 +3,7 @@
 
 [defaults]
 backend = "headless"          # "headless" (drovr runs `claude -p`) or "herdr" (interactive panes)
-harness = "claude"            # the CLI agents run with: "claude", "opencode" (headless only), or "codex" (experimental, headless only)
+harness = "claude"            # the CLI agents run with: "claude", "opencode", or "codex" (experimental, headless only)
 cwd = "~/code"                # where new agents start when you don't give a directory
 model = ""                    # e.g. "claude-sonnet-5-5"; empty = your Claude Code default
 permission_mode = "acceptEdits"
