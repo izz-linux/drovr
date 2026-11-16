@@ -22,9 +22,11 @@
   let model = $state("");
   let busy = $state(false);
 
-  // Start from a new session, or continue an existing Claude Code session.
+  // Start from a new session, or continue an existing Claude Code or
+  // OpenCode session (whichever Run with picks).
   let source = $state<"new" | "existing">("new");
   let sessions = $state<ClaudeSession[]>([]);
+  let sessionsOf = $state("");
   let sessionId = $state("");
   let session = $state<ClaudeSession | null>(null);
   let sessionError = $state("");
@@ -49,8 +51,19 @@
     if (!cwdTouched) cwd = (source === "existing" && session?.cwd) || groupInfo?.cwd || defaults?.cwd || "";
   });
 
+  // The saved sessions of the harness you picked: OpenCode's, else Claude Code's.
+  const adoptFrom = $derived(harness === "opencode" ? "opencode" : "claude");
+  const adoptLabel = $derived(adoptFrom === "opencode" ? "OpenCode" : "Claude Code");
   $effect(() => {
-    if (source === "existing" && !sessions.length) api.claudeSessions().then((s) => (sessions = s)).catch((e) => toast(String(e)));
+    const h = adoptFrom;
+    if (source !== "existing" || sessionsOf === h) return;
+    sessionsOf = h;
+    sessions = [];
+    api.sessions(h).then((s) => { if (sessionsOf === h) sessions = s; }).catch((e) => toast(String(e)));
+  });
+  // OpenCode's session IDs start with ses_.
+  $effect(() => {
+    if (source === "existing" && sessionId.trim().startsWith("ses_") && harness !== "opencode" && app.snap.opencode) harness = "opencode";
   });
 
   // Look the session up as you pick or paste its ID.
@@ -64,10 +77,11 @@
       session = known;
       return;
     }
-    api.findSession(id).then((s) => {
+    const h = adoptFrom;
+    api.findSession(id, h).then((s) => {
       if (sessionId.trim() !== id) return;
       session = s;
-      sessionError = s ? "" : "No Claude Code session with that ID in ~/.claude/projects";
+      sessionError = s ? "" : h === "opencode" ? "No OpenCode session with that ID (opencode session list)" : "No Claude Code session with that ID in ~/.claude/projects";
     }).catch((e) => { if (sessionId.trim() === id) sessionError = String(e); });
   });
 
@@ -119,18 +133,19 @@
 <Modal title="New agent" onclose={close} dirty={!!task.trim() || !!ticket.trim() || !!ticketNotes.trim()}>
   <div class="source">
     <button class:on={source === "new"} onclick={() => (source = "new")}>New session</button>
-    <button class:on={source === "existing"} onclick={() => (source = "existing")}>Existing Claude session</button>
+    <button class:on={source === "existing"} onclick={() => (source = "existing")}>Existing session</button>
   </div>
 
   {#if resuming}
     <label for="n-session">Session</label>
     <select id="n-session" bind:value={sessionId}>
-      <option value="">{sessions.length ? "Recent sessions…" : "Loading recent sessions…"}</option>
+      <option value="">{sessions.length ? `Recent ${adoptLabel} sessions…` : `Loading recent ${adoptLabel} sessions…`}</option>
       {#each sessions as s}
         <option value={s.id}>{ago(s.modified)} ago · {s.cwd.split("/").slice(-2).join("/")} · {s.first_prompt || s.id}</option>
       {/each}
     </select>
-    <input class="sid" bind:value={sessionId} placeholder="…or paste a session ID (claude --resume <id>)" spellcheck="false" />
+    <input class="sid" bind:value={sessionId} placeholder={adoptFrom === "opencode" ? "…or paste a session ID (opencode session list)" : "…or paste a session ID (claude --resume <id>)"} spellcheck="false" />
+    {#if app.snap.opencode}<p class="muted small">Run with, below, picks whose sessions these are: Claude Code's or OpenCode's.</p>{/if}
     {#if session}
       <p class="muted small">Runs in <code>{session.cwd}</code>{session.first_prompt ? ` · "${session.first_prompt}"` : ""}</p>
     {:else if sessionError}
@@ -175,7 +190,7 @@
     <p class="muted small">The agent writes the ticket first{defaults?.ticket_skill ? ` with ${defaults.ticket_skill}` : ""}, and creates it once you allow the command. Its key becomes the agent's ticket.</p>
   {/if}
 
-  <RunDefaults {defaults} bind:backend bind:harness bind:model id="n-backend" claudeOnly={resuming} />
+  <RunDefaults {defaults} bind:backend bind:harness bind:model id="n-backend" adopting={resuming} />
 
   {#snippet footer()}
     <button onclick={close}>Cancel</button>

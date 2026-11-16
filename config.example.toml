@@ -3,7 +3,7 @@
 
 [defaults]
 backend = "headless"          # "headless" (drovr runs `claude -p`) or "herdr" (interactive panes)
-harness = "claude"            # the CLI agents run with: "claude", or "codex" (experimental, headless only)
+harness = "claude"            # the CLI agents run with: "claude", "opencode" (headless only), or "codex" (experimental, headless only)
 cwd = "~/code"                # where new agents start when you don't give a directory
 model = ""                    # e.g. "claude-sonnet-5-5"; empty = your Claude Code default
 permission_mode = "acceptEdits"
@@ -19,6 +19,12 @@ copy_on_select = true         # selecting text in an agent's output copies it
 [claude]
 command = "claude"
 extra_args = []               # e.g. ["--add-dir", "~/code/shared"]
+
+[opencode]                    # agents with harness = "opencode"
+command = "opencode"
+model = ""                    # "provider/model", e.g. "anthropic/claude-sonnet-5-5"; empty = OpenCode's default
+agent = ""                    # the OpenCode agent to run as (--agent); empty = its default agent
+extra_args = []
 
 [codex]                       # agents with harness = "codex" (experimental)
 command = "codex"

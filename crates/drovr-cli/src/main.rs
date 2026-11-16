@@ -7,7 +7,7 @@ use drovr_core::sources::{ticket_task, Sources};
 use drovr_core::{Engine, NewAgent};
 use serde_json::json;
 
-const USAGE: &str = "drovr — orchestrate Claude Code agents
+const USAGE: &str = "drovr — orchestrate Claude Code (and OpenCode) agents
 
 usage:
   drovr ls                                   list agents and their state
@@ -17,10 +17,11 @@ usage:
   drovr run <id> [local|herdr]               run an approved command
   drovr ran <id> [output...]                 mark a command as run by you, with its output
   drovr new <name> <cwd> <task...>           start a solo agent
-                                             (new, group and dispatch take --harness claude|codex)
+                                             (new, group and dispatch take --harness claude|codex|opencode)
   drovr adopt <session-id> <name> [--fork] [task...]
-                                             start an agent from an existing Claude Code session
-  drovr sessions                             list recent Claude Code sessions
+                                             start an agent from an existing Claude Code
+                                             or OpenCode (ses_…) session
+  drovr sessions [--harness opencode]        list recent Claude Code (or OpenCode) sessions
   drovr group <name> <cwd> <goal...>         start a group with an orchestrator
   drovr dispatch <TICKET> [solo|group] [cwd] hand a Jira ticket to a new agent or a new group
   drovr dispatch <TICKET> to <group> [agent] hand it to an existing group (its lead by default)
@@ -37,7 +38,8 @@ usage:
   drovr serve                                run the phone page and push notifications
                                              without the app (see [remote] in the config)
   drovr mcp --agent <name>                   (internal) MCP server for an agent
-  drovr hook finished <agent>                (internal) called when a headless run exits";
+  drovr hook finished <agent>                (internal) called when a headless run exits
+  drovr hook permission <agent>              (internal) an OpenCode agent's permission prompt";
 
 fn rest(args: &[String], from: usize) -> String {
     args.get(from..).map(|a| a.join(" ")).unwrap_or_default()
@@ -59,11 +61,11 @@ fn main() {
 
 fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // `--harness codex` anywhere: what runs the agents new, group and
+    // `--harness codex` (or opencode) anywhere: what runs the agents new, group and
     // dispatch start. Empty for defaults.harness.
     let harness = match args.iter().position(|a| a == "--harness") {
         Some(i) => {
-            let name = arg(&args, i + 1, "harness name (claude or codex)")?.to_string();
+            let name = arg(&args, i + 1, "harness name (claude, codex or opencode)")?.to_string();
             drovr_core::harness::named(&name)?;
             args.drain(i..=i + 1);
             name
@@ -94,6 +96,15 @@ fn run() -> Result<()> {
         }
         "hook" => match args.get(1).map(String::as_str) {
             Some("finished") => engine.finished(arg(&args, 2, "agent")?)?,
+            // Asked by an OpenCode agent's plugin before each tool call.
+            Some("permission") => {
+                let name = arg(&args, 2, "agent")?.to_string();
+                let mut req = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut req)?;
+                let req: serde_json::Value = serde_json::from_str(&req)?;
+                let answer = drovr_core::harness::opencode::permission(engine, &name, &req)?;
+                println!("{answer}");
+            }
             _ => bail!("unknown hook"),
         },
         "ls" => {
@@ -152,11 +163,18 @@ fn run() -> Result<()> {
                 .filter(|a| *a != "--fork")
                 .cloned()
                 .collect();
+            let id = arg(&args, 1, "session id")?;
+            // OpenCode's session IDs start with ses_.
+            let harness = match harness.as_str() {
+                "" if id.starts_with("ses_") => "opencode".to_string(),
+                h => h.to_string(),
+            };
             let a = engine.start_agent(NewAgent {
-                resume_session: arg(&args, 1, "session id")?.into(),
+                resume_session: id.into(),
                 name: arg(&args, 2, "name")?.into(),
                 fork,
                 task: rest_args.join(" "),
+                harness,
                 ..NewAgent::default()
             })?;
             println!(
@@ -167,8 +185,8 @@ fn run() -> Result<()> {
             );
         }
         "sessions" => {
-            use drovr_core::harness::Harness;
-            for s in drovr_core::harness::CLAUDE.recent_sessions(30) {
+            // Claude Code's unless --harness says otherwise.
+            for s in drovr_core::harness::named(&harness)?.recent_sessions(30) {
                 println!("{}  {:<40}  {}", s.id, s.cwd, s.first_prompt);
             }
         }

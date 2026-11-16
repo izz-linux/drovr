@@ -9,6 +9,7 @@ pub struct Config {
     pub defaults: Defaults,
     pub claude: Claude,
     pub codex: Codex,
+    pub opencode: OpenCode,
     pub permissions: Permissions,
     pub orchestrator: Orchestrator,
     pub commands: Commands,
@@ -318,8 +319,8 @@ pub struct Defaults {
     /// "headless" runs `claude -p` processes drovr owns; "herdr" runs
     /// interactive Claude Code sessions in herdr panes.
     pub backend: String,
-    /// The CLI new agents run with: "claude" (Claude Code) or "codex"
-    /// (experimental, headless only).
+    /// The CLI new agents run with: "claude" (Claude Code), "opencode"
+    /// (OpenCode, headless only) or "codex" (experimental, headless only).
     pub harness: String,
     /// Directory new agents and groups start in when none is given.
     pub cwd: String,
@@ -375,6 +376,33 @@ impl Default for Codex {
             command: "codex".into(),
             model: String::new(),
             sandbox: "workspace-write".into(),
+            extra_args: vec![],
+        }
+    }
+}
+
+/// OpenCode (`opencode`), for agents started with harness "opencode".
+/// drovr's MCP server, system prompt and permission prompt reach it through
+/// an OpenCode config file and plugin drovr writes for each agent, so your
+/// own `opencode.json` still applies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenCode {
+    pub command: String,
+    /// `provider/model`, e.g. `anthropic/claude-sonnet-5-5`. Empty:
+    /// OpenCode's own default (`model` in its config).
+    pub model: String,
+    /// The OpenCode agent to run as (`--agent`). Empty: its default agent.
+    pub agent: String,
+    pub extra_args: Vec<String>,
+}
+
+impl Default for OpenCode {
+    fn default() -> Self {
+        OpenCode {
+            command: "opencode".into(),
+            model: String::new(),
+            agent: String::new(),
             extra_args: vec![],
         }
     }
@@ -544,6 +572,7 @@ impl Default for Config {
             defaults: Defaults::default(),
             claude: Claude::default(),
             codex: Codex::default(),
+            opencode: OpenCode::default(),
             permissions: Permissions::default(),
             orchestrator: Orchestrator::default(),
             commands: Commands::default(),

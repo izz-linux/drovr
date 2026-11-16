@@ -478,25 +478,28 @@ impl Engine {
         Ok(crate::review::repos(&a.cwd, &self.transcripts(&a), &shared))
     }
 
-    /// What an agent's headless runs cost, from their logs. Only Claude Code
-    /// reports a cost; Codex reports tokens.
+    /// What an agent's headless runs cost, from their logs. Claude Code and
+    /// OpenCode report a cost; Codex reports tokens.
     fn total_cost(&self, agent: &Agent) -> f64 {
+        self.run_costs(agent)
+            .into_iter()
+            .map(|(_, cost)| cost)
+            .sum()
+    }
+
+    /// Each headless run's session and what the run cost, in order.
+    fn run_costs(&self, agent: &Agent) -> Vec<(String, f64)> {
         let harness = harness::of(agent);
         let dir = home().join("agents").join(&agent.name).join("runs");
         let mut costs = Costs::default();
         (1..=agent.runs)
             .filter_map(|r| std::fs::read_to_string(dir.join(format!("{r}.jsonl"))).ok())
-            .filter_map(|log| {
-                log.lines()
-                    .rev()
-                    .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-                    .find_map(|v| match harness.parse(&v) {
-                        Event::End(end) => Some(end),
-                        _ => None,
-                    })
+            .filter_map(|log| run_end(&log, harness))
+            .map(|end| {
+                let cost = harness.run_cost(&end, &mut costs).unwrap_or(0.0);
+                (end["session_id"].as_str().unwrap_or("").to_string(), cost)
             })
-            .map(|end| harness.run_cost(&end, &mut costs).unwrap_or(0.0))
-            .sum()
+            .collect()
     }
 
     pub(crate) fn agent_dir(&self, name: &str) -> PathBuf {
@@ -644,7 +647,7 @@ impl Engine {
             harness: harness.name().into(),
             run_state: "idle".into(),
             cwd,
-            // Codex names the session when the first run starts.
+            // Codex and OpenCode name the session when the first run starts.
             session_id: match &resumed {
                 Some(s) => s.id.clone(),
                 None if harness.picks_session_id() => uuid::Uuid::new_v4().to_string(),
@@ -791,16 +794,17 @@ impl Engine {
     /// Whether the next run starts the agent's session, continues it, or
     /// continues a copy of an adopted one.
     fn session(&self, agent: &Agent) -> Session {
-        if !harness::of(agent).picks_session_id() {
-            return if agent.session_id.is_empty() {
-                Session::New
-            } else {
-                Session::Resume
-            };
-        }
         match self.resume_mode(&agent.name).as_deref() {
             Some("fork") => Session::Fork,
             Some(_) => Session::Resume,
+            // Codex and OpenCode name the session when the first run starts.
+            None if !harness::of(agent).picks_session_id() => {
+                if agent.session_id.is_empty() {
+                    Session::New
+                } else {
+                    Session::Resume
+                }
+            }
             None if self.session_logged(&agent.name) => Session::Resume,
             None => Session::New,
         }
@@ -828,6 +832,7 @@ impl Engine {
             cli: self.cli.clone(),
             home: home(),
             mcp_config: self.mcp_config(&agent.name)?,
+            dir: self.agent_dir(&agent.name),
             system_prompt: self.system_prompt_file(agent)?,
             settings_file: self.agent_dir(&agent.name).join("herdr-settings.json"),
             session,
@@ -848,7 +853,9 @@ impl Engine {
         } else {
             self.session(agent)
         };
-        let args = harness.headless_args(&self.run_for(agent, session)?)?;
+        let start = self.run_for(agent, session)?;
+        let args = harness.headless_args(&start)?;
+        let env = harness.headless_env(&start)?;
         self.record(
             &agent.name,
             "run_start",
@@ -880,6 +887,7 @@ impl Engine {
             .env("DROVR_AGENT", &agent.name)
             .env("DROVR_HOME", home())
             .envs(crate::datadog::env(&self.cfg))
+            .envs(env)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -910,18 +918,19 @@ impl Engine {
         if let Some(log) = &log {
             let harness = harness::of(&agent);
             let mut session = None;
+            let mut state = Value::Null;
             for v in log
                 .lines()
                 .filter_map(|l| serde_json::from_str::<Value>(l).ok())
             {
-                match harness.parse(&v) {
+                match harness.parse(&v, &mut state) {
                     Event::Session(id) if session.is_none() => session = Some(id),
                     Event::End(e) => end = Some(e),
                     _ => {}
                 }
             }
-            // A forked session gets a new ID, and Codex names its session
-            // when the first run starts: keep following it.
+            // A forked session gets a new ID, and Codex and OpenCode name
+            // their sessions when the first run starts: keep following it.
             let fork = self.resume_mode(name).as_deref() == Some("fork");
             if fork || !harness.picks_session_id() {
                 if let Some(id) = session.filter(|id| !id.is_empty() && *id != agent.session_id) {
@@ -946,7 +955,20 @@ impl Engine {
             _ => "idle",
         };
         self.store.set_agent(name, "run_state", next)?;
-        let end = end.unwrap_or_default();
+        let mut end = end.unwrap_or_default();
+        // A CLI that reports each run's own cost (OpenCode) leaves the
+        // session's running total to drovr: the stage checkpoint reads it.
+        if end["total_cost_usd"].is_null() && end["cost_usd"].is_number() {
+            if let Some(session) = end["session_id"].as_str().filter(|s| !s.is_empty()) {
+                let total: f64 = self
+                    .run_costs(&self.agent(name)?)
+                    .into_iter()
+                    .filter(|(s, _)| s == session)
+                    .map(|(_, cost)| cost)
+                    .sum();
+                end["total_cost_usd"] = json!(total);
+            }
+        }
         self.record(
             name,
             "run_end",
@@ -2411,6 +2433,18 @@ fn result_line(v: &Value, harness: &dyn Harness, costs: &mut Costs) -> Line {
     }
 }
 
+/// How a run ended (its last `Event::End`), from its whole log.
+fn run_end(log: &str, harness: &dyn Harness) -> Option<Value> {
+    let mut state = Value::Null;
+    log.lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter_map(|v| match harness.parse(&v, &mut state) {
+            Event::End(end) => Some(end),
+            _ => None,
+        })
+        .last()
+}
+
 /// One event of a run log, ready to show. The end of a run keeps what its
 /// line needs, since its cost is worked out when the output is put together.
 #[derive(Clone)]
@@ -2427,6 +2461,8 @@ struct RunLog {
     ino: u64,
     parsed_to: u64,
     items: Arc<Vec<Rendered>>,
+    /// What the harness kept from the lines parsed so far.
+    state: Value,
 }
 
 /// Run logs already parsed in this process. The app asks for an agent's
@@ -2452,6 +2488,7 @@ fn rendered_log(path: &Path, harness: &dyn Harness) -> Arc<Vec<Rendered>> {
         ino: meta.ino(),
         parsed_to: 0,
         items: Arc::default(),
+        state: Value::Null,
     };
     let log = logs.entry(path.to_path_buf()).or_insert_with(fresh);
     if log.ino != meta.ino() || meta.len() < log.parsed_to {
@@ -2475,7 +2512,7 @@ fn rendered_log(path: &Path, harness: &dyn Harness) -> Arc<Vec<Rendered>> {
             let Ok(v) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            match harness.parse(&v) {
+            match harness.parse(&v, &mut log.state) {
                 Event::Lines(lines) => items.extend(lines.into_iter().map(Rendered::Line)),
                 Event::End(end) => items.push(Rendered::Result(end)),
                 Event::Session(_) | Event::Skip => {}

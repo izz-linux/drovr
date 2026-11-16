@@ -407,6 +407,25 @@ fn touched(transcript: &Path, cwd: &str, out: &mut Vec<PathBuf>) {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        // OpenCode: the files its tools touched, the folders its commands
+        // worked in.
+        if v["type"] == "tool_use" && v["part"].is_object() {
+            let input = &v["part"]["state"]["input"];
+            let mut dir = here.clone();
+            if let Some(w) = input["workdir"].as_str() {
+                dir = resolve(&here, w);
+                out.push(dir.clone());
+            }
+            if let Some(f) = input["filePath"].as_str() {
+                out.push(resolve(&dir, f));
+            }
+            if let Some(cmd) = input["command"].as_str() {
+                for d in command_dirs(cmd) {
+                    out.push(resolve(&dir, &d));
+                }
+            }
+            continue;
+        }
         // Codex: the commands it ran and the files it changed.
         if v["type"] == "item.completed" {
             let item = &v["item"];
@@ -564,6 +583,7 @@ pub(crate) fn words(cmd: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn new_file_diff_caps_what_it_reads() {
@@ -704,6 +724,40 @@ mod tests {
             command_dirs("/bin/bash -lc 'cd ../web && git status'"),
             ["../web"]
         );
+    }
+
+    #[test]
+    fn reads_what_opencode_touched() {
+        let dir = std::env::temp_dir().join(format!("drovr-review-oc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("1.jsonl");
+        let tool = |tool: &str, input: Value| {
+            json!({ "type": "tool_use", "sessionID": "s", "part": { "type": "tool", "tool": tool, "state": { "status": "completed", "input": input } } }).to_string()
+        };
+        std::fs::write(
+            &log,
+            [
+                tool("edit", json!({ "filePath": "/r/api/src/a.rs" })),
+                tool(
+                    "bash",
+                    json!({ "command": "git status", "workdir": "/r/web" }),
+                ),
+                tool("bash", json!({ "command": "cd ../ops && ls" })),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut out = vec![];
+        touched(&log, "/r/api", &mut out);
+        assert_eq!(
+            out,
+            [
+                PathBuf::from("/r/api/src/a.rs"),
+                PathBuf::from("/r/web"),
+                PathBuf::from("/r/api/../ops"),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

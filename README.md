@@ -10,7 +10,7 @@ A lightweight macOS desktop cockpit (Tauri + Svelte) for running Claude Code age
 - **Agents coordinate:** they message each other directly when their work overlaps.
 - **Reports:** agents save HTML reports for you to review in `~/.claude/plans/`.
 - **Where agents run:** drovr runs them itself, or in [herdr](https://herdr.dev) panes next to your terminal.
-- **Which CLI runs them:** Claude Code, or OpenAI's Codex CLI (experimental). See [Harnesses](#harnesses-claude-code-and-codex).
+- **Which CLI runs them:** Claude Code, OpenCode, or OpenAI's Codex CLI (experimental). See [Harnesses](#harnesses-claude-code-opencode-and-codex).
 - **A ticket workflow (optional, off by default):** a record and timeline of each ticket's work, a watcher that follows your sprint and its PRs, stages with handoffs you approve, Jira and Confluence updates you review before they're posted, and a retro you start. One switch, `workflow.enabled`; see [The record](#the-record-timeline).
 
 **[USAGE.md](USAGE.md)** covers the commands and everyday workflows: keyboard shortcuts, recipes for each task, and the full CLI reference.
@@ -49,6 +49,7 @@ drovr is at version 0.11.3. <!-- x-release-please-version -->
   - **A logging stand-in for herdr:** it confirms the exact `herdr` commands, and the parsing was checked against real `herdr agent get` output.
   - **The app in WebKit** (WebKitGTK with `tauri-driver` on a virtual display): the content security policy, the asset protocol's scope, the Inbox keys, the shortcut list and the long-diff view.
   - **The Codex CLI** (0.164.0, not logged in): drovr's `-c` overrides, its MCP server starting under Codex, and resuming a Codex session.
+  - **OpenCode** (1.19.5): its `run` flags, `--format json` events, config keys, plugin hook and session database were read from the source bundled in the release, and the tests use those shapes. drovr's side of the permission prompt (the plugin's `drovr hook permission`, `permissions.auto_allow`, the permission mode and the Inbox) was run end to end.
   - **The ticket workflow in WebKit**, with stand-ins for `claude`, `twg` and `gh`: the record and timeline, the watcher and Pipeline, rules and Jira drafts, stages and handoffs, the retro, and Confluence pages (the diff, the sandboxed preview, a page that changed before you approved it).
 - **twg's real output:** `jira workitem query` and `get` (with and without `-o json`) and `confluence content get --detail full`.
 - **twg's write commands against a real site:** posting a Jira comment and moving a ticket.
@@ -57,6 +58,7 @@ drovr is at version 0.11.3. <!-- x-release-please-version -->
 
 - Live herdr panes.
 - Codex agents with a logged-in Codex, doing real work.
+- OpenCode agents with a real `opencode` process: a run, its plugin loading, and attaching.
 - Saving a Confluence draft with twg against a real site.
 
 ## Quick start
@@ -131,7 +133,7 @@ Each agent has a state:
 
 In the agent list, click a group's name to collapse or expand it; a collapsed group still shows how many of its agents are working or blocked. ⊟ collapses every group at once. Your choices are remembered, and filtering shows matching agents even inside collapsed groups.
 
-The Agents view shows each agent's output as it runs: text, tool calls with their results, and the cost of each run. Costs are Claude Code's estimate at API list prices (`total_cost_usd`): what your plan actually charges may differ. Claude Code reports a running total for the whole conversation, so drovr counts only what each run added. The total next to an agent covers its headless runs; herdr agents' costs aren't tracked, and Codex reports tokens rather than a cost. An agent that has cost more than `defaults.cost_warning_usd` ($10 by default) is flagged in yellow in the list and its header.
+The Agents view shows each agent's output as it runs: text, tool calls with their results, and the cost of each run. Costs are Claude Code's estimate at API list prices (`total_cost_usd`): what your plan actually charges may differ. Claude Code reports a running total for the whole conversation, so drovr counts only what each run added. OpenCode reports what each step cost, and drovr adds up each run's. The total next to an agent covers its headless runs; herdr agents' costs aren't tracked, and Codex reports tokens rather than a cost. An agent that has cost more than `defaults.cost_warning_usd` ($10 by default) is flagged in yellow in the list and its header.
 
 - **Prompt:** type in the box and send. If the agent is busy, your text is queued: it shows above the box, marked **Queued**, until the agent reads it, either when it checks its messages or when its run ends. Each queued message has two buttons:
   - **Send now** stops the current run and starts a new one with that message, plus anything else waiting for the agent before it. The agent is told its last run was cut short.
@@ -164,8 +166,8 @@ The Agents view shows each agent's output as it runs: text, tool calls with thei
 - **Task:** the agent's first prompt. Type it, or pick a `.md` or `.txt` file under **Prompt from file** to load it into the box, where you can still edit it.
 - **Jira ticket:** the ticket the agent's work tracks. Or check **Create a Jira ticket for this**, with optional notes ("a bug, assigned to me, in the current sprint"): the agent first writes a ticket for its task, following `jira.ticket_skill` if set, and creates it. Its create command comes to the Inbox for you to allow like any other. It then calls `set_ticket`, and the new key becomes its ticket (and its group's, when it leads a group without one).
 - **Group:** putting the agent in a group means it coordinates with the group's other agents. Its prompt files and reports then come from the group's plans folder.
-- **Run with:** Claude Code, or Codex (experimental, when `codex` is installed). See [Harnesses](#harnesses-claude-code-and-codex).
-- **Model:** the model this agent runs on, e.g. `claude-opus-5-5`. Empty uses the default (`defaults.model`, or `codex.model` for Codex), shown as the placeholder. **New group** with a lead and **Dispatch** have the same box, as **Lead's model** when they start a group: it sets the lead's model. Workers that start without asking run on it too; workers you approve in the Inbox and stage agents get their own defaults, which you can change there.
+- **Run with:** Claude Code, OpenCode (when `opencode` is installed), or Codex (experimental, when `codex` is installed). See [Harnesses](#harnesses-claude-code-opencode-and-codex).
+- **Model:** the model this agent runs on, e.g. `claude-opus-5-5`. Empty uses the default (`defaults.model`, `opencode.model` for OpenCode, or `codex.model` for Codex), shown as the placeholder. OpenCode models are `provider/model`, e.g. `anthropic/claude-sonnet-5-5`. **New group** with a lead and **Dispatch** have the same box, as **Lead's model** when they start a group: it sets the lead's model. Workers that start without asking run on it too; workers you approve in the Inbox and stage agents get their own defaults, which you can change there.
 - **Closing the dialog:** once you've typed a task, Esc or a click outside asks first: do it again within a few seconds to discard the typing. **Cancel** and **✕** close it straight away.
 
 ### Starting from an existing Claude Code session
@@ -462,7 +464,7 @@ Set `memory.dir` to a memory folder, and every Claude Code agent uses that one i
 - **Who writes it:** leads and solo agents, retro agents included. Workers read it but don't write it: drovr denies their Write and Edit there. When a worker learns something worth keeping, it sends it to its lead with `send_message`, starting with "For memory:", and the lead decides what to save.
 - **Two leads at once** can still write it at the same time. They're told to read a file just before changing it and to edit rather than rewrite, and Claude Code refuses an edit to a file that changed since it was read.
 - **Keep the index short:** Claude Code loads only the first 200 lines (or 25 KB) of `MEMORY.md`, and with every agent saving into one, it fills up faster.
-- **Codex agents** have no auto memory, so this doesn't change them.
+- **Codex and OpenCode agents** have no auto memory, so this doesn't change them.
 
 ### Code review
 
@@ -473,7 +475,7 @@ For any agent, this lists every git repo and worktree it worked in, so it works 
   - the folders it `cd`'d into or ran `git -C` on;
   - the worktrees it added with `git worktree add`.
 
-  A Codex agent's run logs are read the same way: the commands it ran and the files it changed. The most recently touched repo comes first. Repos with no changes start collapsed.
+  A Codex or OpenCode agent's run logs are read the same way: the commands it ran (and the `workdir` OpenCode ran them in) and the files it changed. The most recently touched repo comes first. Repos with no changes start collapsed.
 - **What counts as a change:** everything on the branch since it left the default branch (`origin/HEAD`, else `origin/main`, `origin/master`, `main` or `master`), plus uncommitted and untracked files. Committed and pushed work still shows up. A green status letter is committed on the branch; a yellow one isn't committed yet.
 - **Each repo** shows its branch, how many commits it's ahead, and its last commit, then the changed files with colored diffs and its HTML pages.
 - **The plans folder's repo:** if the plans folder is in a git repo (often `~/.claude` itself), every agent's work is in it. There an agent's review shows only the folders it started in and the files it touched ("Only plans/release"), not the whole repo.
@@ -562,11 +564,18 @@ Match System, Light, Dark, Darcula, Solarized Dark and Nord: the same set and co
   - **After a reboot:** headless runs are gone and show as **interrupted**. Resume them with one click, or set `defaults.auto_resume`. drovr also checks that a run's process ID still belongs to that run, because process IDs are reused after a reboot.
 - **Cost guard:** auto-wake pauses after 15 runs in 10 minutes for one agent, so two agents messaging each other can't loop on your API bill. Prompt the agent yourself to carry on.
 
-### Harnesses: Claude Code and Codex
+### Harnesses: Claude Code, OpenCode and Codex
 
-The CLI that runs an agent is its harness. Everything that depends on one CLI is behind the `Harness` trait in `crates/drovr-core/src/harness/`: building its commands (headless, herdr, attach), reading a line of its run log, reading a run's cost, and finding its saved sessions. `claude.rs` and `codex.rs` implement it. The database, the coordination MCP server, the Inbox, reports and the UI work the same with either, and supporting another CLI means one more implementation.
+The CLI that runs an agent is its harness. Everything that depends on one CLI is behind the `Harness` trait in `crates/drovr-core/src/harness/`: building its commands (headless, herdr, attach) and their environment, reading a line of its run log (with what it kept from the run's earlier lines), reading a run's cost, and finding its saved sessions. `claude.rs`, `opencode.rs` and `codex.rs` implement it. The database, the coordination MCP server, the Inbox, reports and the UI work the same with any of them, and supporting another CLI means one more implementation.
 
 - **Claude Code** (`claude`, the default): everything above, including the permission prompt, costs, herdr panes, and starting from an existing session.
+- **OpenCode** (`opencode`): choose **Run with → OpenCode** when starting an agent, group or hand-off, pass `--harness opencode` to the CLI, or set `defaults.harness = "opencode"`. An orchestrator's workers use its harness.
+  - **Runs:** each prompt is a detached `opencode run --format json` run, and later ones `opencode run --session <session>`. drovr writes an OpenCode config for the agent, `opencode-run.json` in its folder under `agents/`, and points `OPENCODE_CONFIG` at it: drovr's MCP server (as `drovr`, with a one-hour timeout, since its tools can wait for you) and the system prompt as an `instructions` file. OpenCode merges it over your own config, so your `opencode.json`, providers and MCP servers still apply.
+  - **Permissions:** OpenCode's `run` rejects every permission prompt it can't show, so drovr answers them itself. The config loads a small plugin drovr writes next to it, `opencode-permissions.js`; before each tool call it asks `drovr hook permission`, which answers as Claude Code's permission prompt is answered: OpenCode's tools are named as Claude Code's (`bash` is `Bash`, `edit`, `write` and `apply_patch` are `Edit`/`Write`, `drovr_send_message` is `mcp__drovr__send_message`), so `permissions.auto_allow`, `defaults.disallowed_tools` and `defaults.permission_mode` (`acceptEdits` allows edits inside the working directory, `plan` refuses them, `bypassPermissions` allows everything) apply as they are, and the rest comes to your Inbox. A denial reaches the model as the tool's error. The run passes `--auto`, so OpenCode's own prompts don't reject what drovr allowed; `deny` rules in your OpenCode config still hold.
+  - **Costs:** OpenCode reports each step's cost and tokens; a run's last line shows what the run cost, and the build stage's checkpoint reads the session's total.
+  - **Sessions:** **Existing session** in **New agent** lists OpenCode's sessions when **Run with** is OpenCode (pasting a `ses_…` ID picks OpenCode for you), and `drovr adopt` takes them too; drovr reads them with `opencode db`. Fork continues in a copy (`--fork`). **Copy attach cmd** opens the session in OpenCode's TUI with drovr's MCP server and system prompt (from `opencode.json` in the agent's folder), where you answer its permission prompts yourself.
+  - **Other settings:** `opencode.model` (`provider/model`), `opencode.agent` (the OpenCode agent to run as, `--agent`) and `opencode.extra_args`. `defaults.max_budget_usd` is Claude Code's flag, so it doesn't cap OpenCode runs.
+  - **Not yet:** herdr panes.
 - **Codex** (`codex`, experimental): choose **Run with → Codex** when starting an agent, group or hand-off, pass `--harness codex` to the CLI, or set `defaults.harness = "codex"`. An orchestrator's workers use its harness.
   - **Runs:** each prompt is a detached `codex exec --json` run, and later ones `codex exec … resume <session>`. drovr's MCP server and system prompt are passed with `-c` overrides, so your `~/.codex/config.toml` and its MCP servers still apply.
   - **Permissions:** Codex has no permission prompt drovr can answer, so it runs in its own sandbox (`codex.sandbox`, `workspace-write` by default) with approvals off. Anything outside the sandbox comes to your Inbox as a command, through `propose_command`.
@@ -608,7 +617,7 @@ Agents read text other people write (tickets, pages, Slack messages), and that t
 | `report_done` | Mark the task finished, with a summary |
 | `record_decision` | Record a decision the agent made itself (question, options, choice, why) in the ticket's record. Only with `workflow.enabled` |
 | `draft_jira_update` | Draft a Jira comment or status move for you to edit and post. Only with `workflow.enabled` |
-| `approve` | The permission prompt used by headless runs |
+| `approve` | The permission prompt used by headless runs (OpenCode's plugin reaches the same check through `drovr hook permission`) |
 
 ## Configuration
 
@@ -617,19 +626,20 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | Key | Default | What it does |
 | --- | --- | --- |
 | `defaults.backend` | `"headless"` | Preselected backend for new agents: `headless` or `herdr` |
-| `defaults.harness` | `"claude"` | Preselected CLI for new agents: `claude` or `codex` (experimental) |
+| `defaults.harness` | `"claude"` | Preselected CLI for new agents: `claude`, `opencode` or `codex` (experimental) |
 | `defaults.cost_warning_usd` | `10` | Flag an agent in the app once its runs have cost more than this; `0` turns it off |
 | `defaults.copy_on_select` | `true` | Selecting text in an agent's output copies it (`terminal.copy_on_select` covers the terminal) |
 | `defaults.cwd` | home folder | Where new agents start when you don't give a directory |
 | `defaults.model` | your Claude Code default | Model for agents |
-| `defaults.permission_mode` | `"acceptEdits"` | Claude Code permission mode for agents |
+| `defaults.permission_mode` | `"acceptEdits"` | Claude Code permission mode for agents; OpenCode agents follow it too |
 | `defaults.worktrees` | `false` | Give each agent its own `git worktree` on a `drovr/<name>` branch. Only when the working directory is a git repo; an agent started above your repos makes its own. A retro's agent always works in its retro's folder. |
 | `defaults.auto_wake` | `true` | Re-prompt idle agents when a message or answer arrives |
-| `defaults.max_budget_usd` | `0` (no cap) | Cost cap for each headless run |
+| `defaults.max_budget_usd` | `0` (no cap) | Cost cap for each headless Claude Code run |
 | `defaults.auto_resume` | `false` | Resume headless runs a reboot or crash interrupted, as soon as drovr notices, instead of waiting for you |
 | `defaults.disallowed_tools` | `[]` | Tools agents may never use, e.g. `["Artifact"]` |
 | `defaults.your_name` | `""` | What agents call you: "Notes from Izz", "Izz answered #3", and the tool they ask you with, `ask_izz`. Their tool descriptions and instructions use the name instead of "the human". Empty, it's "the human" and `ask_human`, so a config you share names nobody. Agents that learned the tool under an earlier name can still call it. |
 | `claude.command`, `claude.extra_args` | `"claude"`, `[]` | How agents are launched |
+| `opencode.command`, `opencode.model`, `opencode.agent`, `opencode.extra_args` | `"opencode"`, `""`, `""`, `[]` | How OpenCode agents are launched; the model is `provider/model`, and empty ones are OpenCode's defaults |
 | `codex.command`, `codex.model`, `codex.sandbox`, `codex.extra_args` | `"codex"`, `""`, `"workspace-write"`, `[]` | How Codex agents are launched; an empty model is Codex's default |
 | `notifications.enabled` | `true` | A macOS notification when something new lands in the Inbox while drovr is in the background |
 | `remote.enabled` | `false` | Serve the phone page while the app runs (see [Phone access](#phone-access)) |
@@ -764,7 +774,8 @@ Everything in the app is also scriptable with the `drovr` CLI, from a shell, a h
 drovr ls                                  # agents and their state
 drovr dispatch SRE-3253 to pay-api        # hand a ticket to an existing group's lead
 drovr inbox && drovr answer 7 "24h"       # see and answer what's waiting on you
-drovr adopt <session-id> my-agent         # continue a Claude Code session as a drovr agent
+drovr adopt <session-id> my-agent         # continue a Claude Code (or OpenCode ses_…) session as a drovr agent
+drovr new --harness opencode fix-ci ~/code/api "Make CI green"   # an OpenCode agent
 drovr new --harness codex fix-ci ~/code/api "Make CI green"   # a Codex agent (experimental)
 drovr config                              # where drovr reads its config and keeps its data
 drovr remote                              # the phone page's sign-in link and QR code

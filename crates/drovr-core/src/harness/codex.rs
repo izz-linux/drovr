@@ -50,7 +50,7 @@ impl Harness for Codex {
         Ok(args)
     }
 
-    fn parse(&self, v: &Value) -> Event {
+    fn parse(&self, v: &Value, _run: &mut Value) -> Event {
         codex_event(v)
     }
 
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn reads_codex_events() {
-        let parse = |s: &str| Codex.parse(&serde_json::from_str(s).unwrap());
+        let parse = |s: &str| Codex.parse(&serde_json::from_str(s).unwrap(), &mut Value::Null);
         // Real `codex exec --json` output (0.164.0).
         assert_eq!(
             parse(

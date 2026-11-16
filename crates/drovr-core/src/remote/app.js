@@ -659,7 +659,11 @@ function openDispatch(t) {
     const lead = members.find((a) => a.role === "orchestrator");
     const recipient = f.target || lead?.name || "";
     const codex = f.harness === "codex";
-    if (codex && f.backend === "herdr") f.backend = "headless";
+    const opencode = f.harness === "opencode";
+    // Claude Code is the only one that runs in herdr panes.
+    const headlessOnly = codex || opencode;
+    if (headlessOnly && f.backend === "herdr") f.backend = "headless";
+    const label = codex ? "Codex" : opencode ? "OpenCode" : "Claude Code";
     const field = (label, el) => h("label", { class: "field" }, h("span", { class: "muted small" }, label), el);
     const modeBtn = (m, title, sub, disabled) => h("button", { class: `mode${f.mode === m ? " on" : ""}`, disabled,
       onclick: () => { f.mode = m; draw(); } }, h("strong", {}, title), h("span", { class: "muted small" }, sub));
@@ -680,14 +684,15 @@ function openDispatch(t) {
         oninput: (e) => { f.name = e.target.value = typedName(e.target.value); start.disabled = !ready(); } });
       opts.push(field(f.mode === "group" ? "Group name" : "Agent name", name));
       opts.push(field("Working directory (repo)", h("input", { value: f.cwd, autocapitalize: "off", autocorrect: "off", spellcheck: "false", oninput: (e) => (f.cwd = e.target.value) })));
-      const defaultModel = (codex ? d.codex_model : d.model) || (codex ? "Codex default" : "Claude Code default");
-      opts.push(h("details", {}, h("summary", {}, `Run with ${codex ? "Codex" : "Claude Code"}, ${f.backend === "herdr" ? "in a herdr pane" : "headless"}${f.model ? `, on ${f.model}` : ""}`),
+      const defaultModel = (codex ? d.codex_model : opencode ? d.opencode_model : d.model) || `${label} default`;
+      opts.push(h("details", {}, h("summary", {}, `Run with ${label}, ${f.backend === "herdr" ? "in a herdr pane" : "headless"}${f.model ? `, on ${f.model}` : ""}`),
         field("Run with", h("select", { onchange: (e) => { f.harness = e.target.value; draw(); } },
-          h("option", { value: "claude", selected: !codex }, "Claude Code"),
+          h("option", { value: "claude", selected: !headlessOnly }, "Claude Code"),
+          h("option", { value: "opencode", selected: opencode, disabled: !pipe?.opencode }, `OpenCode${pipe?.opencode ? "" : " · not found"}`),
           h("option", { value: "codex", selected: codex, disabled: !pipe?.codex }, `Codex (experimental)${pipe?.codex ? "" : " · not found"}`))),
         field("Run in", h("select", { onchange: (e) => { f.backend = e.target.value; draw(); } },
           h("option", { value: "headless", selected: f.backend === "headless" }, "Headless (managed by drovr)"),
-          h("option", { value: "herdr", selected: f.backend === "herdr", disabled: codex || !state.snap.herdr }, `herdr pane${codex ? " · Claude Code only" : state.snap.herdr ? "" : " · herdr not found"}`))),
+          h("option", { value: "herdr", selected: f.backend === "herdr", disabled: headlessOnly || !state.snap.herdr }, `herdr pane${headlessOnly ? " · Claude Code only" : state.snap.herdr ? "" : " · herdr not found"}`))),
         field(f.mode === "group" ? "Lead's model" : "Model", h("input", { value: f.model, placeholder: defaultModel, autocapitalize: "off", autocorrect: "off", spellcheck: "false", oninput: (e) => (f.model = e.target.value) }))));
     }
     const notes = h("textarea", { rows: 4, placeholder: "Constraints, approach, where to look, what not to touch…", oninput: (e) => (f.notes = e.target.value) });

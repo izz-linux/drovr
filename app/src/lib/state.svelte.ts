@@ -29,7 +29,7 @@ export type View = "agents" | "inbox" | "reports" | "jira" | "search" | "bus" | 
 
 export const app = $state({
   view: "agents" as View,
-  snap: { agents: [], groups: [], inbox: [], recent: [], unseen_reports: 0, herdr: false, codex: false } as Snapshot,
+  snap: { agents: [], groups: [], inbox: [], recent: [], unseen_reports: 0, herdr: false, codex: false, opencode: false } as Snapshot,
   selected: "" as string,
   error: "" as string,
   toast: "" as string,

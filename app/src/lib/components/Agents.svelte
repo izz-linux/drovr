@@ -321,7 +321,7 @@
         </div>
         <div class="meta muted">
           <span>{current.role}{current.stage ? ` · ${current.stage} stage` : ""}{current.model ? ` · ${current.model}` : ""}</span>
-          <span>{current.harness === "codex" ? "Codex · " : ""}{current.backend}{current.pane ? ` · ${current.pane}` : ""}</span>
+          <span>{current.harness === "codex" ? "Codex · " : current.harness === "opencode" ? "OpenCode · " : ""}{current.backend}{current.pane ? ` · ${current.pane}` : ""}</span>
           {#if current.ticket}<span>{current.ticket}</span>{/if}
           <span title={current.cwd}>{current.cwd.replace(/^.*\/(.+\/.+)$/, "…/$1")}</span>
           <span class:cost={overBudget(current)} title={overBudget(current) ? `Over your cost warning of $${costCap} (defaults.cost_warning_usd)` : "What its headless runs cost, at API list prices"}>{current.runs} runs · ${current.cost_usd.toFixed(2)}{overBudget(current) ? " ⚠" : ""}</span>

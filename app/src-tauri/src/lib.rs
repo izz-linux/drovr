@@ -53,6 +53,8 @@ struct Snapshot {
     herdr: bool,
     /// Whether the Codex CLI is installed, for agents with harness "codex".
     codex: bool,
+    /// Whether OpenCode is installed, for agents with harness "opencode".
+    opencode: bool,
 }
 
 #[tauri::command]
@@ -85,12 +87,13 @@ async fn snapshot() -> Res<Snapshot> {
             unseen_reports: drovr_core::reports::unseen(&e.store)?,
             herdr: installed(&e.cfg.herdr.command),
             codex: installed(&e.cfg.codex.command),
+            opencode: installed(&e.cfg.opencode.command),
         })
     })
     .await
 }
 
-/// Whether a command (herdr, codex) is installed. Checking starts a shell
+/// Whether a command (herdr, codex, opencode) is installed. Checking starts a shell
 /// and the window asks every two seconds, so answers are kept for half a
 /// minute.
 fn installed(command: &str) -> bool {
@@ -150,6 +153,8 @@ struct Defaults {
     model: String,
     /// Codex agents' default model (codex.model).
     codex_model: String,
+    /// OpenCode agents' default model (opencode.model).
+    opencode_model: String,
     permission_mode: String,
     worktrees: bool,
     plans_dir: String,
@@ -176,6 +181,7 @@ async fn defaults() -> Res<Defaults> {
             harness: d.harness.clone(),
             model: d.model.clone(),
             codex_model: e.cfg.codex.model.clone(),
+            opencode_model: e.cfg.opencode.model.clone(),
             permission_mode: d.permission_mode.clone(),
             worktrees: d.worktrees,
             plans_dir: e.cfg.reports.path().display().to_string(),
@@ -309,17 +315,27 @@ async fn term_settings() -> Res<TermSettings> {
     .await
 }
 
-/// Recent Claude Code sessions, to start an agent from one.
+/// Recent sessions of a harness (Claude Code when empty), to start an
+/// agent from one.
 #[tauri::command]
-async fn claude_sessions() -> Res<Vec<drovr_core::sessions::SavedSession>> {
-    use drovr_core::harness::Harness;
-    blocking(|_| Ok(drovr_core::harness::CLAUDE.recent_sessions(40))).await
+async fn sessions(harness: Option<String>) -> Res<Vec<drovr_core::sessions::SavedSession>> {
+    blocking(move |_| {
+        Ok(drovr_core::harness::named(&harness.unwrap_or_default())?.recent_sessions(40))
+    })
+    .await
 }
 
 #[tauri::command]
-async fn find_session(id: String) -> Res<Option<drovr_core::sessions::SavedSession>> {
-    use drovr_core::harness::Harness;
-    blocking(move |_| Ok(drovr_core::harness::CLAUDE.find_session(id.trim()).ok())).await
+async fn find_session(
+    id: String,
+    harness: Option<String>,
+) -> Res<Option<drovr_core::sessions::SavedSession>> {
+    blocking(move |_| {
+        Ok(drovr_core::harness::named(&harness.unwrap_or_default())?
+            .find_session(id.trim())
+            .ok())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -899,7 +915,7 @@ pub fn run() {
             add_lead,
             defaults,
             plans_folders,
-            claude_sessions,
+            sessions,
             find_session,
             read_prompt,
             prompt_agent,

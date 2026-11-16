@@ -505,8 +505,10 @@ fn api(
                         "harness": d.harness,
                         "model": d.model,
                         "codex_model": e.cfg.codex.model,
+                        "opencode_model": e.cfg.opencode.model,
                     },
                     "codex": crate::shell::which(&e.cfg.codex.command),
+                    "opencode": crate::shell::which(&e.cfg.opencode.command),
                 }))
             }
             other => bail!("unknown endpoint {other}"),

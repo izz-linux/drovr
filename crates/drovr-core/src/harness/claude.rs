@@ -90,7 +90,7 @@ impl Harness for Claude {
         })
     }
 
-    fn parse(&self, v: &Value) -> Event {
+    fn parse(&self, v: &Value, _run: &mut Value) -> Event {
         claude_event(v)
     }
 
@@ -325,6 +325,7 @@ mod tests {
                 cli: "/opt/drovr".into(),
                 home: "/data/drovr".into(),
                 mcp_config: "/m.json".into(),
+                dir: "/agent".into(),
                 system_prompt: "/s.md".into(),
                 settings_file: "/settings.json".into(),
                 session: Session::New,
@@ -419,12 +420,15 @@ mod tests {
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#,
         )
         .unwrap();
-        let Event::Lines(l) = Claude.parse(&v) else {
+        let Event::Lines(l) = Claude.parse(&v, &mut Value::Null) else {
             panic!()
         };
         assert_eq!((l[0].text.as_str(), l[1].text.as_str()), ("hi", "Bash ls"));
         assert_eq!(
-            Claude.parse(&json!({"type":"system","subtype":"init","session_id":"s9"})),
+            Claude.parse(
+                &json!({"type":"system","subtype":"init","session_id":"s9"}),
+                &mut Value::Null
+            ),
             Event::Session("s9".into())
         );
     }

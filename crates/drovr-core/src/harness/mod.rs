@@ -7,9 +7,11 @@
 
 mod claude;
 mod codex;
+pub mod opencode;
 
 pub use claude::Claude;
 pub use codex::Codex;
+pub use opencode::OpenCode;
 
 use crate::config::Config;
 use crate::engine::Line;
@@ -24,10 +26,12 @@ use std::path::PathBuf;
 pub static CLAUDE: Claude = Claude;
 /// OpenAI's Codex CLI (experimental).
 pub static CODEX: Codex = Codex;
+/// OpenCode.
+pub static OPENCODE: OpenCode = OpenCode;
 
 /// Every harness, the default first.
-pub fn all() -> [&'static dyn Harness; 2] {
-    [&CLAUDE, &CODEX]
+pub fn all() -> [&'static dyn Harness; 3] {
+    [&CLAUDE, &CODEX, &OPENCODE]
 }
 
 /// A harness by name; empty means the default (Claude Code).
@@ -38,7 +42,7 @@ pub fn named(name: &str) -> Result<&'static dyn Harness> {
     }
     match all().into_iter().find(|h| h.name() == name) {
         Some(h) => Ok(h),
-        None => bail!("unknown harness {name:?}: use claude or codex"),
+        None => bail!("unknown harness {name:?}: use claude, codex or opencode"),
     }
 }
 
@@ -60,7 +64,7 @@ pub fn of(agent: &Agent) -> &'static dyn Harness {
 
 /// One coding-agent CLI.
 pub trait Harness: Sync {
-    /// Its name in the config and the database: `claude`, `codex`.
+    /// Its name in the config and the database: `claude`, `codex`, `opencode`.
     fn name(&self) -> &'static str;
 
     /// The CLI to run, from the config.
@@ -78,6 +82,12 @@ pub trait Harness: Sync {
     /// Arguments for a headless run, which reads its prompt from stdin and
     /// writes JSON lines to stdout.
     fn headless_args(&self, run: &Run) -> Result<Vec<String>>;
+
+    /// Environment variables a headless run needs on top of drovr's own.
+    fn headless_env(&self, run: &Run) -> Result<Vec<(String, String)>> {
+        let _ = run;
+        Ok(vec![])
+    }
 
     /// Whether agents can run in herdr panes.
     fn runs_in_herdr(&self) -> bool {
@@ -102,8 +112,10 @@ pub trait Harness: Sync {
 
     // -- reading a run --------------------------------------------------------
 
-    /// What one line of a run log means.
-    fn parse(&self, event: &Value) -> Event;
+    /// What one line of a run log means. `run` is what the harness kept
+    /// from the earlier lines of the same run (null at its first line), for
+    /// CLIs that report a run's figures piece by piece.
+    fn parse(&self, event: &Value, run: &mut Value) -> Event;
 
     /// What the run that ended with `end` (an `Event::End`) cost, in US
     /// dollars, or None when the CLI doesn't report a cost. `costs` carries
@@ -173,6 +185,9 @@ pub struct Run<'a> {
     pub home: PathBuf,
     /// The MCP config file drovr wrote for the agent (Claude Code reads it).
     pub mcp_config: PathBuf,
+    /// The agent's own folder, where a harness can write the files its CLI
+    /// reads (OpenCode's config and plugin).
+    pub dir: PathBuf,
     /// The system prompt drovr wrote for the agent.
     pub system_prompt: PathBuf,
     /// Where a herdr start's Claude Code settings go.
@@ -266,6 +281,7 @@ pub(crate) mod testing {
             cli: "/opt/drovr".into(),
             home: "/data/drovr".into(),
             mcp_config: "/data/drovr/agents/api/mcp.json".into(),
+            dir: dir.join(format!("agent-{n}")),
             system_prompt: system,
             settings_file: dir.join(format!("settings-{n}.json")),
             session,
@@ -282,6 +298,7 @@ mod tests {
     fn finds_harnesses_by_name() {
         assert_eq!(named("").unwrap().name(), "claude");
         assert_eq!(named("codex").unwrap().name(), "codex");
+        assert_eq!(named("opencode").unwrap().name(), "opencode");
         assert!(named("gemini").is_err());
         let old = Agent::default();
         assert_eq!(of(&old).name(), "claude");
