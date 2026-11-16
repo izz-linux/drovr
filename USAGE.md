@@ -155,11 +155,12 @@ drovr msgs pay-api
 
 - **Reports** (⌘3): HTML reports in `~/.claude/plans/`, grouped by folder, newest first, with new ones marked; if any are unread, the newest opens straight away. Folders collapse and expand with a click, and stay that way; a collapsed folder opens on its own when Reports takes you to an unread report in it. A revised report replaces the earlier copy, whichever agent published it, and older copies of the same title are deleted; an agent keeps earlier versions only when you ask it to, and those fold under the newest. Open one, then send feedback to an agent from the bottom bar.
 - **Code review** (⌘7): pick an agent to see each repo and worktree it worked in, with what changed on its branch (committed or not) and the diffs. It works when the agent started in a folder above your repos. Send feedback about a file. If your plans folder is in a git repo (say `~/.claude`), only the part this agent worked in is shown there.
-- **Agents:** each agent's full output, tool calls and cost. **Open in herdr** opens its session interactively, or focuses its pane if it's already running in herdr. Use **Copy attach cmd** for any terminal.
+- **Agents:** each agent's full output, tool calls and cost. A herdr agent's session shows the same way; **Pane** switches to its pane's screen, and when it's waiting for you there, its last line has a button to the pane. **Open in herdr** opens its session interactively, or focuses its pane if it's already running in herdr. Use **Copy attach cmd** for any terminal.
 - **Timeline:** with `workflow.enabled`, everything that happened on a ticket (see [Read a ticket's timeline](#read-a-tickets-timeline)).
 
 ```sh
 drovr log pay-api-lead 100
+drovr log pay-api-lead 100 --pane  # a herdr agent's pane as it is on screen
 drovr attach pay-api-lead          # prints: cd … && claude --resume …
                                    # (an OpenCode agent: cd … && OPENCODE_CONFIG=… opencode --standalone --session …)
 ```
@@ -340,7 +341,7 @@ Agent and group names are lowercase letters, digits, `-` and `_`, starting with 
 | `drovr stop <agent>` | Stop an agent's current run |
 | `drovr resume <agent> [text…]` | Resume a stopped, failed or interrupted agent |
 | `drovr rm <agent>` | Stop an agent and forget it; says if its worktree was kept |
-| `drovr log <agent> [lines]` | Show an agent's output |
+| `drovr log <agent> [lines] [--pane]` | Show an agent's output. A herdr agent's is its session, as for a headless agent; `--pane` shows its pane's screen |
 | `drovr attach <agent>` | Print a command that opens the agent's session in a terminal |
 | `drovr inbox` | List everything waiting for you: decisions, commands, permission requests, worker requests, and with the ticket workflow, Watcher items, Jira drafts, handoffs and Confluence pages |
 | `drovr answer <id> <answer…>` | Answer an item: a decision's answer; `allow` / `deny` a permission request; `Send to <agent>` a Watcher item; `Approve [model=<model>]` or `Send back: <notes>` a handoff; the text to post for a Jira draft; `approve` a Confluence page |

@@ -115,17 +115,23 @@
     if (!app.selected && app.snap.agents.length) app.selected = app.snap.agents[0].name;
   });
 
+  // A herdr agent shows its session like a headless one; Pane shows its
+  // pane's screen instead.
+  let paneView = $state(false);
+  const herdrAgent = $derived(current?.backend === "herdr");
+
   // Poll the selected agent's output. Unchanged output isn't re-rendered,
   // since every text line goes through the Markdown renderer.
   $effect(() => {
     const name = app.selected;
+    const pane = paneView;
     lines = [];
     if (!name) return;
     let alive = true;
     let last = "";
     const load = async () => {
       try {
-        const l = await api.output(name, 800);
+        const l = await api.output(name, 800, pane);
         const sig = JSON.stringify(l);
         if (alive && sig !== last) { last = sig; lines = l; }
       } catch {}
@@ -311,6 +317,9 @@
             <button onclick={() => act(() => api.resume(current.name), "Resumed")}>Resume</button>
           {/if}
           <button onclick={attach} title="Open this session interactively">{app.snap.herdr ? "Open in herdr" : "Copy attach cmd"}</button>
+          {#if herdrAgent}
+            <button class:on={paneView} onclick={() => (paneView = !paneView)} title="Show its herdr pane's screen instead of the session">Pane</button>
+          {/if}
           <button onclick={() => { app.view = "review"; }}>Review</button>
           {#if currentTickets.length}
             <button onclick={() => (app.timeline = currentTickets[0])} title={`Everything that happened on ${currentTickets.join(", ")}, for review and the retro`}>Timeline</button>
@@ -351,6 +360,7 @@
           {:else if l.kind === "result"}<details class="result" open={hits.includes(i)}><summary>{l.text.split("\n")[0].slice(0, 140) || "(no output)"}</summary><pre>{l.text}</pre></details>
           {:else if l.kind === "final"}<div class="final">{l.text}</div>
           {:else if l.kind === "error"}<pre class="err">{l.text}</pre>
+          {:else if l.kind === "waiting"}<div class="waiting"><span>{l.text}</span> <button onclick={attach}>{app.snap.herdr ? "Open in herdr" : "Copy attach cmd"}</button></div>
           {:else}<pre class="raw">{l.text}</pre>{/if}
           </div>
         {:else}
@@ -424,6 +434,7 @@
   .result pre { white-space: pre-wrap; max-height: 300px; overflow: auto; background: var(--panel); padding: 6px; border-radius: 4px; }
   .final { color: var(--green); font-size: 12px; margin: 6px 0; }
   .err { color: var(--red); white-space: pre-wrap; }
+  .waiting { color: var(--yellow); margin: 8px 0; display: flex; align-items: center; gap: 10px; }
   .raw { margin: 0; white-space: pre-wrap; }
   .queue { border-top: 1px solid var(--border); padding: 6px 16px 0; display: flex; flex-direction: column; gap: 4px; max-height: 30%; overflow: auto; }
   .queued { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; background: var(--panel); border: 1px dashed var(--border); border-radius: 6px; font-size: 13px; }

@@ -153,6 +153,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin:
 .output .l-result { color: var(--muted); max-height: 8em; overflow: hidden; }
 .output .l-final { font-weight: 600; }
 .output .l-error { color: var(--red); }
+.output .l-waiting { color: var(--yellow); font-weight: 600; }
 .queued { border: 1px dashed var(--border); border-radius: 8px; padding: 8px; margin-top: 8px; }
 .composer { position: sticky; bottom: -24px; background: var(--bg); padding: 10px 0 12px; }
 

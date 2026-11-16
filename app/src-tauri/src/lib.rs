@@ -117,8 +117,8 @@ fn installed(command: &str) -> bool {
 // -- agents -------------------------------------------------------------------
 
 #[tauri::command]
-async fn agent_output(name: String, lines: usize) -> Res<Vec<Line>> {
-    blocking(move |e| e.output(&name, lines)).await
+async fn agent_output(name: String, lines: usize, pane: Option<bool>) -> Res<Vec<Line>> {
+    blocking(move |e| e.output_view(&name, lines, pane.unwrap_or(false))).await
 }
 
 #[tauri::command]

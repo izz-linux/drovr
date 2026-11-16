@@ -14,7 +14,7 @@
 //! environment. Saved sessions, costs and models are read from OpenCode's
 //! database, read-only.
 
-use super::{line, Costs, Event, Harness, Live, Run, Session};
+use super::{line, Costs, Event, Harness, Live, Run, Session, Transcript};
 use crate::config::Config;
 use crate::engine::truncate;
 use crate::sessions::SavedSession;
@@ -192,6 +192,47 @@ impl Harness for OpenCode {
         live
     }
 
+    /// The session's messages, from OpenCode's database, as the events
+    /// `opencode run --format json` prints, with your prompts as `prompt`
+    /// events. The app asks every second or two, so answers are kept for two.
+    fn transcript(&self, cfg: &Config, id: &str) -> Option<Transcript> {
+        if !valid_id(id) {
+            return None;
+        }
+        static SEEN: OnceLock<Mutex<HashMap<String, Read>>> = OnceLock::new();
+        let seen = SEEN.get_or_init(Default::default);
+        if let Some((at, events)) = seen.lock().ok()?.get(id) {
+            if at.elapsed() < Duration::from_secs(2) {
+                return Some(Transcript::Events(events.clone()));
+            }
+        }
+        // The newest parts (their IDs sort by time), oldest first.
+        let sql = format!(
+            "SELECT * FROM (SELECT p.id, p.data AS part, json_extract(m.data, '$.role') AS role, \
+               p.time_created AS t FROM part p JOIN message m ON m.id = p.message_id \
+               WHERE p.session_id = '{id}' ORDER BY p.message_id DESC, p.id DESC LIMIT {TRANSCRIPT_PARTS}) \
+             ORDER BY 1"
+        );
+        let events = transcript_events(id, &db(cfg, &sql).ok()?);
+        if let Ok(mut s) = seen.lock() {
+            s.insert(id.to_string(), (Instant::now(), events.clone()));
+        }
+        Some(Transcript::Events(events))
+    }
+
+    fn parse_transcript(&self, v: &Value, run: &mut Value) -> Event {
+        // Each prompt starts a turn, whose figures are counted afresh.
+        if v["type"] == "prompt" {
+            *run = Value::Null;
+            opencode_event(&json!({ "timestamp": v["timestamp"] }), run);
+            return Event::Lines(vec![line(
+                "prompt",
+                v["text"].as_str().unwrap_or("").into(),
+            )]);
+        }
+        opencode_event(v, run)
+    }
+
     fn latest_session(&self, cfg: &Config, cwd: &str, since: f64) -> Option<String> {
         open_db(cfg)
             .and_then(|db| newest_session(&db, cwd, since))
@@ -337,6 +378,44 @@ export default {{
         home = js(&run.home.display().to_string()),
     )
 }
+
+/// How many of a session's newest parts the native view of a herdr agent
+/// reads.
+const TRANSCRIPT_PARTS: usize = 2000;
+
+/// Part rows (`{part, role, t}`, the part as JSON text) as `run --format
+/// json` events: finished text and tool calls, steps, and the prompts you
+/// typed (a user message's text that OpenCode didn't add itself).
+fn transcript_events(id: &str, rows: &[Value]) -> Vec<Value> {
+    rows.iter()
+        .filter_map(|r| {
+            let part: Value = serde_json::from_str(r["part"].as_str()?).ok()?;
+            let t = &r["t"];
+            let event =
+                |kind: &str| json!({ "type": kind, "timestamp": t, "sessionID": id, "part": part });
+            match (r["role"].as_str()?, part["type"].as_str()?) {
+                ("user", "text") if part["synthetic"] != true && part["ignored"] != true => {
+                    Some(json!({ "type": "prompt", "timestamp": t, "text": part["text"] }))
+                }
+                ("assistant", "text") if !part["time"]["end"].is_null() => Some(event("text")),
+                ("assistant", "tool")
+                    if matches!(
+                        part["state"]["status"].as_str(),
+                        Some("completed" | "error")
+                    ) =>
+                {
+                    Some(event("tool_use"))
+                }
+                ("assistant", "step-start") => Some(event("step_start")),
+                ("assistant", "step-finish") => Some(event("step_finish")),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// A session's transcript events and when they were read.
+type Read = (Instant, Vec<Value>);
 
 /// A session's figures and when they were read.
 type Seen = (Instant, Option<Live>);
@@ -1133,6 +1212,84 @@ mod tests {
         assert_eq!((b.total_cost_usd, b.context_tokens), (0.0, 0));
         assert_eq!(live_session(&db, "ses_x").unwrap(), None);
         assert_eq!(OpenCode.session_live(&Config::default(), "x'; --"), None);
+    }
+
+    #[test]
+    fn reads_a_sessions_transcript() {
+        let row = |role: &str, t: i64, part: Value| json!({ "role": role, "t": t, "part": part.to_string() });
+        let rows = [
+            row(
+                "user",
+                1000,
+                json!({ "type": "text", "text": "Fix the login bug" }),
+            ),
+            row(
+                "user",
+                1000,
+                json!({ "type": "text", "text": "<file contents>", "synthetic": true }),
+            ),
+            row("assistant", 1100, json!({ "type": "step-start" })),
+            row(
+                "assistant",
+                1200,
+                json!({ "type": "tool", "tool": "bash", "state": { "status": "completed", "input": { "command": "ls" }, "output": "a.rs" } }),
+            ),
+            row(
+                "assistant",
+                1250,
+                json!({ "type": "tool", "tool": "edit", "state": { "status": "running", "input": {} } }),
+            ),
+            row(
+                "assistant",
+                1300,
+                json!({ "type": "step-finish", "reason": "tool-calls", "cost": 0.5, "tokens": { "input": 10, "output": 5, "cache": { "read": 0, "write": 0 } } }),
+            ),
+            row(
+                "assistant",
+                1400,
+                json!({ "type": "text", "text": "Fixed.", "time": { "start": 1, "end": 2 } }),
+            ),
+            row(
+                "assistant",
+                1500,
+                json!({ "type": "text", "text": "still typing", "time": { "start": 1 } }),
+            ),
+            row(
+                "assistant",
+                3000,
+                json!({ "type": "step-finish", "reason": "stop", "cost": 0.25, "tokens": { "input": 20, "output": 5, "cache": { "read": 0, "write": 0 } } }),
+            ),
+            row(
+                "user",
+                5000,
+                json!({ "type": "text", "text": "Now add a test" }),
+            ),
+        ];
+        let events = transcript_events("ses_1", &rows);
+        let mut run = Value::Null;
+        let shown: Vec<String> = events
+            .iter()
+            .flat_map(|v| match OpenCode.parse_transcript(v, &mut run) {
+                Event::Lines(l) => l
+                    .into_iter()
+                    .map(|l| format!("{} {}", l.kind, l.text))
+                    .collect(),
+                Event::End(end) => vec![format!("end {} {}", end["cost_usd"], end["duration_ms"])],
+                _ => vec![],
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "prompt Fix the login bug",
+                "tool bash ls",
+                "result a.rs",
+                "text Fixed.",
+                // The turn's cost and time, from its prompt.
+                "end 0.75 2000.0",
+                "prompt Now add a test",
+            ]
+        );
     }
 
     #[test]

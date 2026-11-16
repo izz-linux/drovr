@@ -1,7 +1,7 @@
 //! Claude Code (`claude`): drovr's permission prompt, cost tracking, herdr
 //! panes, forking and adopting existing sessions.
 
-use super::{line, Costs, Event, Harness, Live, Run, Session};
+use super::{line, Costs, Event, Harness, Live, Run, Session, Transcript};
 use crate::config::Config;
 use crate::engine::truncate;
 use crate::sessions::SavedSession;
@@ -115,6 +115,27 @@ impl Harness for Claude {
         })
     }
 
+    /// An interactive session's transcript: the same messages as a
+    /// headless run's log, plus the prompts typed into it.
+    fn transcript(&self, cfg: &Config, id: &str) -> Option<Transcript> {
+        let _ = cfg;
+        self.session_file(id).map(Transcript::File)
+    }
+
+    fn parse_transcript(&self, v: &Value, run: &mut Value) -> Event {
+        // A subagent's messages, and what Claude Code adds for itself
+        // (command output, reminders), aren't the conversation.
+        if v["isSidechain"] == true || v["isMeta"] == true {
+            return Event::Skip;
+        }
+        if v["type"] == "user" {
+            if let Some(text) = typed_prompt(&v["message"]["content"]) {
+                return Event::Lines(vec![line("prompt", text)]);
+            }
+        }
+        self.parse(v, run)
+    }
+
     fn session_file(&self, id: &str) -> Option<PathBuf> {
         crate::sessions::file(id)
     }
@@ -195,6 +216,24 @@ fn add_status_line(args: &mut Vec<String>, run: &Run) -> Result<()> {
         run.settings_file.display().to_string(),
     ]);
     Ok(())
+}
+
+/// A prompt someone typed, from a transcript's user message: its text, as
+/// a string or text blocks. Tool results and Claude Code's own messages
+/// (`<command-name>…`, `<local-command-stdout>…`) aren't.
+fn typed_prompt(content: &Value) -> Option<String> {
+    let text = match content {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) if parts.iter().all(|p| p["type"] == "text") => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    let t = text.trim();
+    (!t.is_empty() && !t.starts_with("<command-") && !t.starts_with("<local-command"))
+        .then(|| t.to_string())
 }
 
 /// Claude Code's `--output-format stream-json`.
@@ -413,6 +452,55 @@ mod tests {
         assert_eq!(end["models"], json!(["claude-sonnet-5-5"]));
         // The run's last line still shows the cost, not tokens.
         assert!(end["input_tokens"].is_null());
+    }
+
+    #[test]
+    fn reads_an_interactive_transcript() {
+        let parse =
+            |s: &str| Claude.parse_transcript(&serde_json::from_str(s).unwrap(), &mut Value::Null);
+        // Lines as Claude Code writes them to ~/.claude/projects.
+        assert_eq!(
+            parse(
+                r#"{"type":"user","parentUuid":null,"sessionId":"s1","message":{"role":"user","content":"Fix the login bug"}}"#
+            ),
+            Event::Lines(vec![line("prompt", "Fix the login bug".into())])
+        );
+        assert_eq!(
+            parse(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"and add a test"}]}}"#
+            ),
+            Event::Lines(vec![line("prompt", "and add a test".into())])
+        );
+        let Event::Lines(l) = parse(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+        ) else {
+            panic!()
+        };
+        assert_eq!((l[0].kind.as_str(), l[0].text.as_str()), ("result", "ok"));
+        let Event::Lines(l) =
+            parse(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Done."}]}}"#)
+        else {
+            panic!()
+        };
+        assert_eq!(l[0].text, "Done.");
+        assert_eq!(
+            parse(
+                r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"subagent"}]}}"#
+            ),
+            Event::Skip
+        );
+        assert_eq!(
+            parse(r#"{"type":"ai-title","title":"Login bug"}"#),
+            Event::Skip
+        );
+        assert_eq!(
+            parse(r#"{"type":"user","isMeta":true,"message":{"content":"Caveat"}}"#),
+            Event::Skip
+        );
+        assert_eq!(
+            parse(r#"{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}"#),
+            Event::Lines(vec![])
+        );
     }
 
     #[test]

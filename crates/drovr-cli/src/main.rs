@@ -28,7 +28,8 @@ usage:
   drovr prompt <agent> <text...>             send an agent a prompt
   drovr stop <agent> | resume <agent> [text] stop or resume an agent
   drovr rm <agent>                           stop and forget an agent
-  drovr log <agent> [lines]                  an agent's output
+  drovr log <agent> [lines] [--pane]         an agent's output (--pane: a herdr agent's
+                                             pane as it is on screen)
   drovr attach <agent>                       print the command to open its session interactively
   drovr msgs [group]                         the message bus
   drovr ask <question...>                    ask an agent with your MCPs (Slack, Jira, …)
@@ -263,8 +264,11 @@ fn run() -> Result<()> {
             }
         }
         "log" => {
+            // --pane: a herdr agent's pane as it is on screen.
+            let pane = args.iter().any(|a| a == "--pane");
+            args.retain(|a| a != "--pane");
             let n = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(200);
-            for l in engine.output(arg(&args, 1, "agent")?, n)? {
+            for l in engine.output_view(arg(&args, 1, "agent")?, n, pane)? {
                 println!("[{}] {}", l.kind, l.text);
             }
         }

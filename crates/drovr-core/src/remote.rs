@@ -457,7 +457,11 @@ fn api(
             "snapshot" => snapshot(&e, st),
             "output" => {
                 let lines = qs("lines").parse().unwrap_or(400).min(5000);
-                Ok(json!(e.output(&qs("name"), lines)?))
+                Ok(json!(e.output_view(
+                    &qs("name"),
+                    lines,
+                    qs("pane") == "1"
+                )?))
             }
             "reports" => {
                 let dir = e.cfg.reports.path();

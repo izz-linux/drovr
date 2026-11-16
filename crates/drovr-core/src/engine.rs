@@ -8,7 +8,7 @@
 //!   through the herdr CLI (templates in config).
 
 use crate::config::{expand_tilde, home, Config};
-use crate::harness::{self, Costs, Event, Harness, Run, Session};
+use crate::harness::{self, Costs, Event, Harness, Run, Session, Transcript};
 use crate::ledger;
 use crate::prompts;
 use crate::shell::{self, quote};
@@ -48,6 +48,9 @@ struct HerdrRun {
     /// When drovr last started the agent in a pane: a CLI that names its
     /// own sessions starts one after this.
     opened: f64,
+    /// What herdr last said the agent was doing (`blocked`: waiting for
+    /// you in its pane).
+    status: String,
 }
 
 /// Save what an agent's status line was given, for `refresh_herdr` to read.
@@ -1989,10 +1992,26 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
 
     // -- output ---------------------------------------------------------------
 
+    /// An agent's output. A herdr agent's is its session's record, shown
+    /// as a headless run's is, unless `pane` asks for what's on its pane's
+    /// screen (or there's no record to read yet).
+    pub fn output_view(&self, name: &str, max_lines: usize, pane: bool) -> Result<Vec<Line>> {
+        let agent = self.agent(name)?;
+        if agent.backend == "herdr" {
+            if !pane {
+                if let Some(lines) = self.herdr_native(&agent, max_lines) {
+                    return Ok(lines);
+                }
+            }
+            return self.herdr_read(&agent, max_lines);
+        }
+        self.output(name, max_lines)
+    }
+
     pub fn output(&self, name: &str, max_lines: usize) -> Result<Vec<Line>> {
         let agent = self.agent(name)?;
         if agent.backend == "herdr" {
-            return self.herdr_read(&agent, max_lines);
+            return self.output_view(name, max_lines, false);
         }
         let dir = self.agent_dir(name).join("runs");
         let harness = harness::of(&agent);
@@ -2377,6 +2396,54 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         Ok(())
     }
 
+    /// A herdr agent's session, read from the CLI's own record of it, with
+    /// a last line when it's waiting for you in its pane. None when there's
+    /// no record to read.
+    fn herdr_native(&self, agent: &Agent, max_lines: usize) -> Option<Vec<Line>> {
+        if agent.session_id.is_empty() {
+            return None;
+        }
+        let harness = harness::of(agent);
+        let parse = |v: &Value, run: &mut Value| harness.parse_transcript(v, run);
+        let items = match harness.transcript(&self.cfg, &agent.session_id)? {
+            Transcript::File(path) => rendered_log_by(&path, &parse),
+            Transcript::Events(events) => {
+                let mut run = Value::Null;
+                let mut items = vec![];
+                for v in &events {
+                    match parse(v, &mut run) {
+                        Event::Lines(lines) => items.extend(lines.into_iter().map(Rendered::Line)),
+                        Event::End(end) => items.push(Rendered::Result(end)),
+                        Event::Session(_) | Event::Skip => {}
+                    }
+                }
+                Arc::new(items)
+            }
+        };
+        let prompts = self.agent_dir(&agent.name).join("prompts");
+        let mut costs = Costs::default();
+        let mut lines: Vec<Line> = items
+            .iter()
+            .map(|item| match item {
+                Rendered::Line(l) if l.kind == "prompt" => Line {
+                    kind: l.kind.clone(),
+                    text: prompt_from_file(&l.text, &prompts).unwrap_or_else(|| l.text.clone()),
+                },
+                Rendered::Line(l) => l.clone(),
+                Rendered::Result(v) => result_line(v, harness, &mut costs),
+            })
+            .collect();
+        if self.herdr_load_run(&agent.name).status == "blocked" {
+            lines.push(Line {
+                kind: "waiting".into(),
+                text: "Waiting for you in its herdr pane: a permission prompt or a question."
+                    .into(),
+            });
+        }
+        let skip = lines.len().saturating_sub(max_lines);
+        Some(lines.split_off(skip))
+    }
+
     fn herdr_read(&self, agent: &Agent, max_lines: usize) -> Result<Vec<Line>> {
         if agent.pane.is_empty() {
             return Ok(vec![]);
@@ -2450,7 +2517,12 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             let ended = agent.run_state == "working"
                 && matches!(herdr_status(&out.stdout).as_deref(), Some("idle" | "done"));
             self.herdr_learn_session(&agent, &out.stdout, ended)?;
-            let (run, _) = self.herdr_track_cost(&agent.name)?;
+            let (mut run, _) = self.herdr_track_cost(&agent.name)?;
+            let status = herdr_status(&out.stdout).unwrap_or_default();
+            if run.status != status {
+                run.status = status;
+                self.herdr_save_run(&agent.name, &run)?;
+            }
             let state = match herdr_status(&out.stdout).as_deref() {
                 Some("working") | Some("blocked") => "working",
                 Some("idle") | Some("done") => {
@@ -2518,6 +2590,20 @@ fn herdr_status(stdout: &str) -> Option<String> {
         .as_str()
         .map(String::from)
         .or_else(|| find_key(&v, &["agent_status", "state", "status"]))
+}
+
+/// What a long prompt sent to a herdr pane said: `herdr_prompt` sends
+/// `[drovr] Read <file> and act on it.` for a file in the agent's prompts
+/// folder.
+fn prompt_from_file(text: &str, prompts: &Path) -> Option<String> {
+    let file = text
+        .strip_prefix("[drovr] Read ")?
+        .strip_suffix(" and act on it.")?;
+    let file = Path::new(file);
+    if file.parent()? != prompts {
+        return None;
+    }
+    std::fs::read_to_string(file).ok()
 }
 
 /// The session herdr's integration reports for an agent in `herdr agent
@@ -2655,6 +2741,12 @@ fn run_logs() -> &'static Mutex<HashMap<PathBuf, RunLog>> {
 
 /// A run log's events, parsing only what was added since the last call.
 fn rendered_log(path: &Path, harness: &dyn Harness) -> Arc<Vec<Rendered>> {
+    rendered_log_by(path, &|v, run| harness.parse(v, run))
+}
+
+/// A log of JSON lines read with `parse`, parsing only what was added
+/// since the last call: a run log, or an interactive session's transcript.
+fn rendered_log_by(path: &Path, parse: &dyn Fn(&Value, &mut Value) -> Event) -> Arc<Vec<Rendered>> {
     use std::io::{Read, Seek, SeekFrom};
     use std::os::unix::fs::MetadataExt;
     let Ok(meta) = std::fs::metadata(path) else {
@@ -2692,7 +2784,7 @@ fn rendered_log(path: &Path, harness: &dyn Harness) -> Arc<Vec<Rendered>> {
             let Ok(v) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            match harness.parse(&v, &mut log.state) {
+            match parse(&v, &mut log.state) {
                 Event::Lines(lines) => items.extend(lines.into_iter().map(Rendered::Line)),
                 Event::End(end) => items.push(Rendered::Result(end)),
                 Event::Session(_) | Event::Skip => {}
@@ -3217,6 +3309,98 @@ esac
         cfg.herdr.command = format!("sh {}", stub.display());
         let store = Store::open(&dir.join("t.db")).unwrap();
         (Engine::with(store, cfg, "drovr".into()), log)
+    }
+
+    #[test]
+    fn a_herdr_agent_shows_its_session_natively() {
+        use std::os::unix::fs::PermissionsExt;
+        let (mut engine, _) = engine_with_logging_herdr("native", 0, 0);
+        let name = "native-oc";
+        let prompts = engine.agent_dir(name).join("prompts");
+        std::fs::create_dir_all(&prompts).unwrap();
+        let long = prompts.join("1.md");
+        std::fs::write(&long, "A long ticket\nwith two lines").unwrap();
+        // OpenCode's database, as `opencode db … --format json` prints it.
+        let row = |role: &str, t: i64, part: Value| json!({ "role": role, "t": t, "part": part.to_string() });
+        let rows = json!([
+            row(
+                "user",
+                1000,
+                json!({ "type": "text", "text": "Fix the login bug" })
+            ),
+            row(
+                "assistant",
+                1200,
+                json!({ "type": "tool", "tool": "bash", "state": { "status": "completed", "input": { "command": "ls" }, "output": "a.rs" } })
+            ),
+            row(
+                "assistant",
+                1400,
+                json!({ "type": "text", "text": "Fixed.", "time": { "start": 1, "end": 2 } })
+            ),
+            row(
+                "assistant",
+                3000,
+                json!({ "type": "step-finish", "reason": "stop", "cost": 0.25, "tokens": { "input": 20, "output": 5, "cache": { "read": 0, "write": 0 } } })
+            ),
+            row(
+                "user",
+                5000,
+                json!({ "type": "text", "text": format!("[drovr] Read {} and act on it.", long.display()) })
+            ),
+        ]);
+        let dir = long.parent().unwrap().parent().unwrap().to_path_buf();
+        let rows_file = dir.join("rows.json");
+        std::fs::write(&rows_file, rows.to_string()).unwrap();
+        let stub = dir.join("opencode");
+        std::fs::write(&stub, format!("#!/bin/sh\ncat {}\n", rows_file.display())).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        engine.cfg.opencode.command = stub.display().to_string();
+        engine
+            .store
+            .add_agent(&Agent {
+                name: name.into(),
+                backend: "herdr".into(),
+                harness: "opencode".into(),
+                session_id: "ses_native_test".into(),
+                cwd: "/tmp".into(),
+                ..Agent::default()
+            })
+            .unwrap();
+        engine.store.set_agent(name, "pane", "w1:p1").unwrap();
+        let shown = |engine: &Engine, pane: bool| {
+            engine
+                .output_view(name, 100, pane)
+                .unwrap()
+                .into_iter()
+                .map(|l| format!("{}: {}", l.kind, l.text))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            shown(&engine, false),
+            [
+                "prompt: Fix the login bug",
+                "tool: bash ls",
+                "result: a.rs",
+                "text: Fixed.",
+                "final: finished in 2s · $0.250 · 1 turns",
+                // A long prompt sent through a file shows what the file said.
+                "prompt: A long ticket\nwith two lines",
+            ]
+        );
+        // Waiting in its pane.
+        let mut run = engine.herdr_load_run(name);
+        run.status = "blocked".into();
+        engine.herdr_save_run(name, &run).unwrap();
+        assert_eq!(
+            shown(&engine, false).last().unwrap().split(':').next(),
+            Some("waiting")
+        );
+        // Pane: what herdr reads off the screen (the stub prints nothing).
+        assert!(shown(&engine, true).is_empty());
+        // No session yet: the pane.
+        engine.store.set_agent(name, "session_id", "").unwrap();
+        assert!(shown(&engine, false).is_empty());
     }
 
     fn add_herdr_test_agent(engine: &Engine, backend: &str, pane: &str, state: &str) -> Agent {

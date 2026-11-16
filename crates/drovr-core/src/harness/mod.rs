@@ -151,6 +151,20 @@ pub trait Harness: Sync {
         None
     }
 
+    /// Where an interactive session's record is, so a herdr agent's output
+    /// shows as a headless one's does. None when the CLI keeps none drovr
+    /// can read (or the session hasn't started): the pane is shown instead.
+    fn transcript(&self, cfg: &Config, id: &str) -> Option<Transcript> {
+        let _ = (cfg, id);
+        None
+    }
+
+    /// What one entry of a session's record (`transcript`) means. Prompts
+    /// you typed are `prompt` lines.
+    fn parse_transcript(&self, event: &Value, run: &mut Value) -> Event {
+        self.parse(event, run)
+    }
+
     /// The newest session started in `cwd` since `since` (Unix seconds),
     /// for CLIs that name their sessions themselves: how drovr learns the
     /// session of an agent it started in a herdr pane.
@@ -213,6 +227,15 @@ pub trait Harness: Sync {
 
     /// How the UI and messages name it.
     fn label(&self) -> &'static str;
+}
+
+/// An interactive session's record.
+pub enum Transcript {
+    /// A file that only grows, read as JSON lines (Claude Code's).
+    File(PathBuf),
+    /// The whole record so far, as JSON events (OpenCode's, from its
+    /// database).
+    Events(Vec<Value>),
 }
 
 /// Whether a run starts a session, continues the agent's, or continues a

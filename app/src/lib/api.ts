@@ -96,7 +96,8 @@ export type ClaudeSession = { id: string; cwd: string; first_prompt: string; mod
 
 export const api = {
   snapshot: () => invoke<Snapshot>("snapshot"),
-  output: (name: string, lines = 600) => invoke<Line[]>("agent_output", { name, lines }),
+  /** `pane`: a herdr agent's pane as it is on screen, not its session's record. */
+  output: (name: string, lines = 600, pane = false) => invoke<Line[]>("agent_output", { name, lines, pane }),
   newAgent: (spec: NewAgent) => invoke<Agent>("new_agent", { spec }),
   createGroup: (spec: NewGroup) => invoke<Agent | null>("create_group", { spec }),
   addLead: (group: string, goal: string, backend: string, harness = "") => invoke<Agent>("add_lead", { group, goal, backend, harness }),
