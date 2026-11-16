@@ -660,8 +660,8 @@ function openDispatch(t) {
     const recipient = f.target || lead?.name || "";
     const codex = f.harness === "codex";
     const opencode = f.harness === "opencode";
-    // Claude Code is the only one that runs in herdr panes.
-    const headlessOnly = codex || opencode;
+    // Codex agents run headless only.
+    const headlessOnly = codex;
     if (headlessOnly && f.backend === "herdr") f.backend = "headless";
     const label = codex ? "Codex" : opencode ? "OpenCode" : "Claude Code";
     const field = (label, el) => h("label", { class: "field" }, h("span", { class: "muted small" }, label), el);
@@ -692,7 +692,7 @@ function openDispatch(t) {
           h("option", { value: "codex", selected: codex, disabled: !pipe?.codex }, `Codex (experimental)${pipe?.codex ? "" : " · not found"}`))),
         field("Run in", h("select", { onchange: (e) => { f.backend = e.target.value; draw(); } },
           h("option", { value: "headless", selected: f.backend === "headless" }, "Headless (managed by drovr)"),
-          h("option", { value: "herdr", selected: f.backend === "herdr", disabled: headlessOnly || !state.snap.herdr }, `herdr pane${headlessOnly ? " · Claude Code only" : state.snap.herdr ? "" : " · herdr not found"}`))),
+          h("option", { value: "herdr", selected: f.backend === "herdr", disabled: headlessOnly || !state.snap.herdr }, `herdr pane${headlessOnly ? " · not for Codex" : state.snap.herdr ? "" : " · herdr not found"}`))),
         field(f.mode === "group" ? "Lead's model" : "Model", h("input", { value: f.model, placeholder: defaultModel, autocapitalize: "off", autocorrect: "off", spellcheck: "false", oninput: (e) => (f.model = e.target.value) }))));
     }
     const notes = h("textarea", { rows: 4, placeholder: "Constraints, approach, where to look, what not to touch…", oninput: (e) => (f.notes = e.target.value) });

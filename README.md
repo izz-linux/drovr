@@ -58,7 +58,7 @@ drovr is at version 0.11.3. <!-- x-release-please-version -->
 
 - Live herdr panes.
 - Codex agents with a logged-in Codex, doing real work.
-- OpenCode agents with a real `opencode` process: a run, its plugin loading, and attaching.
+- OpenCode agents with a real `opencode` process: a run, its plugin loading, attaching, and an OpenCode agent in a live herdr pane.
 - Saving a Confluence draft with twg against a real site.
 
 ## Quick start
@@ -133,7 +133,7 @@ Each agent has a state:
 
 In the agent list, click a group's name to collapse or expand it; a collapsed group still shows how many of its agents are working or blocked. ⊟ collapses every group at once. Your choices are remembered, and filtering shows matching agents even inside collapsed groups.
 
-The Agents view shows each agent's output as it runs: text, tool calls with their results, and the cost of each run. Costs are Claude Code's estimate at API list prices (`total_cost_usd`): what your plan actually charges may differ. Claude Code reports a running total for the whole conversation, so drovr counts only what each run added. OpenCode reports what each step cost, and drovr adds up each run's. The total next to an agent covers its headless runs; herdr agents' costs aren't tracked, and Codex reports tokens rather than a cost. An agent that has cost more than `defaults.cost_warning_usd` ($10 by default) is flagged in yellow in the list and its header.
+The Agents view shows each agent's output as it runs: text, tool calls with their results, and the cost of each run. Costs are Claude Code's estimate at API list prices (`total_cost_usd`): what your plan actually charges may differ. Claude Code reports a running total for the whole conversation, so drovr counts only what each run added. OpenCode reports what each step cost, and drovr adds up each run's. The total next to an agent covers its headless runs and its herdr runs; Codex reports tokens rather than a cost. An agent that has cost more than `defaults.cost_warning_usd` ($10 by default) is flagged in yellow in the list and its header.
 
 - **Prompt:** type in the box and send. If the agent is busy, your text is queued: it shows above the box, marked **Queued**, until the agent reads it, either when it checks its messages or when its run ends. Each queued message has two buttons:
   - **Send now** stops the current run and starts a new one with that message, plus anything else waiting for the agent before it. The agent is told its last run was cut short.
@@ -552,7 +552,8 @@ Match System, Light, Dark, Darcula, Solarized Dark and Nord: the same set and co
   - **Permissions:** prompts go to the Inbox through `--permission-prompt-tool mcp__drovr__approve`.
   - **No claude.ai artifacts:** `claude -p` doesn't have Claude Code's artifact tools. See [Sharing a report as a claude.ai artifact](#sharing-a-report-as-a-claudeai-artifact).
 - **herdr agents** (`backend = "herdr"`):
-  - **Runs:** an interactive Claude Code session in its own herdr tab, started with `herdr agent start <name> --kind claude --pane <id> -- <claude args>` and driven with `herdr agent prompt` and `herdr agent read`.
+  - **Runs:** an interactive Claude Code or OpenCode session in its own herdr tab, started with `herdr agent start <name> --kind claude --pane <id> -- <claude args>` (`--kind opencode` and OpenCode's TUI arguments for OpenCode) and driven with `herdr agent prompt` and `herdr agent read`.
+  - **OpenCode in herdr:** before starting it, drovr exports `OPENCODE_CONFIG` in the pane's shell, pointing at the agent's `opencode.json` (drovr's MCP server and system prompt, no permission plugin). OpenCode names its session itself: drovr takes it from `herdr agent get` (`agent_session`) when herdr's OpenCode integration is installed (`herdr integration install opencode`, which also makes its working, idle and blocked states exact), and otherwise, when a run ends, from OpenCode's database: the newest session started in the agent's folder since its pane opened. Its cost, context and model come from OpenCode's database (`opencode db`), so the cost, run records and the build stage's checkpoint work as for Claude Code.
   - **Costs and run records:** Claude Code only reports an interactive session's cost to its status line, so a herdr agent's status line is `drovr status-line <agent>`, which saves the figures and shows the agent's name. It replaces your own `statusLine` in that session only. drovr adds up the cost and records each run when herdr says the agent went from working to idle, so the app, retros and the build stage's checkpoint all see it. These sessions don't report tokens per run or turns, so retros show those as 0.
   - **State:** comes from `herdr agent get` (`.result.agent.agent_status`).
   - **Permissions:** you approve them in the pane, as usual.
@@ -575,7 +576,7 @@ The CLI that runs an agent is its harness. Everything that depends on one CLI is
   - **Costs:** OpenCode reports each step's cost and tokens; a run's last line shows what the run cost, and the build stage's checkpoint reads the session's total.
   - **Sessions:** **Existing session** in **New agent** lists OpenCode's sessions when **Run with** is OpenCode (pasting a `ses_…` ID picks OpenCode for you), and `drovr adopt` takes them too; drovr reads them with `opencode db`. Fork continues in a copy (`--fork`). **Copy attach cmd** opens the session in OpenCode's TUI with drovr's MCP server and system prompt (from `opencode.json` in the agent's folder), where you answer its permission prompts yourself.
   - **Other settings:** `opencode.model` (`provider/model`), `opencode.agent` (the OpenCode agent to run as, `--agent`) and `opencode.extra_args`. `defaults.max_budget_usd` is Claude Code's flag, so it doesn't cap OpenCode runs.
-  - **Not yet:** herdr panes.
+  - **herdr panes:** choose **Run in → herdr pane**, as for Claude Code. You answer OpenCode's permission prompts in the pane. **herdr agents** under [How it works](#how-it-works) says how drovr follows its session and cost.
 - **Codex** (`codex`, experimental): choose **Run with → Codex** when starting an agent, group or hand-off, pass `--harness codex` to the CLI, or set `defaults.harness = "codex"`. An orchestrator's workers use its harness.
   - **Runs:** each prompt is a detached `codex exec --json` run, and later ones `codex exec … resume <session>`. drovr's MCP server and system prompt are passed with `-c` overrides, so your `~/.codex/config.toml` and its MCP servers still apply.
   - **Permissions:** Codex has no permission prompt drovr can answer, so it runs in its own sandbox (`codex.sandbox`, `workspace-write` by default) with approvals off. Anything outside the sandbox comes to your Inbox as a command, through `propose_command`.
@@ -727,7 +728,7 @@ The `[herdr]` keys are command templates. Values substituted into `{placeholders
 | `split` | `{herdr} pane split --current --direction right --cwd {cwd} --no-focus` |
 | `agent_pane` | `{herdr} tab create --cwd {cwd} --label {name} --no-focus`: opens the pane an agent starts in |
 | `list` | `{herdr} pane list`: finds the focused pane (see below) |
-| `start` | `{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}` |
+| `start` | `{herdr} agent start {name} --kind {kind} --pane {pane} --timeout 60000 -- {args}`: `{kind}` is `claude` or `opencode`. A template that still says `--kind claude` gets the agent's kind in its place. |
 | `run` | `{herdr} pane run {pane} {cmd}` |
 | `prompt` | `{herdr} agent prompt {target} {text}` |
 | `read` | `{herdr} agent read {target} --source recent-unwrapped --lines {lines}` |

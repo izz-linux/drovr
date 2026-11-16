@@ -13,14 +13,14 @@
     if (defaults && !backend) backend = defaults.backend;
     if (defaults && !harness) harness = defaults.harness || "claude";
   });
-  // Codex and OpenCode agents run headless, and Codex can't pick up a session.
+  // Codex agents run headless only, and can't pick up a session.
   $effect(() => {
     if (harness === "codex" && adopting) harness = "claude";
     if (headlessOnly && backend === "herdr") backend = "headless";
   });
   const codex = $derived(harness === "codex");
   const opencode = $derived(harness === "opencode");
-  const headlessOnly = $derived(codex || opencode);
+  const headlessOnly = $derived(codex);
   const label = $derived(codex ? "Codex" : opencode ? "OpenCode" : "Claude Code");
   const defaultModel = $derived((codex ? defaults?.codex_model : opencode ? defaults?.opencode_model : defaults?.model) || `${label} default`);
 </script>
@@ -43,7 +43,7 @@
     <select {id} bind:value={backend}>
       <option value="headless">Headless (managed by drovr){defaults?.backend === "headless" ? " · default" : ""}</option>
       <option value="herdr" disabled={!app.snap.herdr || headlessOnly}>
-        herdr pane{defaults?.backend === "herdr" ? " · default" : ""}{headlessOnly ? " (Claude Code only)" : app.snap.herdr ? "" : " (herdr not found)"}
+        herdr pane{defaults?.backend === "herdr" ? " · default" : ""}{headlessOnly ? " (not for Codex)" : app.snap.herdr ? "" : " (herdr not found)"}
       </option>
     </select>
   </div>
@@ -57,7 +57,7 @@
     {#if codex}
       Codex runs in its own sandbox (<code>codex.sandbox</code>) with no permission prompts; anything outside it comes to your Inbox as a command to run.
     {:else if opencode}
-      Permission mode: <code>{defaults.permission_mode}</code>, asked through drovr's OpenCode plugin ·
+      {#if backend === "herdr"}You answer OpenCode's permission prompts in its pane{:else}Permission mode: <code>{defaults.permission_mode}</code>, asked through drovr's OpenCode plugin{/if} ·
       Worktrees: {defaults.worktrees ? "on" : "off"}
     {:else}
       Permission mode: <code>{defaults.permission_mode}</code> ·

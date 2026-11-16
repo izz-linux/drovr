@@ -228,7 +228,7 @@ drovr new --harness opencode fix-ci ~/code/api "Make CI green"
 drovr group --harness opencode checkout-v2 ~/code/web "Move checkout to the new payments API"
 ```
 
-Set `defaults.harness = "opencode"` to make OpenCode the preselected choice. OpenCode agents run headless only. **Copy attach cmd** opens one in OpenCode's TUI, where you answer its permission prompts yourself.
+Set `defaults.harness = "opencode"` to make OpenCode the preselected choice. **Run in → herdr pane** runs it in OpenCode's TUI in a herdr tab, where you answer its permission prompts yourself; install herdr's OpenCode integration (`herdr integration install opencode`) so herdr reports its state and session exactly. **Copy attach cmd** opens a headless one in OpenCode's TUI.
 
 ### Run an agent with Codex (experimental)
 

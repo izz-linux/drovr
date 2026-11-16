@@ -317,7 +317,7 @@ impl Default for Remote {
 #[serde(default)]
 pub struct Defaults {
     /// "headless" runs `claude -p` processes drovr owns; "herdr" runs
-    /// interactive Claude Code sessions in herdr panes.
+    /// interactive Claude Code or OpenCode sessions in herdr panes.
     pub backend: String,
     /// The CLI new agents run with: "claude" (Claude Code), "opencode"
     /// (OpenCode, headless only) or "codex" (experimental, headless only).
@@ -680,7 +680,7 @@ impl Default for Herdr {
             agent_pane: "{herdr} tab create --cwd {cwd} --label {name} --no-focus".into(),
             list: "{herdr} pane list".into(),
             start:
-                "{herdr} agent start {name} --kind claude --pane {pane} --timeout 60000 -- {args}"
+                "{herdr} agent start {name} --kind {kind} --pane {pane} --timeout 60000 -- {args}"
                     .into(),
             run: "{herdr} pane run {pane} {cmd}".into(),
             prompt: "{herdr} agent prompt {target} {text}".into(),

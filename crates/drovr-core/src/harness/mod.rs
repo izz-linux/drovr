@@ -110,6 +110,33 @@ pub trait Harness: Sync {
         )
     }
 
+    /// The agent kind herdr knows it by (`herdr agent start --kind`).
+    fn herdr_kind(&self) -> &'static str {
+        self.name()
+    }
+
+    /// Environment variables the agent's pane needs before it starts; drovr
+    /// exports them in the pane's shell, which herdr starts the agent from.
+    fn herdr_env(&self, run: &Run) -> Result<Vec<(String, String)>> {
+        let _ = run;
+        Ok(vec![])
+    }
+
+    /// An interactive session's running figures, read from the CLI's own
+    /// records, for CLIs with no status line to report them.
+    fn session_live(&self, cfg: &Config, id: &str) -> Option<Live> {
+        let _ = (cfg, id);
+        None
+    }
+
+    /// The newest session started in `cwd` since `since` (Unix seconds),
+    /// for CLIs that name their sessions themselves: how drovr learns the
+    /// session of an agent it started in a herdr pane.
+    fn latest_session(&self, cfg: &Config, cwd: &str, since: f64) -> Option<String> {
+        let _ = (cfg, cwd, since);
+        None
+    }
+
     // -- reading a run --------------------------------------------------------
 
     /// What one line of a run log means. `run` is what the harness kept

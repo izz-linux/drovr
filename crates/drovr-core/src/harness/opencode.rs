@@ -4,25 +4,30 @@
 //! your own, and drovr's permission prompt through a plugin in that config:
 //! before each tool call it asks `drovr hook permission`, which answers the
 //! same way Claude Code's permission prompt is answered (`permissions.*`,
-//! then the Inbox). Headless only; sessions can be adopted and forked.
+//! then the Inbox). Agents can also run in herdr panes (herdr's `opencode`
+//! kind), where you answer OpenCode's own prompts; sessions can be adopted
+//! and forked.
 
-use super::{line, Costs, Event, Harness, Run, Session};
+use super::{line, Costs, Event, Harness, Live, Run, Session};
 use crate::config::Config;
 use crate::engine::truncate;
 use crate::sessions::SavedSession;
 use crate::shell::quote;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub struct OpenCode;
 
 /// The config a headless run reads; the plugin it loads.
 const RUN_CONFIG: &str = "opencode-run.json";
 const PLUGIN: &str = "opencode-permissions.js";
-/// The config an interactive session (attach) reads: no plugin, since you
-/// answer its permission prompts yourself.
+/// The config an interactive session (attach, a herdr pane) reads: no
+/// plugin, since you answer its permission prompts yourself.
 const ATTACH_CONFIG: &str = "opencode.json";
 
 impl Harness for OpenCode {
@@ -102,11 +107,7 @@ impl Harness for OpenCode {
     }
 
     fn find_session(&self, id: &str) -> Result<SavedSession> {
-        if id.is_empty()
-            || !id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
+        if !valid_id(id) {
             bail!("{id:?} isn't an OpenCode session ID (ses_…)");
         }
         sessions(&format!("id = '{id}'"), 1)?
@@ -119,14 +120,81 @@ impl Harness for OpenCode {
         sessions("1 = 1", limit).unwrap_or_default()
     }
 
+    fn runs_in_herdr(&self) -> bool {
+        true
+    }
+
+    /// OpenCode's TUI. Until drovr knows the session a pane started (see
+    /// `latest_session`), resuming starts a new one rather than guessing.
+    fn herdr_args(&self, run: &Run) -> Result<Vec<String>> {
+        let id = &run.agent.session_id;
+        let mut args = match run.session {
+            _ if id.is_empty() => vec![],
+            Session::New => vec![],
+            Session::Resume => vec!["--session".into(), id.clone()],
+            Session::Fork => vec!["--session".into(), id.clone(), "--fork".into()],
+        };
+        args.extend(opencode_common(run));
+        Ok(args)
+    }
+
+    fn herdr_env(&self, run: &Run) -> Result<Vec<(String, String)>> {
+        Ok(vec![(
+            "OPENCODE_CONFIG".into(),
+            attach_config(run)?.display().to_string(),
+        )])
+    }
+
+    /// What the session has cost (its subagents' sessions included), the
+    /// context its last answer was given and the model, from OpenCode's
+    /// database. herdr agents are refreshed every few seconds, so answers
+    /// are kept for a few.
+    fn session_live(&self, cfg: &Config, id: &str) -> Option<Live> {
+        if !valid_id(id) {
+            return None;
+        }
+        static SEEN: OnceLock<Mutex<HashMap<String, Seen>>> = OnceLock::new();
+        let seen = SEEN.get_or_init(Default::default);
+        if let Some((at, live)) = seen.lock().ok()?.get(id) {
+            if at.elapsed() < Duration::from_secs(8) {
+                return live.clone();
+            }
+        }
+        let sql = format!(
+            "SELECT \
+               (SELECT COALESCE(SUM(json_extract(m.data, '$.cost')), 0) FROM message m \
+                 WHERE m.session_id IN (SELECT id FROM session WHERE id = '{id}' OR parent_id = '{id}')) AS cost, \
+               (SELECT m.data FROM message m WHERE m.session_id = '{id}' \
+                 AND json_extract(m.data, '$.role') = 'assistant' \
+                 ORDER BY m.time_created DESC LIMIT 1) AS last"
+        );
+        let live = db(cfg, &sql)
+            .ok()
+            .and_then(|rows| live_of(id, rows.first()?));
+        if let Ok(mut s) = seen.lock() {
+            s.insert(id.to_string(), (Instant::now(), live.clone()));
+        }
+        live
+    }
+
+    fn latest_session(&self, cfg: &Config, cwd: &str, since: f64) -> Option<String> {
+        let sql = format!(
+            "SELECT id FROM session WHERE parent_id IS NULL AND directory = {} \
+             AND time_created >= {} ORDER BY time_created DESC LIMIT 1",
+            sql_str(cwd),
+            (since * 1000.0) as i64
+        );
+        db(cfg, &sql).ok()?.first()?["id"]
+            .as_str()
+            .map(String::from)
+    }
+
     fn attach_command(&self, run: &Run) -> Result<String> {
         let id = &run.agent.session_id;
         if id.is_empty() {
             bail!("{} hasn't started an OpenCode session yet", run.agent.name);
         }
-        std::fs::create_dir_all(&run.dir)?;
-        let path = run.dir.join(ATTACH_CONFIG);
-        std::fs::write(&path, serde_json::to_string_pretty(&config(run))?)?;
+        let path = attach_config(run)?;
         let mut args = vec![
             self.command(run.cfg).to_string(),
             "--session".into(),
@@ -220,17 +288,35 @@ export const DrovrPermissions = async () => ({{
     )
 }
 
-/// Saved sessions from OpenCode's database, newest first. Subagents'
-/// sessions (with a parent) and archived ones are left out.
-fn sessions(filter: &str, limit: usize) -> Result<Vec<SavedSession>> {
-    let cfg = Config::load().unwrap_or_default();
-    let sql = format!(
-        "SELECT id, title, directory, time_updated FROM session \
-         WHERE parent_id IS NULL AND time_archived IS NULL AND {filter} \
-         ORDER BY time_updated DESC LIMIT {limit}"
-    );
+/// A session's figures and when they were read.
+type Seen = (Instant, Option<Live>);
+
+/// The config an interactive session reads, written fresh.
+fn attach_config(run: &Run) -> Result<PathBuf> {
+    std::fs::create_dir_all(&run.dir)?;
+    let path = run.dir.join(ATTACH_CONFIG);
+    std::fs::write(&path, serde_json::to_string_pretty(&config(run))?)?;
+    Ok(path)
+}
+
+/// OpenCode's session IDs (`ses_…`): safe to put in a query as they are.
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// A string as an SQL literal.
+fn sql_str(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Rows from OpenCode's database (`opencode db … --format json`, which
+/// prints nothing when there are none).
+fn db(cfg: &Config, sql: &str) -> Result<Vec<Value>> {
     let out = Command::new(&cfg.opencode.command)
-        .args(["db", &sql, "--format", "json"])
+        .args(["db", sql, "--format", "json"])
         .output()
         .with_context(|| format!("running {}", cfg.opencode.command))?;
     if !out.status.success() {
@@ -239,13 +325,42 @@ fn sessions(filter: &str, limit: usize) -> Result<Vec<SavedSession>> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(parse_sessions(&String::from_utf8_lossy(&out.stdout)))
+    Ok(serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap_or_default())
 }
 
-/// `opencode db … --format json` rows as saved sessions. It prints nothing
-/// when there are none.
-fn parse_sessions(out: &str) -> Vec<SavedSession> {
-    let rows: Vec<Value> = serde_json::from_str(out.trim()).unwrap_or_default();
+/// A session's figures from `session_live`'s row: its cost, and the last
+/// answer's message (`data`, as JSON text) for the context and model.
+fn live_of(id: &str, row: &Value) -> Option<Live> {
+    let last: Value = row["last"]
+        .as_str()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    let t = &last["tokens"];
+    let n = |x: &Value| x.as_u64().unwrap_or(0);
+    Some(Live {
+        session: id.to_string(),
+        total_cost_usd: row["cost"].as_f64()?,
+        context_tokens: n(&t["input"]) + n(&t["cache"]["read"]) + n(&t["cache"]["write"]),
+        model: last["modelID"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+/// Saved sessions from OpenCode's database, newest first. Subagents'
+/// sessions (with a parent) and archived ones are left out.
+fn sessions(filter: &str, limit: usize) -> Result<Vec<SavedSession>> {
+    let sql = format!(
+        "SELECT id, title, directory, time_updated FROM session \
+         WHERE parent_id IS NULL AND time_archived IS NULL AND {filter} \
+         ORDER BY time_updated DESC LIMIT {limit}"
+    );
+    Ok(parse_sessions(&db(
+        &Config::load().unwrap_or_default(),
+        &sql,
+    )?))
+}
+
+/// Database rows as saved sessions.
+fn parse_sessions(rows: &[Value]) -> Vec<SavedSession> {
     rows.iter()
         .filter_map(|r| {
             Some(SavedSession {
@@ -678,12 +793,62 @@ mod tests {
     #[test]
     fn reads_saved_sessions() {
         let out = r#"[{"id":"ses_b","title":"Fix the login bug","directory":"/r/api","time_updated":1760000000000}]"#;
-        let s = parse_sessions(out);
+        let s = parse_sessions(&serde_json::from_str::<Vec<Value>>(out).unwrap());
         assert_eq!((s[0].id.as_str(), s[0].cwd.as_str()), ("ses_b", "/r/api"));
         assert_eq!(s[0].first_prompt, "Fix the login bug");
         assert_eq!(s[0].modified, 1_760_000_000.0);
-        assert!(parse_sessions("").is_empty());
+        assert!(parse_sessions(&[]).is_empty());
         assert!(OpenCode.find_session("x'; DROP TABLE session; --").is_err());
+    }
+
+    #[test]
+    fn starts_in_a_herdr_pane() {
+        assert!(OpenCode.runs_in_herdr());
+        assert_eq!(OpenCode.herdr_kind(), "opencode");
+        let a = agent("ses_1");
+        let (resumed, env, dir) = with(&a, Session::Resume, |r| {
+            (
+                OpenCode.herdr_args(r).unwrap(),
+                OpenCode.herdr_env(r).unwrap(),
+                r.dir.clone(),
+            )
+        });
+        assert_eq!(resumed, ["--session", "ses_1"]);
+        assert_eq!(
+            env,
+            [(
+                "OPENCODE_CONFIG".to_string(),
+                dir.join(ATTACH_CONFIG).display().to_string()
+            )]
+        );
+        let forked = with(&a, Session::Fork, |r| OpenCode.herdr_args(r).unwrap());
+        assert_eq!(forked, ["--session", "ses_1", "--fork"]);
+        // A session drovr hasn't learned yet: a new one, not a guess.
+        let none = with(&agent(""), Session::Resume, |r| {
+            OpenCode.herdr_args(r).unwrap()
+        });
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn reads_a_live_session() {
+        let last = json!({ "role": "assistant", "modelID": "claude-sonnet-5-5",
+            "tokens": { "input": 12, "output": 40, "cache": { "read": 9000, "write": 300 } } });
+        let row = json!({ "cost": 1.25, "last": last.to_string() });
+        assert_eq!(
+            live_of("ses_1", &row),
+            Some(Live {
+                session: "ses_1".into(),
+                total_cost_usd: 1.25,
+                context_tokens: 9312,
+                model: "claude-sonnet-5-5".into(),
+            })
+        );
+        // Before the first answer.
+        let row = json!({ "cost": 0, "last": null });
+        assert_eq!(live_of("ses_1", &row).unwrap().context_tokens, 0);
+        assert_eq!(sql_str("/r/it's"), "'/r/it''s'");
+        assert_eq!(OpenCode.session_live(&Config::default(), "x'; --"), None);
     }
 
     #[test]
