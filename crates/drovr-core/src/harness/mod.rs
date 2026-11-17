@@ -46,6 +46,28 @@ pub fn named(name: &str) -> Result<&'static dyn Harness> {
     }
 }
 
+/// The tools that change files, which a build agent's reviewer can't use.
+pub const EDIT_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/// Whether the agent is a build agent's reviewer, which only reads.
+pub fn read_only(agent: &Agent) -> bool {
+    agent.stage == crate::config::REVIEW
+}
+
+/// The tools an agent can't use: `defaults.disallowed_tools`, and for a
+/// reviewer, the ones that change files.
+pub fn disallowed(cfg: &Config, agent: &Agent) -> Vec<String> {
+    let mut tools = cfg.defaults.disallowed_tools.clone();
+    if read_only(agent) {
+        for t in EDIT_TOOLS {
+            if !tools.iter().any(|x| x == t) {
+                tools.push(t.to_string());
+            }
+        }
+    }
+    tools
+}
+
 /// The model an agent runs on: its own (a stage's, or one you chose), else
 /// the harness's configured default; empty for the CLI's own default.
 pub fn model_of(h: &dyn Harness, agent: &Agent, cfg: &Config) -> String {
@@ -320,6 +342,71 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::testing::{agent, with};
+
+    #[test]
+    fn a_reviewer_cant_change_files_in_any_harness() {
+        let reviewer = Agent {
+            stage: crate::config::REVIEW.into(),
+            ..agent("s1")
+        };
+        let builder = Agent {
+            stage: "build".into(),
+            ..agent("s1")
+        };
+        let flag = |args: &[String], name: &str| {
+            args.iter()
+                .position(|a| a == name)
+                .map(|i| args[i + 1].clone())
+        };
+        let claude = |a: &Agent| {
+            with(a, Session::New, |r| {
+                named("claude").unwrap().headless_args(r).unwrap()
+            })
+        };
+        assert_eq!(
+            flag(&claude(&reviewer), "--disallowedTools").as_deref(),
+            Some("Edit,Write,MultiEdit,NotebookEdit")
+        );
+        assert_eq!(flag(&claude(&builder), "--disallowedTools"), None);
+        let codex = |a: &Agent| {
+            with(a, Session::New, |r| {
+                named("codex").unwrap().headless_args(r).unwrap()
+            })
+        };
+        assert_eq!(flag(&codex(&reviewer), "-s").as_deref(), Some("read-only"));
+        assert_eq!(
+            flag(&codex(&builder), "-s").as_deref(),
+            Some("workspace-write")
+        );
+        let opencode = |a: &Agent| {
+            with(a, Session::New, |r| {
+                let env = named("opencode").unwrap().headless_env(r).unwrap();
+                let text = std::fs::read_to_string(&env[0].1).unwrap();
+                serde_json::from_str::<Value>(&text).unwrap()
+            })
+        };
+        assert_eq!(
+            opencode(&reviewer)["permissions"],
+            serde_json::json!([{ "action": "edit", "resource": "*", "effect": "deny" }])
+        );
+        assert!(opencode(&builder).get("permissions").is_none());
+    }
+
+    #[test]
+    fn a_reviewers_disallowed_tools_add_to_yours() {
+        let mut cfg = Config::default();
+        cfg.defaults.disallowed_tools = vec!["WebFetch".into(), "Write".into()];
+        let reviewer = Agent {
+            stage: crate::config::REVIEW.into(),
+            ..agent("s1")
+        };
+        assert_eq!(
+            disallowed(&cfg, &reviewer),
+            ["WebFetch", "Write", "Edit", "MultiEdit", "NotebookEdit"]
+        );
+        assert_eq!(disallowed(&cfg, &agent("s1")), ["WebFetch", "Write"]);
+    }
 
     #[test]
     fn finds_harnesses_by_name() {

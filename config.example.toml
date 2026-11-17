@@ -75,6 +75,8 @@ order = ["triage", "research", "blueprint", "build", "close"]
 build_checkpoint_tokens = 150000   # the build stage checkpoints and starts a fresh session past this much context (0 = off)
 build_checkpoint_usd = 15          # ...or once its session has cost this much (0 = off)
 tidy_on_close = true               # remove stopped stage agents when the last handoff is approved
+review = false                     # pair each build agent with a reviewer that can't edit files and proposes diffs to it
+review_skill = ""                  # a SKILL.md the reviewers follow, e.g. "~/.claude/skills/code-review/SKILL.md"
 
 [retro]                       # a retro you start from a ticket's timeline or Pipeline
 model = ""                    # the retro agent's model; empty = the default
@@ -83,6 +85,7 @@ skills_dir = "~/.claude/skills"   # where approved skill proposals are written
 [stages.models]               # the model each stage runs on; unset = the default
 # triage = "claude-haiku-5-5"
 # blueprint = "claude-opus-5-5"
+# review = "claude-opus-5-5"   # build agents' reviewers, with stages.review on
 
 [permissions]
 # Headless agents use these without asking; everything else shows up in the Inbox.

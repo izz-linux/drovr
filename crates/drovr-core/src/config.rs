@@ -67,6 +67,13 @@ pub struct Stages {
     /// Remove stopped stage agents when the last stage's handoff is
     /// approved. Their sessions and the record stay.
     pub tidy_on_close: bool,
+    /// Pair each build agent with a reviewer (`<builder>-review`) that runs
+    /// alongside it in the same folder, can't edit files, and sends the
+    /// builder its findings and proposed diffs. Its model is
+    /// `models.review`.
+    pub review: bool,
+    /// A SKILL.md the reviewers follow; empty, they review on their own.
+    pub review_skill: String,
 }
 
 impl Default for Stages {
@@ -79,6 +86,8 @@ impl Default for Stages {
             build_checkpoint_tokens: 150_000,
             build_checkpoint_usd: 15.0,
             tidy_on_close: true,
+            review: false,
+            review_skill: String::new(),
         }
     }
 }
@@ -93,6 +102,19 @@ impl Stages {
     pub fn model(&self, stage: &str) -> &str {
         self.models.get(stage).map(String::as_str).unwrap_or("")
     }
+}
+
+/// The stage of a build agent's reviewer. It isn't in `stages.order`: it
+/// runs alongside the build stage and never hands off.
+pub const REVIEW: &str = "review";
+
+/// A build agent's reviewer's name: `<builder>-review`, the builder's part
+/// cut so it fits the 40-character limit.
+pub fn reviewer_name(builder: &str) -> String {
+    let suffix = format!("-{REVIEW}");
+    let keep = 40 - suffix.len();
+    let base: String = builder.chars().take(keep).collect();
+    format!("{}{suffix}", base.trim_end_matches(['-', '_']))
 }
 
 /// The ticket workflow, as a whole: the record of each ticket's work and
@@ -868,6 +890,28 @@ pub fn personalize(text: &str, you: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::Config;
+
+    #[test]
+    fn names_a_builders_reviewer_within_the_limit() {
+        assert_eq!(super::reviewer_name("g-api"), "g-api-review");
+        let long = "g-a-very-long-builder-name-that-hits-40c";
+        assert_eq!(long.len(), 40);
+        let r = super::reviewer_name(long);
+        assert_eq!(r, "g-a-very-long-builder-name-that-h-review");
+        // A cut that ends on a dash doesn't double it.
+        assert_eq!(
+            super::reviewer_name("g-a-very-long-builder-name-that-x-yyyyyy"),
+            "g-a-very-long-builder-name-that-x-review"
+        );
+        assert_eq!(
+            super::reviewer_name("g-a-very-long-builder-name-that--yyyyyy"),
+            "g-a-very-long-builder-name-that-review"
+        );
+        assert!(r.len() <= 40 && r != long);
+        let off = Config::default();
+        assert!(!off.stages.review);
+        assert!(!off.stages.order.iter().any(|s| s == super::REVIEW));
+    }
 
     #[test]
     fn tests_never_use_the_real_data_folder() {

@@ -573,6 +573,23 @@ impl Engine {
                 .enabled
                 .then_some(self.cfg.stages.order.as_slice()),
         );
+        if self.cfg.stages.review && self.staged(agent) {
+            // A reviewer's name is its builder's, maybe cut short, so find
+            // the builder the other way round.
+            let pair = if agent.stage == crate::config::REVIEW {
+                peers
+                    .iter()
+                    .find(|p| crate::config::reviewer_name(&p.name) == agent.name)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default()
+            } else {
+                crate::config::reviewer_name(&agent.name)
+            };
+            text += &crate::config::personalize(
+                &prompts::review_prompt(agent, &pair, &self.cfg.stages.review_skill),
+                &self.cfg.your_name(),
+            );
+        }
         if self.cfg.datadog.pup {
             text += &crate::config::personalize(crate::datadog::PROMPT, &self.cfg.your_name());
         }
@@ -634,8 +651,13 @@ impl Engine {
         if !Path::new(&cwd).is_dir() {
             bail!("working directory {cwd} does not exist");
         }
-        // A retro works in its own folder under the plans, never a worktree.
-        if self.cfg.defaults.worktrees && resumed.is_none() && spec.stage != "retro" {
+        // A retro works in its own folder under the plans, never a worktree;
+        // a reviewer works in its builder's.
+        if self.cfg.defaults.worktrees
+            && resumed.is_none()
+            && spec.stage != "retro"
+            && spec.stage != crate::config::REVIEW
+        {
             cwd = self.make_worktree(&cwd, &spec.name)?;
         }
         let agent = Agent {
@@ -708,7 +730,72 @@ impl Engine {
         } else {
             self.prompt(&agent.name, &task)?;
         }
-        self.agent(&agent.name)
+        let agent = self.agent(&agent.name)?;
+        if self.reviewed(&agent) {
+            // The build agent is running either way; its lead hears if its
+            // reviewer couldn't start.
+            if let Err(e) = self.start_reviewer(&agent) {
+                self.record(
+                    &agent.name,
+                    "reviewer_failed",
+                    json!({ "error": e.to_string() }),
+                );
+                if let Some(lead) = self.lead_of(&agent.group_name) {
+                    let _ = self.store.send(
+                        "drovr",
+                        &lead.name,
+                        &format!("{}'s reviewer didn't start: {e}", agent.name),
+                        "",
+                    );
+                }
+            }
+        }
+        Ok(agent)
+    }
+
+    /// Whether a build agent gets a reviewer: `stages.review` is on and it
+    /// works its ticket in stages.
+    fn reviewed(&self, agent: &Agent) -> bool {
+        self.cfg.stages.review
+            && agent.stage == "build"
+            && agent.role == "worker"
+            && self.staged(agent)
+    }
+
+    /// Start a build agent's reviewer, in the builder's folder, on
+    /// `stages.models.review`.
+    fn start_reviewer(&self, builder: &Agent) -> Result<Agent> {
+        let name = crate::config::reviewer_name(&builder.name);
+        let task = format!(
+            "You review `{builder}`'s work on this ticket as it builds. Read the ticket, the handoffs and the blueprint in the plans folder now so you know what it's building, then end your turn: `{builder}` messages you when it has something for you to review.\n\n`{builder}`'s task:\n\n{task}",
+            builder = builder.name,
+            task = builder.task,
+        );
+        self.start_agent(NewAgent {
+            name,
+            group: builder.group_name.clone(),
+            role: "worker".into(),
+            backend: builder.backend.clone(),
+            harness: builder.harness.clone(),
+            cwd: builder.cwd.clone(),
+            ticket: builder.ticket.clone(),
+            task,
+            stage: crate::config::REVIEW.into(),
+            ..NewAgent::default()
+        })
+    }
+
+    /// Stop a build agent's reviewer, if it has one that's still going.
+    pub(crate) fn stop_reviewer(&self, builder: &str) {
+        let name = crate::config::reviewer_name(builder);
+        if let Ok(Some(r)) = self.store.agent(&name) {
+            if r.stage == crate::config::REVIEW
+                && r.run_state != "stopped"
+                && self.stop(&name).is_ok()
+            {
+                self.record(&name, "stopped", json!({ "by": builder }));
+            }
+        }
     }
 
     /// The start of a task whose agent creates its own Jira ticket first.
@@ -1162,6 +1249,7 @@ impl Engine {
     pub fn stop_by_you(&self, name: &str) -> Result<()> {
         self.stop(name)?;
         self.record(name, "stopped", json!({ "by": "you" }));
+        self.stop_reviewer(name);
         Ok(())
     }
 
@@ -1248,6 +1336,8 @@ impl Engine {
         let agent = self.store.agent(name)?;
         self.record(name, "agent_removed", json!({}));
         let _ = self.stop(name);
+        // Its reviewer works in its folder, which may be about to go.
+        self.stop_reviewer(name);
         self.store.remove_agent(name)?;
         let _ = std::fs::remove_dir_all(home().join("agents").join(name));
         let worktree = home().join("worktrees").join(name);
@@ -1630,12 +1720,17 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             bail!("name is required");
         }
         let group = lead.group_name.clone();
-        // Stage agents that finished (stopped) don't count against the limit.
+        // Stage agents that finished (stopped) don't count against the
+        // limit, and nor do reviewers, which come with their builders.
         let workers = self
             .store
             .agents(Some(&group))?
             .into_iter()
-            .filter(|a| a.role == "worker" && !(!a.stage.is_empty() && a.run_state == "stopped"))
+            .filter(|a| {
+                a.role == "worker"
+                    && a.stage != crate::config::REVIEW
+                    && !(!a.stage.is_empty() && a.run_state == "stopped")
+            })
             .count();
         if workers >= self.cfg.orchestrator.max_workers {
             bail!(
@@ -1702,7 +1797,7 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
                     .store
                     .agents(Some(&spec.group))?
                     .iter()
-                    .filter(|a| a.role == "worker")
+                    .filter(|a| a.role == "worker" && a.stage != crate::config::REVIEW)
                     .count();
                 let max = self.cfg.orchestrator.max_workers;
                 if workers >= max {

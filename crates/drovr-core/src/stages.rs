@@ -45,6 +45,9 @@ impl Engine {
         if me.stage.is_empty() {
             bail!("only a stage's agent hands off; you have no stage");
         }
+        if me.stage == crate::config::REVIEW {
+            bail!("a reviewer doesn't hand off: send your findings to your builder, and drovr stops you when its stage ends");
+        }
         let text = |k: &str| a[k].as_str().unwrap_or("").trim().to_string();
         if text("summary").is_empty() || text("next_inputs").is_empty() {
             bail!("summary and next_inputs are required");
@@ -133,6 +136,7 @@ impl Engine {
         });
         let me = self.agent(&item.agent)?;
         let _ = self.stop(&me.name);
+        self.stop_reviewer(&me.name);
         self.record(
             &me.name,
             "handoff_approved",
@@ -440,6 +444,126 @@ mod tests {
             })
             .unwrap();
         (dir, engine, id)
+    }
+
+    /// `setup` for reviews, its agents' runs (and drovr's hook) `true`: they
+    /// start and exit straight away.
+    fn review_setup(name: &str, review: bool) -> (PathBuf, Engine, String) {
+        let (dir, engine, id) = setup_with(name, |c| {
+            c.stages.review = review;
+            c.stages.review_skill = "~/.claude/skills/review/SKILL.md".into();
+            c.stages
+                .models
+                .insert(crate::config::REVIEW.into(), "gpt-review".into());
+            c.orchestrator.auto_spawn = true;
+            c.orchestrator.max_workers = 2;
+            c.defaults.worktrees = false;
+            c.claude.command = "true".into();
+        });
+        let cfg = engine.cfg.clone();
+        let engine = Engine::with(Store::open(&dir.join("t.db")).unwrap(), cfg, "true".into());
+        (dir, engine, id)
+    }
+
+    #[test]
+    fn each_build_agent_gets_a_reviewer_that_stops_with_it() {
+        let (dir, engine, id) = review_setup("pair", true);
+        let lead = format!("lead-{id}");
+        let cwd = dir.display().to_string();
+        let spawn = |name: &str, stage: &str| {
+            engine.spawn_worker(&lead, name, "build the api", &cwd, stage, "")
+        };
+        let r = spawn("pair-api", "build").unwrap();
+        let builder = engine.agent(r["spawned"].as_str().unwrap()).unwrap();
+        let reviewer = engine
+            .agent(&crate::config::reviewer_name(&builder.name))
+            .unwrap();
+        assert_eq!(reviewer.stage, crate::config::REVIEW);
+        assert_eq!(reviewer.role, "worker");
+        assert_eq!(reviewer.cwd, builder.cwd);
+        assert_eq!(reviewer.harness, builder.harness);
+        assert_eq!(reviewer.model, "gpt-review");
+        assert!(reviewer.task.contains(&format!("`{}`", builder.name)));
+
+        // What each is told.
+        let system = |a: &Agent| {
+            std::fs::read_to_string(engine.agent_dir(&a.name).join("system.md")).unwrap()
+        };
+        let b = system(&builder);
+        assert!(
+            b.contains(&format!("## Your reviewer: `{}`", reviewer.name)),
+            "{b}"
+        );
+        let rv = system(&reviewer);
+        assert!(rv.contains("## Your stage: review"), "{rv}");
+        assert!(rv.contains(&format!("`{}`", builder.name)));
+        assert!(rv.contains("~/.claude/skills/review/SKILL.md"));
+        assert!(!rv.contains("call `handoff` with a summary"));
+
+        // Reviewers don't count toward max_workers (2): a second builder
+        // fits, a third doesn't.
+        let web = engine
+            .agent(
+                spawn("pair-web", "build").unwrap()["spawned"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+        let err = spawn("pair-db", "build").unwrap_err().to_string();
+        assert!(err.contains("already has 2 workers"), "{err}");
+        // Only drovr starts reviewers, and they don't hand off.
+        let err = spawn("pair-rev", crate::config::REVIEW)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("there's no stage"), "{err}");
+        let err = engine
+            .handoff(&reviewer, &json!({ "summary": "s", "next_inputs": "n" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("doesn't hand off"), "{err}");
+
+        // Approving the builder's handoff stops its reviewer, not web's.
+        let r = engine
+            .handoff(
+                &builder,
+                &json!({ "summary": "Built", "next_inputs": "PR #1" }),
+            )
+            .unwrap();
+        engine
+            .answer(r["inbox"].as_i64().unwrap(), "Approve")
+            .unwrap();
+        assert_eq!(engine.agent(&reviewer.name).unwrap().run_state, "stopped");
+        let web_reviewer = crate::config::reviewer_name(&web.name);
+        assert_ne!(engine.agent(&web_reviewer).unwrap().run_state, "stopped");
+        // So does your stopping the builder.
+        engine.stop_by_you(&web.name).unwrap();
+        assert_eq!(engine.agent(&web_reviewer).unwrap().run_state, "stopped");
+        cleanup(&dir, &engine);
+    }
+
+    #[test]
+    fn no_reviewer_with_reviews_off() {
+        let (dir, engine, id) = review_setup("nopair", false);
+        let cwd = dir.display().to_string();
+        let r = engine
+            .spawn_worker(
+                &format!("lead-{id}"),
+                "nopair-api",
+                "build it",
+                &cwd,
+                "build",
+                "",
+            )
+            .unwrap();
+        let builder = r["spawned"].as_str().unwrap();
+        assert!(engine
+            .store
+            .agent(&crate::config::reviewer_name(builder))
+            .unwrap()
+            .is_none());
+        let b = std::fs::read_to_string(engine.agent_dir(builder).join("system.md")).unwrap();
+        assert!(!b.contains("## Your reviewer"));
+        cleanup(&dir, &engine);
     }
 
     fn stage_agent(engine: &Engine, name: &str, stage: &str) -> Agent {

@@ -290,6 +290,7 @@ Turning it on doesn't change groups you already have: only groups created while 
 2. **Approve each handoff** in the Inbox: read it, change the next stage's model in the box if you want, and **Approve**, or **Send back** with notes. The finished stage's agent stops; the lead starts the next.
 3. **Long builds** write a checkpoint and continue in a fresh session once a session reaches `stages.build_checkpoint_tokens` or `stages.build_checkpoint_usd`.
 4. **Models per stage:** `[stages.models]`, e.g. `triage = "claude-haiku-5-5"`.
+5. **Review builds as they happen:** set `stages.review = true`, `stages.models.review` to the reviewer's model and, optionally, `stages.review_skill` to a SKILL.md. Each build agent then gets `<builder>-review` alongside it. The builder messages it when something works, and it replies with findings and diffs. It can't edit files itself, and it stops when its builder does.
 
 ### Read a ticket's timeline
 

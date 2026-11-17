@@ -262,6 +262,11 @@ fn config(run: &Run) -> Value {
     if !run.cfg.opencode.agent.is_empty() {
         cfg["default_agent"] = json!(run.cfg.opencode.agent);
     }
+    // OpenCode adds every config file's rules together, and the last match
+    // wins: this holds in a herdr pane too, where there's no plugin.
+    if super::read_only(run.agent) {
+        cfg["permissions"] = json!([{ "action": "edit", "resource": "*", "effect": "deny" }]);
+    }
     cfg
 }
 
@@ -605,12 +610,15 @@ pub fn permission(engine: crate::Engine, me: &str, req: &Value) -> Result<Value>
     let name = claude_name(tool, &servers);
     let input = claude_input(&req["args"]);
     let cfg = &engine.cfg;
-    if cfg.defaults.disallowed_tools.contains(&name) {
-        return Ok(
-            json!({ "behavior": "deny", "message": format!("{name} isn't allowed for drovr agents.") }),
-        );
-    }
     let agent = engine.agent(me)?;
+    if super::disallowed(cfg, &agent).contains(&name) {
+        let message = if super::read_only(&agent) {
+            format!("{name} isn't allowed: you're a reviewer and can't change files. Send the change to your builder as a proposed diff.")
+        } else {
+            format!("{name} isn't allowed for drovr agents.")
+        };
+        return Ok(json!({ "behavior": "deny", "message": message }));
+    }
     match settled(cfg, &agent.cwd, &name, &input) {
         Some(answer) => Ok(answer),
         None => crate::mcp::Server::new(engine, me.to_string())
@@ -799,6 +807,49 @@ mod tests {
             ["-m", "anthropic/claude-sonnet-5-5", "--agent", "build"]
         );
         assert!(with(&agent(""), Session::Resume, |r| OpenCode.attach_command(r)).is_err());
+    }
+
+    #[test]
+    fn a_reviewer_is_refused_edits_whatever_the_mode() {
+        let dir = std::env::temp_dir().join(format!("drovr-oc-review-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::default();
+        cfg.defaults.permission_mode = "bypassPermissions".into();
+        let engine = || {
+            crate::Engine::with(
+                crate::store::Store::open(&dir.join("t.db")).unwrap(),
+                cfg.clone(),
+                "drovr".into(),
+            )
+        };
+        for (name, stage) in [("r", crate::config::REVIEW), ("b", "build")] {
+            engine()
+                .store
+                .add_agent(&crate::store::Agent {
+                    name: name.into(),
+                    stage: stage.into(),
+                    cwd: "/r/api".into(),
+                    ..crate::store::Agent::default()
+                })
+                .unwrap();
+        }
+        let ask = |me: &str, tool: &str| {
+            permission(
+                engine(),
+                me,
+                &json!({ "tool": tool, "args": { "path": "/r/api/a.rs" } }),
+            )
+            .unwrap()
+        };
+        for tool in ["edit", "write", "patch"] {
+            let answer = ask("r", tool);
+            assert_eq!(answer["behavior"], "deny", "{tool}");
+            assert!(answer["message"].as_str().unwrap().contains("reviewer"));
+            assert_eq!(ask("b", tool)["behavior"], "allow", "{tool}");
+        }
+        assert_eq!(ask("r", "read")["behavior"], "allow");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

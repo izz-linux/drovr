@@ -156,9 +156,10 @@ fn claude_common(run: &Run) -> Vec<String> {
     if !model.is_empty() {
         args.extend(["--model".into(), model]);
     }
-    if !cfg.defaults.disallowed_tools.is_empty() {
+    let disallowed = super::disallowed(cfg, run.agent);
+    if !disallowed.is_empty() {
         args.push("--disallowedTools".into());
-        args.push(cfg.defaults.disallowed_tools.join(","));
+        args.push(disallowed.join(","));
     }
     if let Some(settings) = crate::memory::settings(cfg, run.agent) {
         args.extend(["--settings".into(), settings]);

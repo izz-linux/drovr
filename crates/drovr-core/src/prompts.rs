@@ -107,10 +107,14 @@ You lead this group. You plan, delegate and integrate; you don't do the bulk of 
         }
         _ => {}
     }
-    // A retro's agent has its instructions in its task.
+    // A retro's agent has its instructions in its task, and a reviewer's
+    // come from `review_prompt`.
     if let (Some(order), true) = (
         workflow,
-        staged && !agent.stage.is_empty() && agent.stage != "retro",
+        staged
+            && !agent.stage.is_empty()
+            && agent.stage != "retro"
+            && agent.stage != crate::config::REVIEW,
     ) {
         s += &format!(
             r#"
@@ -150,6 +154,42 @@ Start from the previous stage's handoff if your task names one. When your stage 
     crate::config::personalize(&(s + &coordination), you)
 }
 
+/// How a lead, a build agent and its reviewer work with `stages.review` on:
+/// `pair` is the build agent's reviewer, or the reviewer's build agent.
+/// Empty for anyone else.
+pub fn review_prompt(agent: &Agent, pair: &str, skill: &str) -> String {
+    match (agent.role.as_str(), agent.stage.as_str()) {
+        ("orchestrator", _) => "\n## Reviews\n\ndrovr starts a reviewer with every build agent (`<builder>-review`), on the review stage's model. Don't spawn reviewers yourself, and don't count them as build agents.\n".into(),
+        (_, "build") => format!(
+            r#"
+## Your reviewer: `{pair}`
+
+`{pair}` reviews your work while you build. It works in your folder but can't change files. When you have a piece that works (a change you'd show someone, not every edit), send it a message saying what changed (the files, the commits or `git diff` range) and what to look hardest at, then carry on. It replies with findings and proposed diffs. Apply the ones that are right (`git apply`, or make the change yourself) and tell it which you declined and why. Before you call `handoff`, have it review the whole change and settle what it found.
+"#
+        ),
+        (_, crate::config::REVIEW) => {
+            let how = match skill.trim() {
+                "" => "Review what the change does to the system, not only the lines: its callers, its tests, its failure modes, security, and the repo's own conventions.".to_string(),
+                skill => format!("Review it following the skill at `{skill}` (read it first, along with any references it names)."),
+            };
+            format!(
+                r#"
+## Your stage: review
+
+You review `{pair}`'s work on this ticket while it builds, in its folder. You can't change files: drovr blocks the tools that edit them, and you don't change them through the shell either. `{pair}` decides what goes in.
+
+When `{pair}` sends you something to review, review it. {how}
+
+Then send `{pair}` your findings in one message: each with its file and line, what's wrong and why it matters, how sure you are, and a proposed fix as a unified diff it can apply with `git apply`. Say so plainly when you found nothing worth changing. If it declines a finding, argue it once if you still think it matters, then let it go.
+
+Between reviews, end your turn: drovr wakes you when `{pair}` writes. Don't call `handoff` or `report_done`; drovr stops you when `{pair}`'s stage ends.
+"#
+            )
+        }
+        _ => String::new(),
+    }
+}
+
 /// What each of the default stages is for.
 fn stage_guide(stage: &str) -> &'static str {
     match stage {
@@ -174,6 +214,25 @@ fn first_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reviews_are_explained_to_the_lead_builder_and_reviewer() {
+        let a = |role: &str, stage: &str| Agent {
+            role: role.into(),
+            stage: stage.into(),
+            ..Agent::default()
+        };
+        let lead = review_prompt(&a("orchestrator", ""), "", "");
+        assert!(lead.contains("Don't spawn reviewers yourself"));
+        assert!(review_prompt(&a("worker", "build"), "g-api-review", "")
+            .contains("## Your reviewer: `g-api-review`"));
+        let own = review_prompt(&a("worker", crate::config::REVIEW), "g-api", "");
+        assert!(own.contains("Review what the change does to the system"));
+        assert!(own.contains("`git apply`"));
+        let skilled = review_prompt(&a("worker", crate::config::REVIEW), "g-api", "~/s/SKILL.md");
+        assert!(skilled.contains("the skill at `~/s/SKILL.md`"));
+        assert_eq!(review_prompt(&a("worker", "research"), "x", ""), "");
+    }
 
     #[test]
     fn reports_are_asked_to_follow_light_and_dark() {

@@ -305,6 +305,10 @@ Part of the ticket workflow (`workflow.enabled`). A ticket goes through stages, 
   2. It continues the agent in a fresh session that starts from that checkpoint, the handoffs, the decisions so far and the PR's status.
 
   A long build doesn't carry its whole history, and you're not paying to re-read it.
+- **Reviews alongside the build:** with `stages.review` on, drovr starts a reviewer with every build agent, `<builder>-review`. It isn't a stage in `stages.order`: it runs at the same time as its builder, in the builder's folder, on `stages.models.review`, with the same harness, and doesn't count toward `orchestrator.max_workers`.
+  - The builder sends it each piece that works. The reviewer reviews it, following `stages.review_skill` when that's set, and replies with findings and proposed diffs. The builder applies them or says why not, and gets a final review of the whole change before it hands off.
+  - The reviewer can't change files. Claude Code runs it with `--disallowedTools Edit,Write,MultiEdit,NotebookEdit`. OpenCode gets a `deny` rule for edits in the agent's config, which holds in herdr panes too, and drovr's plugin refuses edits. Codex runs it in the `read-only` sandbox. On Claude Code and OpenCode the shell can still write files: the reviewer is told not to.
+  - It never hands off. It stops when its builder does: its handoff approved, you or the lead stopping it, or its removal.
 - **In the app:** stage agents show their stage in the agent list and Pipeline, and the timeline has a **Stages** filter.
 
 ### The retro
@@ -670,6 +674,8 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `stages.build_checkpoint_tokens` | `150000` | The build stage checkpoints and starts fresh past this much context; `0` turns it off |
 | `stages.build_checkpoint_usd` | `15` | …or once its session has cost this much; `0` turns it off |
 | `stages.tidy_on_close` | `true` | Remove stopped stage agents when the last stage's handoff is approved |
+| `stages.review` | `false` | Pair each build agent with a reviewer that runs alongside it, can't edit files, and proposes diffs to it (see [Reviews alongside the build](#stages)); its model is `stages.models.review` |
+| `stages.review_skill` | `""` | A SKILL.md the reviewers follow, e.g. `"~/.claude/skills/code-review/SKILL.md"`; empty, they review on their own |
 | `retro.model` | `""` | The retro agent's model; empty for the default |
 | `retro.skills_dir` | `"~/.claude/skills"` | Where approved skill proposals are written |
 | `permissions.auto_allow` | read-only tools, `WebSearch` and `mcp__drovr__*` | Tools headless agents use without asking; a trailing `*` matches a prefix. `WebFetch` asks in the Inbox: with `Read` allowed too, an agent misled by text in a ticket, page or Slack message could otherwise send your files to any URL. Add it back if you accept that. |

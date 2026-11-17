@@ -107,7 +107,12 @@ fn codex_common(run: &Run) -> Result<Vec<String>> {
     ] {
         args.extend(["-c".into(), format!("{key}={value}")]);
     }
-    args.extend(["-s".into(), cfg.codex.sandbox.clone()]);
+    let sandbox = if super::read_only(run.agent) {
+        "read-only".to_string()
+    } else {
+        cfg.codex.sandbox.clone()
+    };
+    args.extend(["-s".into(), sandbox]);
     let model = super::model_of(&Codex, run.agent, cfg);
     if !model.is_empty() {
         args.extend(["-m".into(), model]);

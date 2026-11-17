@@ -614,6 +614,7 @@ impl Server {
                 self.engine.stop(&target.name)?;
                 self.engine
                     .record(&target.name, "stopped", json!({ "by": me.name }));
+                self.engine.stop_reviewer(&target.name);
                 Ok(json!("stopped"))
             }
             "publish_report" => {
