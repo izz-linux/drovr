@@ -1,12 +1,18 @@
-//! OpenCode (`opencode`). Each prompt is an `opencode run --format json`
+//! OpenCode 2 (`opencode`). Each prompt is an `opencode run --format json`
 //! run. drovr's MCP server and system prompt reach it through a config file
 //! drovr writes for the agent (`OPENCODE_CONFIG`), which OpenCode merges over
 //! your own, and drovr's permission prompt through a plugin in that config:
 //! before each tool call it asks `drovr hook permission`, which answers the
 //! same way Claude Code's permission prompt is answered (`permissions.*`,
 //! then the Inbox). Agents can also run in herdr panes (herdr's `opencode`
-//! kind), where you answer OpenCode's own prompts; sessions can be adopted
-//! and forked.
+//! kind), where you answer OpenCode's own prompts; sessions can be adopted,
+//! and forked headless.
+//!
+//! OpenCode 2 runs sessions in a background service that was started with
+//! its own environment, so it would never read the agent's config. Every
+//! start passes `--standalone`: a server of its own, started with drovr's
+//! environment. Saved sessions, costs and models are read from OpenCode's
+//! database, read-only.
 
 use super::{line, Costs, Event, Harness, Live, Run, Session};
 use crate::config::Config;
@@ -23,9 +29,9 @@ use std::time::{Duration, Instant};
 
 pub struct OpenCode;
 
-/// The config a headless run reads; the plugin it loads.
+/// The config a headless run reads; the plugin (a folder) it loads.
 const RUN_CONFIG: &str = "opencode-run.json";
-const PLUGIN: &str = "opencode-permissions.js";
+const PLUGIN_DIR: &str = "opencode-plugin";
 /// The config an interactive session (attach, a herdr pane) reads: no
 /// plugin, since you answer its permission prompts yourself.
 const ATTACH_CONFIG: &str = "opencode.json";
@@ -56,7 +62,7 @@ impl Harness for OpenCode {
         // The prompt comes from stdin. OpenCode's own prompts are answered
         // by drovr's plugin before a tool runs, so `--auto` only lets
         // through what drovr allowed; your config's `deny` rules still hold.
-        let mut args: Vec<String> = ["run", "--format", "json", "--auto"]
+        let mut args: Vec<String> = ["run", "--standalone", "--format", "json", "--auto"]
             .map(String::from)
             .to_vec();
         let id = &run.agent.session_id;
@@ -70,11 +76,17 @@ impl Harness for OpenCode {
     }
 
     fn headless_env(&self, run: &Run) -> Result<Vec<(String, String)>> {
-        std::fs::create_dir_all(&run.dir)?;
-        let plugin = run.dir.join(PLUGIN);
-        std::fs::write(&plugin, plugin_source(run))?;
+        // OpenCode 2 loads a configured plugin from a folder: `server.js`,
+        // an ES module (its package.json says so).
+        let plugin = run.dir.join(PLUGIN_DIR);
+        std::fs::create_dir_all(&plugin)?;
+        std::fs::write(
+            plugin.join("package.json"),
+            r#"{ "name": "drovr-permissions", "private": true, "type": "module" }"#,
+        )?;
+        std::fs::write(plugin.join("server.js"), plugin_source(run))?;
         let mut cfg = config(run);
-        cfg["plugin"] = json!([format!("file://{}", plugin.display())]);
+        cfg["plugins"] = json!([plugin.display().to_string()]);
         let path = run.dir.join(RUN_CONFIG);
         std::fs::write(&path, serde_json::to_string_pretty(&cfg)?)?;
         Ok(vec![
@@ -82,6 +94,8 @@ impl Harness for OpenCode {
             // `--pure` (or this) would skip the plugin, and with it every
             // permission check.
             ("OPENCODE_PURE".into(), String::new()),
+            // OpenCode takes the session's folder from $PWD.
+            ("PWD".into(), run.agent.cwd.clone()),
         ])
     }
 
@@ -110,14 +124,18 @@ impl Harness for OpenCode {
         if !valid_id(id) {
             bail!("{id:?} isn't an OpenCode session ID (ses_…)");
         }
-        sessions(&format!("id = '{id}'"), 1)?
+        let cfg = Config::load().unwrap_or_default();
+        saved_sessions(&open_db(&cfg)?, Some(id), 1)?
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("no OpenCode session {id} (see `opencode session list`)"))
     }
 
     fn recent_sessions(&self, limit: usize) -> Vec<SavedSession> {
-        sessions("1 = 1", limit).unwrap_or_default()
+        let cfg = Config::load().unwrap_or_default();
+        open_db(&cfg)
+            .and_then(|db| saved_sessions(&db, None, limit))
+            .unwrap_or_default()
     }
 
     fn runs_in_herdr(&self) -> bool {
@@ -126,15 +144,19 @@ impl Harness for OpenCode {
 
     /// OpenCode's TUI. Until drovr knows the session a pane started (see
     /// `latest_session`), resuming starts a new one rather than guessing.
+    /// The TUI takes no model or agent flags: they're in its config.
     fn herdr_args(&self, run: &Run) -> Result<Vec<String>> {
         let id = &run.agent.session_id;
-        let mut args = match run.session {
-            _ if id.is_empty() => vec![],
-            Session::New => vec![],
-            Session::Resume => vec!["--session".into(), id.clone()],
-            Session::Fork => vec!["--session".into(), id.clone(), "--fork".into()],
-        };
-        args.extend(opencode_common(run));
+        let mut args = vec!["--standalone".to_string()];
+        match run.session {
+            _ if id.is_empty() => {}
+            Session::New => {}
+            Session::Resume => args.extend(["--session".into(), id.clone()]),
+            Session::Fork => bail!(
+                "OpenCode's TUI can't fork a session: run {} headless to fork it",
+                run.agent.name
+            ),
+        }
         Ok(args)
     }
 
@@ -160,17 +182,10 @@ impl Harness for OpenCode {
                 return live.clone();
             }
         }
-        let sql = format!(
-            "SELECT \
-               (SELECT COALESCE(SUM(json_extract(m.data, '$.cost')), 0) FROM message m \
-                 WHERE m.session_id IN (SELECT id FROM session WHERE id = '{id}' OR parent_id = '{id}')) AS cost, \
-               (SELECT m.data FROM message m WHERE m.session_id = '{id}' \
-                 AND json_extract(m.data, '$.role') = 'assistant' \
-                 ORDER BY m.time_created DESC LIMIT 1) AS last"
-        );
-        let live = db(cfg, &sql)
+        let live = open_db(cfg)
+            .and_then(|db| live_session(&db, id))
             .ok()
-            .and_then(|rows| live_of(id, rows.first()?));
+            .flatten();
         if let Ok(mut s) = seen.lock() {
             s.insert(id.to_string(), (Instant::now(), live.clone()));
         }
@@ -178,15 +193,10 @@ impl Harness for OpenCode {
     }
 
     fn latest_session(&self, cfg: &Config, cwd: &str, since: f64) -> Option<String> {
-        let sql = format!(
-            "SELECT id FROM session WHERE parent_id IS NULL AND directory = {} \
-             AND time_created >= {} ORDER BY time_created DESC LIMIT 1",
-            sql_str(cwd),
-            (since * 1000.0) as i64
-        );
-        db(cfg, &sql).ok()?.first()?["id"]
-            .as_str()
-            .map(String::from)
+        open_db(cfg)
+            .and_then(|db| newest_session(&db, cwd, since))
+            .ok()
+            .flatten()
     }
 
     fn attach_command(&self, run: &Run) -> Result<String> {
@@ -195,12 +205,12 @@ impl Harness for OpenCode {
             bail!("{} hasn't started an OpenCode session yet", run.agent.name);
         }
         let path = attach_config(run)?;
-        let mut args = vec![
+        let args = [
             self.command(run.cfg).to_string(),
+            "--standalone".into(),
             "--session".into(),
             id.clone(),
         ];
-        args.extend(opencode_common(run));
         Ok(format!(
             "OPENCODE_CONFIG={} {}",
             quote(&path.display().to_string()),
@@ -209,8 +219,7 @@ impl Harness for OpenCode {
     }
 }
 
-/// The flags every OpenCode start shares: the model, the OpenCode agent
-/// and your extra arguments.
+/// A headless run's model, OpenCode agent and your extra arguments.
 fn opencode_common(run: &Run) -> Vec<String> {
     let cfg = run.cfg;
     let mut args = vec![];
@@ -226,10 +235,11 @@ fn opencode_common(run: &Run) -> Vec<String> {
 }
 
 /// drovr's part of OpenCode's config: its MCP server (whose tools can wait
-/// for you for many minutes, so with a long timeout) and the system prompt
-/// as an instructions file.
+/// for you for many minutes, so with a long timeout), the system prompt as
+/// an instructions file, and the model and OpenCode agent, which the TUI
+/// takes only from its config.
 fn config(run: &Run) -> Value {
-    json!({
+    let mut cfg = json!({
         "$schema": "https://opencode.ai/config.json",
         "mcp": {
             "drovr": {
@@ -244,55 +254,77 @@ fn config(run: &Run) -> Value {
             }
         },
         "instructions": [run.system_prompt.display().to_string()],
-    })
+    });
+    let model = super::model_of(&OpenCode, run.agent, run.cfg);
+    if !model.is_empty() {
+        cfg["model"] = json!(model);
+    }
+    if !run.cfg.opencode.agent.is_empty() {
+        cfg["default_agent"] = json!(run.cfg.opencode.agent);
+    }
+    cfg
 }
 
-/// The plugin that asks drovr before each tool call. A denial throws, which
-/// OpenCode hands the model as the tool's error.
+/// The plugin that asks drovr before each tool call, in OpenCode 2's plugin
+/// API (`{id, setup}`, hooks registered on `ctx.tool`). It runs under Node
+/// or Bun, so it starts drovr with `node:child_process`. A denial throws,
+/// which OpenCode hands the model as the tool's error; so does any failure
+/// to ask, so a broken check never lets a call through.
 fn plugin_source(run: &Run) -> String {
     let js = |s: &str| Value::String(s.to_string()).to_string();
     format!(
         r#"// Written by drovr for agent {name}: asks drovr before each tool call,
 // as Claude Code's permission prompt does. Rewritten before every run.
+import {{ spawn }} from "node:child_process";
+
 const CLI = {cli};
 const AGENT = {agent};
 const HOME = {home};
 
 // MCP tools are `<server>_<tool>`, and a server's name can have `_` in it:
 // drovr is told the servers' names to split them at the right place.
-let servers;
-async function mcpServers(client) {{
-  if (servers) return servers;
+async function mcpServers(ctx) {{
   try {{
-    const res = await client.mcp.status();
-    if (res?.data) servers = Object.keys(res.data);
-  }} catch {{}}
-  return servers ?? [];
+    const res = await ctx.mcp.list();
+    const list = Array.isArray(res) ? res : res?.data;
+    return Array.isArray(list) ? list.map((s) => s?.name).filter((n) => typeof n === "string") : [];
+  }} catch {{
+    return [];
+  }}
 }}
 
-export const DrovrPermissions = async ({{ client }}) => ({{
-  "tool.execute.before": async (input, output) => {{
-    const req = {{ tool: input.tool, args: output.args ?? {{}}, servers: await mcpServers(client) }};
-    const proc = Bun.spawn([CLI, "hook", "permission", AGENT], {{
-      stdin: new Blob([JSON.stringify(req)]),
-      stdout: "pipe",
-      stderr: "pipe",
+function ask(req) {{
+  return new Promise((resolve, reject) => {{
+    const proc = spawn(CLI, ["hook", "permission", AGENT], {{
       env: {{ ...process.env, DROVR_HOME: HOME, DROVR_AGENT: AGENT }},
+      stdio: ["pipe", "pipe", "pipe"],
     }});
-    const [out, err] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    await proc.exited;
-    let answer;
-    try {{
-      answer = JSON.parse(out);
-    }} catch {{
-      throw new Error(`drovr couldn't check this tool call: ${{(err || out).trim()}}`);
-    }}
-    if (answer.behavior !== "allow") throw new Error(answer.message || "Denied.");
+    let out = "";
+    let err = "";
+    proc.stdout.on("data", (d) => (out += d));
+    proc.stderr.on("data", (d) => (err += d));
+    proc.on("error", reject);
+    proc.on("close", () => resolve({{ out, err }}));
+    proc.stdin.end(JSON.stringify(req));
+  }});
+}}
+
+export default {{
+  id: "drovr-permissions",
+  setup: async (ctx) => {{
+    await ctx.tool.hook("execute.before", async (event) => {{
+      const req = {{ tool: event.tool, args: event.input ?? {{}}, servers: await mcpServers(ctx) }};
+      const {{ out, err }} = await ask(req);
+      let answer;
+      try {{
+        answer = JSON.parse(out);
+      }} catch {{
+        throw new Error(`drovr couldn't check this tool call: ${{(err || out).trim()}}`);
+      }}
+      if (answer.behavior !== "allow") throw new Error(answer.message || "Denied.");
+    }});
   }},
-}});
+}};
 "#,
         name = run.agent.name,
         cli = js(&run.cli.display().to_string()),
@@ -312,7 +344,7 @@ fn attach_config(run: &Run) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// OpenCode's session IDs (`ses_…`): safe to put in a query as they are.
+/// Whether `id` looks like an OpenCode session ID (`ses_…`).
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id
@@ -320,70 +352,114 @@ fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// A string as an SQL literal.
-fn sql_str(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
-
-/// Rows from OpenCode's database (`opencode db … --format json`, which
-/// prints nothing when there are none).
-fn db(cfg: &Config, sql: &str) -> Result<Vec<Value>> {
-    let out = Command::new(&cfg.opencode.command)
-        .args(["db", sql, "--format", "json"])
+/// Where OpenCode keeps its database, as `opencode debug paths db` says (it
+/// depends on OpenCode's release channel and `OPENCODE_DB`). Asked once
+/// for each command.
+fn db_path(cfg: &Config) -> Result<PathBuf> {
+    static PATHS: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    let paths = PATHS.get_or_init(Default::default);
+    let command = &cfg.opencode.command;
+    if let Some(p) = paths.lock().ok().and_then(|p| p.get(command).cloned()) {
+        return Ok(p);
+    }
+    let out = Command::new(command)
+        .args(["debug", "paths", "db"])
         .output()
-        .with_context(|| format!("running {}", cfg.opencode.command))?;
-    if !out.status.success() {
+        .with_context(|| format!("running {command}"))?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || !Path::new(&path).is_absolute() {
         bail!(
-            "opencode db failed: {}",
+            "`{command} debug paths db` didn't name OpenCode's database (drovr needs OpenCode 2): {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).unwrap_or_default())
+    let path = PathBuf::from(path);
+    if let Ok(mut p) = paths.lock() {
+        p.insert(command.clone(), path.clone());
+    }
+    Ok(path)
 }
 
-/// A session's figures from `session_live`'s row: its cost, and the last
-/// answer's message (`data`, as JSON text) for the context and model.
-fn live_of(id: &str, row: &Value) -> Option<Live> {
-    let last: Value = row["last"]
-        .as_str()
-        .and_then(|s| serde_json::from_str(s).ok())
+/// OpenCode's database, read-only.
+fn open_db(cfg: &Config) -> Result<rusqlite::Connection> {
+    use rusqlite::OpenFlags;
+    let path = db_path(cfg)?;
+    let db = rusqlite::Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening {}", path.display()))?;
+    db.busy_timeout(Duration::from_secs(2))?;
+    Ok(db)
+}
+
+/// Saved sessions, newest first: one by ID, or the most recent. Subagents'
+/// sessions (with a parent) and archived ones are left out.
+fn saved_sessions(
+    db: &rusqlite::Connection,
+    id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<SavedSession>> {
+    let mut q = db.prepare(
+        "SELECT id, title, directory, time_updated FROM session_v2 \
+         WHERE parent_id IS NULL AND time_archived IS NULL AND (?1 IS NULL OR id = ?1) \
+         ORDER BY time_updated DESC LIMIT ?2",
+    )?;
+    let rows = q.query_map(rusqlite::params![id, limit as i64], |r| {
+        Ok(SavedSession {
+            id: r.get(0)?,
+            first_prompt: truncate(&r.get::<_, Option<String>>(1)?.unwrap_or_default(), 200),
+            cwd: r.get(2)?,
+            modified: r.get::<_, i64>(3)? as f64 / 1000.0,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// A session's figures: what it and its subagents' sessions have cost, and
+/// the context and model of its last answer. None for an unknown session.
+fn live_session(db: &rusqlite::Connection, id: &str) -> Result<Option<Live>> {
+    use rusqlite::OptionalExtension;
+    let cost: Option<f64> = db.query_row(
+        "SELECT SUM(cost) FROM session_v2 WHERE id = ?1 OR parent_id = ?1",
+        [id],
+        |r| r.get(0),
+    )?;
+    let Some(cost) = cost else {
+        return Ok(None);
+    };
+    let last: Value = db
+        .query_row(
+            "SELECT data FROM session_message WHERE session_id = ?1 AND type = 'assistant' \
+             ORDER BY seq DESC LIMIT 1",
+            [id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     let t = &last["tokens"];
     let n = |x: &Value| x.as_u64().unwrap_or(0);
-    Some(Live {
+    Ok(Some(Live {
         session: id.to_string(),
-        total_cost_usd: row["cost"].as_f64()?,
+        total_cost_usd: cost,
         context_tokens: n(&t["input"]) + n(&t["cache"]["read"]) + n(&t["cache"]["write"]),
-        model: last["modelID"].as_str().unwrap_or("").to_string(),
-    })
+        model: last["model"]["id"].as_str().unwrap_or("").to_string(),
+    }))
 }
 
-/// Saved sessions from OpenCode's database, newest first. Subagents'
-/// sessions (with a parent) and archived ones are left out.
-fn sessions(filter: &str, limit: usize) -> Result<Vec<SavedSession>> {
-    let sql = format!(
-        "SELECT id, title, directory, time_updated FROM session \
-         WHERE parent_id IS NULL AND time_archived IS NULL AND {filter} \
-         ORDER BY time_updated DESC LIMIT {limit}"
-    );
-    Ok(parse_sessions(&db(
-        &Config::load().unwrap_or_default(),
-        &sql,
-    )?))
-}
-
-/// Database rows as saved sessions.
-fn parse_sessions(rows: &[Value]) -> Vec<SavedSession> {
-    rows.iter()
-        .filter_map(|r| {
-            Some(SavedSession {
-                id: r["id"].as_str()?.to_string(),
-                cwd: r["directory"].as_str().unwrap_or("").to_string(),
-                first_prompt: truncate(r["title"].as_str().unwrap_or(""), 200),
-                modified: r["time_updated"].as_f64().unwrap_or(0.0) / 1000.0,
-            })
-        })
-        .collect()
+/// The newest session (not a subagent's) started in `cwd` since `since`
+/// (Unix seconds).
+fn newest_session(db: &rusqlite::Connection, cwd: &str, since: f64) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    Ok(db
+        .query_row(
+            "SELECT id FROM session_v2 WHERE parent_id IS NULL AND directory = ?1 \
+             AND time_created >= ?2 ORDER BY time_created DESC LIMIT 1",
+            rusqlite::params![cwd, (since * 1000.0) as i64],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 /// `opencode run --format json`: `{type, timestamp, sessionID, part}` for
@@ -416,6 +492,7 @@ fn opencode_event(v: &Value, run: &mut Value) -> Event {
             let input = &state["input"];
             let summary = [
                 "command",
+                "path",
                 "filePath",
                 "pattern",
                 "url",
@@ -450,9 +527,11 @@ fn opencode_event(v: &Value, run: &mut Value) -> Event {
         }
         Some("error") => {
             run["error"] = json!(true);
+            // OpenCode 2: `{type, message}`; 1: `{name, data: {message}}`.
             let e = &v["error"];
-            let text = e["data"]["message"]
+            let text = e["message"]
                 .as_str()
+                .or(e["data"]["message"].as_str())
                 .or(e["name"].as_str())
                 .map(String::from)
                 .unwrap_or_else(|| e.to_string());
@@ -543,8 +622,14 @@ pub fn permission(engine: crate::Engine, me: &str, req: &Value) -> Result<Value>
 /// what the permission mode allows. None goes to the permission prompt.
 fn settled(cfg: &Config, cwd: &str, name: &str, input: &Value) -> Option<Value> {
     let allow = Some(json!({ "behavior": "allow" }));
-    // Never asked about in Claude Code: subagents, to-do lists, skills.
-    if matches!(name, "Task" | "TodoRead" | "TodoWrite" | "Skill") {
+    // Never asked about in Claude Code: subagents, to-do lists, skills and
+    // questions. CodeMode is OpenCode's interpreter, which reaches the
+    // outside world only through tools: each tool it calls is asked about
+    // on its own.
+    if matches!(
+        name,
+        "Task" | "TodoRead" | "TodoWrite" | "Skill" | "AskUserQuestion" | "CodeMode"
+    ) {
         return allow;
     }
     let edit = matches!(name, "Edit" | "Write" | "MultiEdit");
@@ -554,7 +639,9 @@ fn settled(cfg: &Config, cwd: &str, name: &str, input: &Value) -> Option<Value> 
             "behavior": "deny",
             "message": "This agent runs in plan mode: it can't change files.",
         })),
-        "acceptEdits" if edit && edits_inside(cwd, input) => allow,
+        // Claude Code's `auto` judges each call itself; drovr has no such
+        // judge, so for OpenCode it's `acceptEdits`, and the rest is asked.
+        "acceptEdits" | "auto" if edit && edits_inside(cwd, input) => allow,
         _ => None,
     }
 }
@@ -603,19 +690,21 @@ fn normalize(p: &Path) -> PathBuf {
     out
 }
 
-/// OpenCode's tool as Claude Code names it. MCP tools are
-/// `<server>_<tool>` in OpenCode, with the server's name sanitized: one is
-/// split after the longest of `servers` (the MCP servers OpenCode has) it
-/// starts with, drovr's own are told apart exactly, and any other is split
-/// at its first `_`.
+/// OpenCode's tool as Claude Code names it (OpenCode 2's names, and 1's
+/// where they differ). MCP tools are `<server>_<tool>` in OpenCode, with
+/// the server's name sanitized: one is split after the longest of `servers`
+/// (the MCP servers OpenCode has) it starts with, and drovr's own are told
+/// apart exactly. Any other tool is OpenCode's own (`worktree_create`) and
+/// keeps its name; only when the servers aren't known is it split at its
+/// first `_`.
 pub fn claude_name(tool: &str, servers: &[String]) -> String {
     let builtin = match tool {
-        "bash" => "Bash",
+        "shell" | "bash" => "Bash",
         "read" => "Read",
         "write" => "Write",
         "edit" => "Edit",
         "multiedit" => "MultiEdit",
-        "apply_patch" | "patch" => "Edit",
+        "patch" | "apply_patch" => "Edit",
         "glob" => "Glob",
         "grep" => "Grep",
         "list" => "LS",
@@ -623,8 +712,10 @@ pub fn claude_name(tool: &str, servers: &[String]) -> String {
         "todoread" => "TodoRead",
         "webfetch" => "WebFetch",
         "websearch" => "WebSearch",
-        "task" => "Task",
+        "subagent" | "task" => "Task",
         "skill" => "Skill",
+        "question" => "AskUserQuestion",
+        "execute" => "CodeMode",
         _ => "",
     };
     if !builtin.is_empty() {
@@ -643,6 +734,9 @@ pub fn claude_name(tool: &str, servers: &[String]) -> String {
         .max_by_key(|s| s.len());
     if let Some(server) = server {
         return format!("mcp__{server}__{}", &tool[server.len() + 1..]);
+    }
+    if !servers.is_empty() {
+        return tool.to_string();
     }
     match tool.split_once('_') {
         Some((server, name)) => format!("mcp__{server}__{name}"),
@@ -665,14 +759,14 @@ fn mcp_sanitize(name: &str) -> String {
 }
 
 /// OpenCode's arguments with Claude Code's names for the ones drovr reads
-/// (`filePath` is `file_path`).
+/// (`path` in OpenCode 2, `filePath` in 1, is `file_path`).
 fn claude_input(args: &Value) -> Value {
     let mut input = if args.is_object() {
         args.clone()
     } else {
         json!({})
     };
-    if let Some(path) = input.get("filePath").cloned() {
+    if let Some(path) = input.get("path").or(input.get("filePath")).cloned() {
         input["file_path"] = path;
     }
     input
@@ -687,12 +781,13 @@ mod tests {
     fn opencode_args() {
         let a = agent("");
         let new = with(&a, Session::New, |r| OpenCode.headless_args(r).unwrap());
-        assert_eq!(new, ["run", "--format", "json", "--auto"]);
+        // Its own server, which reads the agent's config.
+        assert_eq!(new, ["run", "--standalone", "--format", "json", "--auto"]);
         let a = agent("ses_1");
         let resumed = with(&a, Session::Resume, |r| OpenCode.headless_args(r).unwrap());
-        assert_eq!(resumed[4..], ["--session", "ses_1"]);
+        assert_eq!(resumed[5..], ["--session", "ses_1"]);
         let forked = with(&a, Session::Fork, |r| OpenCode.headless_args(r).unwrap());
-        assert_eq!(forked[4..], ["--session", "ses_1", "--fork"]);
+        assert_eq!(forked[5..], ["--session", "ses_1", "--fork"]);
         let mut cfg = Config::default();
         cfg.opencode.model = "anthropic/claude-sonnet-5-5".into();
         cfg.opencode.agent = "build".into();
@@ -700,7 +795,7 @@ mod tests {
             OpenCode.headless_args(r).unwrap()
         });
         assert_eq!(
-            args[6..],
+            args[7..],
             ["-m", "anthropic/claude-sonnet-5-5", "--agent", "build"]
         );
         assert!(with(&agent(""), Session::Resume, |r| OpenCode.attach_command(r)).is_err());
@@ -717,6 +812,7 @@ mod tests {
             )
         });
         assert_eq!(env[0].0, "OPENCODE_CONFIG");
+        assert!(env.contains(&("PWD".to_string(), a.cwd.clone())), "{env:?}");
         let cfg: Value =
             serde_json::from_str(&std::fs::read_to_string(&env[0].1).unwrap()).unwrap();
         assert_eq!(
@@ -728,22 +824,47 @@ mod tests {
             "/data/drovr"
         );
         assert!(cfg["instructions"][0].as_str().unwrap().ends_with(".md"));
-        let plugin = cfg["plugin"][0].as_str().unwrap();
-        let source = std::fs::read_to_string(plugin.strip_prefix("file://").unwrap()).unwrap();
+        // OpenCode 2 loads a configured plugin from a folder.
+        let plugin = PathBuf::from(cfg["plugins"][0].as_str().unwrap());
+        assert_eq!(plugin, dir.join(PLUGIN_DIR));
+        let package: Value =
+            serde_json::from_str(&std::fs::read_to_string(plugin.join("package.json")).unwrap())
+                .unwrap();
+        assert_eq!(package["type"], "module");
+        let source = std::fs::read_to_string(plugin.join("server.js")).unwrap();
         assert!(source.contains(r#"const CLI = "/opt/drovr";"#), "{source}");
-        assert!(source.contains(r#""hook", "permission", AGENT"#));
+        assert!(source.contains(r#"spawn(CLI, ["hook", "permission", AGENT]"#));
+        assert!(source.contains("export default {"));
+        assert!(source.contains(r#"ctx.tool.hook("execute.before""#));
+        assert!(!source.contains("Bun."), "runs under Node too");
         // An interactive session answers its own prompts: no plugin.
         let attach = dir.join(ATTACH_CONFIG);
-        assert!(
-            cmd.starts_with(&format!(
-                "OPENCODE_CONFIG={} opencode --session ses_1",
+        assert_eq!(
+            cmd,
+            format!(
+                "OPENCODE_CONFIG={} opencode --standalone --session ses_1",
                 attach.display()
-            )),
-            "{cmd}"
+            )
         );
         let cfg: Value = serde_json::from_str(&std::fs::read_to_string(attach).unwrap()).unwrap();
-        assert!(cfg["plugin"].is_null());
+        assert!(cfg["plugins"].is_null());
         assert!(cfg["mcp"]["drovr"].is_object());
+        assert!(cfg["model"].is_null(), "OpenCode's default");
+    }
+
+    #[test]
+    fn the_tui_takes_its_model_from_the_config() {
+        let mut cfg = Config::default();
+        cfg.opencode.model = "gw/anthropic/claude-opus-5.5".into();
+        cfg.opencode.agent = "build".into();
+        let a = agent("ses_1");
+        let (args, path) = crate::harness::testing::with_config(&a, Session::Resume, cfg, |r| {
+            (OpenCode.herdr_args(r).unwrap(), attach_config(r).unwrap())
+        });
+        assert_eq!(args, ["--standalone", "--session", "ses_1"]);
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(cfg["model"], "gw/anthropic/claude-opus-5.5");
+        assert_eq!(cfg["default_agent"], "build");
     }
 
     #[test]
@@ -757,16 +878,16 @@ mod tests {
             Event::Session("ses_a".into())
         );
         let Event::Lines(l) = parse(
-            r#"{"type":"tool_use","timestamp":1500,"sessionID":"ses_a","part":{"type":"tool","tool":"bash","callID":"c1","state":{"status":"completed","input":{"command":"ls","description":"List"},"output":"a.txt\n","title":"ls","metadata":{}}}}"#,
+            r#"{"type":"tool_use","timestamp":1500,"sessionID":"ses_a","part":{"partID":"p1","type":"tool","id":"c1","tool":"shell","state":{"status":"completed","input":{"command":"ls","description":"List"},"output":"a.txt\n","title":"shell","metadata":{}}}}"#,
         ) else {
             panic!()
         };
         assert_eq!(
             (l[0].text.as_str(), l[1].kind.as_str()),
-            ("bash ls", "result")
+            ("shell ls", "result")
         );
         let Event::Lines(l) = parse(
-            r#"{"type":"tool_use","timestamp":1600,"sessionID":"ses_a","part":{"type":"tool","tool":"edit","state":{"status":"error","input":{"filePath":"/r/a.rs"},"error":"Denied by you."}}}"#,
+            r#"{"type":"tool_use","timestamp":1600,"sessionID":"ses_a","part":{"type":"tool","tool":"edit","state":{"status":"error","input":{"path":"/r/a.rs"},"error":"Denied by you."}}}"#,
         ) else {
             panic!()
         };
@@ -809,15 +930,23 @@ mod tests {
     fn an_error_fails_the_run() {
         let mut run = Value::Null;
         let Event::Lines(l) = OpenCode.parse(
-            &json!({"type":"error","sessionID":"s","error":{"name":"APIError","data":{"message":"rate limited"}}}),
+            &json!({"type":"error","sessionID":"s","error":{"type":"unknown","message":"Model unavailable"}}),
             &mut run,
         ) else {
             panic!()
         };
         assert_eq!(
             (l[0].kind.as_str(), l[0].text.as_str()),
-            ("error", "rate limited")
+            ("error", "Model unavailable")
         );
+        // OpenCode 1's shape.
+        let Event::Lines(l) = OpenCode.parse(
+            &json!({"type":"error","sessionID":"s","error":{"name":"APIError","data":{"message":"rate limited"}}}),
+            &mut run,
+        ) else {
+            panic!()
+        };
+        assert_eq!(l[0].text, "rate limited");
         let Event::End(end) = OpenCode.parse(
             &json!({"type":"step_finish","sessionID":"s","part":{"reason":"stop","cost":0,"tokens":{}}}),
             &mut run,
@@ -838,15 +967,61 @@ mod tests {
         assert_eq!(OpenCode.context_tokens(&log), Some(327));
     }
 
+    /// OpenCode 2's tables, with the columns drovr reads.
+    fn test_db() -> rusqlite::Connection {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            r#"
+            CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL,
+              title TEXT, cost REAL DEFAULT 0 NOT NULL, time_created INTEGER NOT NULL,
+              time_updated INTEGER NOT NULL, time_archived INTEGER);
+            CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+              type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+              time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+            INSERT INTO session_v2 VALUES
+              ('ses_a', NULL, '/r/api', 'Fix the login bug', 1.0, 1760000000000, 1760000500000, NULL),
+              ('ses_sub', 'ses_a', '/r/api', 'a subagent', 0.25, 1760000100000, 1760000200000, NULL),
+              ('ses_b', NULL, '/r/web', NULL, 0, 1760000300000, 1760000400000, NULL),
+              ('ses_old', NULL, '/r/api', 'archived', 0, 1750000000000, 1750000000000, 1760000000000);
+            INSERT INTO session_message VALUES
+              ('m1', 'ses_a', 'user', 1, 0, 0, '{}'),
+              ('m2', 'ses_a', 'assistant', 2, 0, 0,
+               '{"model":{"id":"claude-opus-5.5","providerID":"gw"},"tokens":{"input":5,"output":1,"reasoning":0,"cache":{"read":100,"write":0}}}'),
+              ('m3', 'ses_a', 'assistant', 3, 0, 0,
+               '{"model":{"id":"claude-sonnet-5.5","providerID":"gw"},"tokens":{"input":12,"output":40,"reasoning":0,"cache":{"read":9000,"write":300}}}');
+            "#,
+        )
+        .unwrap();
+        db
+    }
+
     #[test]
     fn reads_saved_sessions() {
-        let out = r#"[{"id":"ses_b","title":"Fix the login bug","directory":"/r/api","time_updated":1760000000000}]"#;
-        let s = parse_sessions(&serde_json::from_str::<Vec<Value>>(out).unwrap());
-        assert_eq!((s[0].id.as_str(), s[0].cwd.as_str()), ("ses_b", "/r/api"));
+        let db = test_db();
+        // Newest first; no subagents' or archived sessions.
+        let s = saved_sessions(&db, None, 10).unwrap();
+        let ids: Vec<&str> = s.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["ses_a", "ses_b"]);
+        assert_eq!(s[0].cwd, "/r/api");
         assert_eq!(s[0].first_prompt, "Fix the login bug");
-        assert_eq!(s[0].modified, 1_760_000_000.0);
-        assert!(parse_sessions(&[]).is_empty());
+        assert_eq!(s[0].modified, 1_760_000_500.0);
+        assert_eq!(saved_sessions(&db, None, 1).unwrap().len(), 1);
+        let b = saved_sessions(&db, Some("ses_b"), 1).unwrap();
+        assert_eq!(
+            (b[0].id.as_str(), b[0].first_prompt.as_str()),
+            ("ses_b", "")
+        );
+        assert!(saved_sessions(&db, Some("ses_x"), 1).unwrap().is_empty());
         assert!(OpenCode.find_session("x'; DROP TABLE session; --").is_err());
+    }
+
+    #[test]
+    fn finds_the_session_a_pane_started() {
+        let db = test_db();
+        let newest = |cwd: &str, since: f64| newest_session(&db, cwd, since).unwrap();
+        assert_eq!(newest("/r/api", 1_760_000_000.0).as_deref(), Some("ses_a"));
+        assert_eq!(newest("/r/api", 1_760_000_001.0), None);
+        assert_eq!(newest("/r/web", 0.0).as_deref(), Some("ses_b"));
     }
 
     #[test]
@@ -861,7 +1036,7 @@ mod tests {
                 r.dir.clone(),
             )
         });
-        assert_eq!(resumed, ["--session", "ses_1"]);
+        assert_eq!(resumed, ["--standalone", "--session", "ses_1"]);
         assert_eq!(
             env,
             [(
@@ -869,33 +1044,32 @@ mod tests {
                 dir.join(ATTACH_CONFIG).display().to_string()
             )]
         );
-        let forked = with(&a, Session::Fork, |r| OpenCode.herdr_args(r).unwrap());
-        assert_eq!(forked, ["--session", "ses_1", "--fork"]);
+        // OpenCode 2's TUI can't fork.
+        assert!(with(&a, Session::Fork, |r| OpenCode.herdr_args(r)).is_err());
         // A session drovr hasn't learned yet: a new one, not a guess.
         let none = with(&agent(""), Session::Resume, |r| {
             OpenCode.herdr_args(r).unwrap()
         });
-        assert!(none.is_empty());
+        assert_eq!(none, ["--standalone"]);
     }
 
     #[test]
     fn reads_a_live_session() {
-        let last = json!({ "role": "assistant", "modelID": "claude-sonnet-5-5",
-            "tokens": { "input": 12, "output": 40, "cache": { "read": 9000, "write": 300 } } });
-        let row = json!({ "cost": 1.25, "last": last.to_string() });
+        let db = test_db();
+        // Its subagents' costs count; the last answer gives context and model.
         assert_eq!(
-            live_of("ses_1", &row),
+            live_session(&db, "ses_a").unwrap(),
             Some(Live {
-                session: "ses_1".into(),
+                session: "ses_a".into(),
                 total_cost_usd: 1.25,
                 context_tokens: 9312,
-                model: "claude-sonnet-5-5".into(),
+                model: "claude-sonnet-5.5".into(),
             })
         );
         // Before the first answer.
-        let row = json!({ "cost": 0, "last": null });
-        assert_eq!(live_of("ses_1", &row).unwrap().context_tokens, 0);
-        assert_eq!(sql_str("/r/it's"), "'/r/it''s'");
+        let b = live_session(&db, "ses_b").unwrap().unwrap();
+        assert_eq!((b.total_cost_usd, b.context_tokens), (0.0, 0));
+        assert_eq!(live_session(&db, "ses_x").unwrap(), None);
         assert_eq!(OpenCode.session_live(&Config::default(), "x'; --"), None);
     }
 
@@ -905,8 +1079,14 @@ mod tests {
             .map(String::from)
             .to_vec();
         for (tool, servers, want) in [
+            ("shell", &servers[..], "Bash"),
             ("bash", &servers[..], "Bash"),
+            ("patch", &servers[..], "Edit"),
             ("apply_patch", &servers[..], "Edit"),
+            ("subagent", &servers[..], "Task"),
+            ("execute", &servers[..], "CodeMode"),
+            // OpenCode's own tools keep their names.
+            ("worktree_create", &servers[..], "worktree_create"),
             ("drovr_send_message", &[][..], "mcp__drovr__send_message"),
             (
                 "drovr_send_message",
@@ -926,10 +1106,11 @@ mod tests {
             // Names are sanitized as OpenCode does.
             ("acme_docs_find", &servers[..], "mcp__acme_docs__find"),
             // A server's name alone isn't a tool of it.
-            ("my_", &servers[..], "mcp__my__"),
+            ("my_", &servers[..], "my_"),
         ] {
             assert_eq!(claude_name(tool, servers), want, "{tool}");
         }
+        assert_eq!(claude_input(&json!({"path": "/r/a"}))["file_path"], "/r/a");
         assert_eq!(
             claude_input(&json!({"filePath": "/r/a"}))["file_path"],
             "/r/a"
@@ -939,6 +1120,8 @@ mod tests {
         let ask = |cfg: &Config, name: &str, input: Value| settled(cfg, "/r/api", name, &input);
         assert!(ask(&cfg, "Bash", json!({"command": "ls"})).is_none());
         assert!(ask(&cfg, "Task", json!({})).is_some());
+        assert!(ask(&cfg, "CodeMode", json!({"code": "x"})).is_some());
+        assert!(ask(&cfg, "worktree_create", json!({})).is_none());
         // acceptEdits (the default): edits inside the working directory.
         assert_eq!(
             ask(&cfg, "Edit", json!({"file_path": "/r/api/src/a.rs"})).unwrap()["behavior"],
@@ -954,6 +1137,10 @@ mod tests {
         assert!(ask(&cfg, "Edit", json!({"patchText": patch})).is_none());
         let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-a\n+b\n*** End Patch";
         assert!(ask(&cfg, "Edit", json!({"patchText": patch})).is_some());
+        cfg.defaults.permission_mode = "auto".into();
+        assert!(ask(&cfg, "Edit", json!({"file_path": "/r/api/a.rs"})).is_some());
+        assert!(ask(&cfg, "Edit", json!({"file_path": "/etc/hosts"})).is_none());
+        assert!(ask(&cfg, "Bash", json!({"command": "ls"})).is_none());
         cfg.defaults.permission_mode = "default".into();
         assert!(ask(&cfg, "Edit", json!({"file_path": "/r/api/a.rs"})).is_none());
         cfg.defaults.permission_mode = "plan".into();

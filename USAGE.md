@@ -161,7 +161,7 @@ drovr msgs pay-api
 ```sh
 drovr log pay-api-lead 100
 drovr attach pay-api-lead          # prints: cd … && claude --resume …
-                                   # (an OpenCode agent: cd … && OPENCODE_CONFIG=… opencode --session …)
+                                   # (an OpenCode agent: cd … && OPENCODE_CONFIG=… opencode --standalone --session …)
 ```
 
 ### Look things up in Jira, Confluence and Slack
@@ -219,22 +219,24 @@ drovr serve           # the page and notifications without the app
 
 ### Run an agent with OpenCode
 
-1. Install OpenCode and connect a provider (`opencode auth login`). Set `opencode.model` to a `provider/model` if you don't want OpenCode's default.
+1. Install OpenCode 2 and connect a provider (`opencode auth login`). Set `opencode.model` to a `provider/model` from `opencode models` if you don't want OpenCode's default.
 2. In **New agent**, **New group** (with an orchestrator) or **Hand off**, set **Run with** to **OpenCode**. It's greyed out until drovr finds `opencode` (`opencode.command`).
-3. The agent works like any headless Claude Code agent: messages, the Inbox, reports, Code review, costs, and permission requests. Its tool calls are checked the same way (`permissions.auto_allow`, `defaults.permission_mode`), so `bash` commands come to your Inbox as **Bash** permission requests.
+3. The agent works like any headless Claude Code agent: messages, the Inbox, reports, Code review, costs, and permission requests. Its tool calls are checked the same way (`permissions.auto_allow`, `defaults.permission_mode`), so `shell` commands come to your Inbox as **Bash** permission requests.
 
 ```sh
 drovr new --harness opencode fix-ci ~/code/api "Make CI green"
 drovr group --harness opencode checkout-v2 ~/code/web "Move checkout to the new payments API"
 ```
 
-Set `defaults.harness = "opencode"` to make OpenCode the preselected choice. **Run in → herdr pane** runs it in OpenCode's TUI in a herdr tab, where you answer its permission prompts yourself; install herdr's OpenCode integration (`herdr integration install opencode`) so herdr reports its state and session exactly. **Copy attach cmd** opens a headless one in OpenCode's TUI.
+Set `defaults.harness = "opencode"` to make OpenCode the preselected choice. **Run in → herdr pane** runs it in OpenCode's TUI in a herdr tab, where you answer its permission prompts yourself; install herdr's OpenCode integration (`herdr integration install opencode`) so herdr reports its state and session exactly. OpenCode's TUI can't fork a session, so adopt with **Fork** runs headless. **Copy attach cmd** opens a headless one in OpenCode's TUI.
+
+drovr starts every OpenCode run and TUI with `--standalone`: a server of its own rather than OpenCode's background service, which wouldn't read the config drovr writes for the agent.
 
 #### OpenCode through a gateway or custom provider
 
-drovr leaves OpenCode's providers to your own config. The config drovr writes for an agent adds only its MCP server, system prompt and permission plugin, and OpenCode reads it on top of `~/.config/opencode/opencode.json`. Your providers, `enabled_providers`, MCP servers and the plugins in `~/.config/opencode/plugins/` (a token refresher, say) still apply to drovr's agents. Once `opencode run` works in a terminal:
+drovr leaves OpenCode's providers to your own config. The config drovr writes for an agent adds only its MCP server, system prompt and permission plugin (and, for the TUI, `opencode.model` and `opencode.agent`), and OpenCode reads it on top of `~/.config/opencode/opencode.json`. Your providers, `enabled_providers`, MCP servers and the plugins in `~/.config/opencode/plugins/` (a token refresher, say) still apply to drovr's agents. Once `opencode run` works in a terminal:
 
-1. Set `opencode.model` to the gateway's model as you'd pass it to `opencode run -m`, for example `"my-gateway/anthropic/claude-sonnet-5-5"`. Leave it empty to use the `model` in your OpenCode config.
+1. Set `opencode.model` to the gateway's model exactly as `opencode models` lists it, for example `"my-gateway/anthropic/claude-sonnet-5.5"`. A gateway's IDs can differ from the provider's own (dots rather than dashes), and one it doesn't know fails the run with `provider.no-route`. Leave it empty to use the `model` in your OpenCode config.
 2. If **Run with → OpenCode** says `opencode not found`, set `opencode.command` to its full path (for example `/Users/you/.opencode/bin/opencode`).
 3. Allow the gateway's MCP tools by Claude Code's names: a server `my_gateway`'s tool `search` is `mcp__my_gateway__search` in `permissions.auto_allow`.
 

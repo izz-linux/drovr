@@ -20,11 +20,11 @@ copy_on_select = true         # selecting text in an agent's output copies it
 command = "claude"
 extra_args = []               # e.g. ["--add-dir", "~/code/shared"]
 
-[opencode]                    # agents with harness = "opencode"
+[opencode]                    # agents with harness = "opencode" (OpenCode 2)
 command = "opencode"
-model = ""                    # "provider/model", e.g. "anthropic/claude-sonnet-5-5"; empty = OpenCode's default
-agent = ""                    # the OpenCode agent to run as (--agent); empty = its default agent
-extra_args = []
+model = ""                    # "provider/model" as `opencode models` lists it; empty = OpenCode's default
+agent = ""                    # the OpenCode agent to run as; empty = its default agent
+extra_args = []               # added to headless runs only
 
 [codex]                       # agents with harness = "codex" (experimental)
 command = "codex"

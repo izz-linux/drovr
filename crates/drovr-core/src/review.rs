@@ -416,7 +416,7 @@ fn touched(transcript: &Path, cwd: &str, out: &mut Vec<PathBuf>) {
                 dir = resolve(&here, w);
                 out.push(dir.clone());
             }
-            if let Some(f) = input["filePath"].as_str() {
+            if let Some(f) = input["path"].as_str().or(input["filePath"].as_str()) {
                 out.push(resolve(&dir, f));
             }
             if let Some(cmd) = input["command"].as_str() {
@@ -738,8 +738,9 @@ mod tests {
             &log,
             [
                 tool("edit", json!({ "filePath": "/r/api/src/a.rs" })),
+                tool("write", json!({ "path": "src/b.rs" })),
                 tool(
-                    "bash",
+                    "shell",
                     json!({ "command": "git status", "workdir": "/r/web" }),
                 ),
                 tool("bash", json!({ "command": "cd ../ops && ls" })),
@@ -753,6 +754,7 @@ mod tests {
             out,
             [
                 PathBuf::from("/r/api/src/a.rs"),
+                PathBuf::from("/r/api/src/b.rs"),
                 PathBuf::from("/r/web"),
                 PathBuf::from("/r/api/../ops"),
             ]
