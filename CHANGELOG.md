@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/izz-linux/drovr/compare/v0.11.3...v0.12.0) (2026-11-17)
+
+
+### Features
+
+* add OpenCode as an agent harness ([#63](https://github.com/izz-linux/drovr/issues/63)) ([e4d84bc](https://github.com/izz-linux/drovr/commit/e4d84bccaed118303204c9c27294107e3dd45fe9))
+
 ## [0.11.3](https://github.com/izz-linux/drovr/compare/v0.11.2...v0.11.3) (2026-11-15)
 
 
