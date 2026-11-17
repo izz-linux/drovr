@@ -649,14 +649,25 @@ fn settled(cfg: &Config, cwd: &str, name: &str, input: &Value) -> Option<Value> 
         })),
         // Claude Code's `auto` judges each call itself; drovr has no such
         // judge, so for OpenCode it's `acceptEdits`, and the rest is asked.
-        "acceptEdits" | "auto" if edit && edits_inside(cwd, input) => allow,
+        // The plans folder is drovr's, where agents keep their plans and
+        // reports, so edits there go through too.
+        "acceptEdits" | "auto" if edit => {
+            let plans = cfg.reports.path();
+            let mut roots = vec![PathBuf::from(cwd)];
+            // An empty path would hold everything.
+            if plans.is_absolute() {
+                roots.push(plans);
+            }
+            edits_inside(cwd, &roots, input).then(|| json!({ "behavior": "allow" }))
+        }
         _ => None,
     }
 }
 
-/// Whether every file an edit touches is inside the working directory, as
-/// Claude Code's `acceptEdits` requires.
-fn edits_inside(cwd: &str, input: &Value) -> bool {
+/// Whether every file an edit touches (relative paths are from `cwd`) is
+/// inside one of `roots`, as Claude Code's `acceptEdits` requires of the
+/// working directory.
+fn edits_inside(cwd: &str, roots: &[PathBuf], input: &Value) -> bool {
     let here = Path::new(cwd);
     let mut files: Vec<String> = input["file_path"]
         .as_str()
@@ -679,7 +690,7 @@ fn edits_inside(cwd: &str, input: &Value) -> bool {
     !files.is_empty()
         && files.iter().all(|f| {
             let p = normalize(&crate::review::resolve(here, f));
-            p.starts_with(normalize(here))
+            roots.iter().any(|r| p.starts_with(normalize(r)))
         })
 }
 
@@ -1188,12 +1199,46 @@ mod tests {
         assert!(ask(&cfg, "Edit", json!({"patchText": patch})).is_none());
         let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-a\n+b\n*** End Patch";
         assert!(ask(&cfg, "Edit", json!({"patchText": patch})).is_some());
+        // …and in the plans folder, but not next to it or out of it.
+        cfg.reports.dir = "/home/me/.claude/plans".into();
+        for (file, allowed) in [
+            ("/home/me/.claude/plans/sre-3425/plan.html", true),
+            ("/home/me/.claude/plans/notes.md", true),
+            ("/home/me/.claude/plans-old/x.md", false),
+            ("/home/me/.claude/plans/../settings.json", false),
+            ("/home/me/.claude/CLAUDE.md", false),
+        ] {
+            assert_eq!(
+                ask(&cfg, "Write", json!({"file_path": file})).is_some(),
+                allowed,
+                "{file}"
+            );
+        }
+        let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-a\n+b\n*** Add File: /home/me/.claude/plans/p.md\n+x\n*** End Patch";
+        assert!(ask(&cfg, "Edit", json!({"patchText": patch})).is_some());
+        // No plans folder: only the working directory.
+        cfg.reports.dir = String::new();
+        assert!(ask(&cfg, "Edit", json!({"file_path": "/etc/hosts"})).is_none());
+        assert!(ask(&cfg, "Edit", json!({"file_path": "/r/api/a.rs"})).is_some());
+        cfg.reports.dir = "/home/me/.claude/plans".into();
         cfg.defaults.permission_mode = "auto".into();
         assert!(ask(&cfg, "Edit", json!({"file_path": "/r/api/a.rs"})).is_some());
+        assert!(ask(
+            &cfg,
+            "Edit",
+            json!({"file_path": "/home/me/.claude/plans/a.md"})
+        )
+        .is_some());
         assert!(ask(&cfg, "Edit", json!({"file_path": "/etc/hosts"})).is_none());
         assert!(ask(&cfg, "Bash", json!({"command": "ls"})).is_none());
         cfg.defaults.permission_mode = "default".into();
         assert!(ask(&cfg, "Edit", json!({"file_path": "/r/api/a.rs"})).is_none());
+        assert!(ask(
+            &cfg,
+            "Edit",
+            json!({"file_path": "/home/me/.claude/plans/a.md"})
+        )
+        .is_none());
         cfg.defaults.permission_mode = "plan".into();
         assert_eq!(
             ask(&cfg, "Edit", json!({"file_path": "/r/api/a.rs"})).unwrap()["behavior"],
