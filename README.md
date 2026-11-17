@@ -34,7 +34,7 @@ A lightweight macOS desktop cockpit (Tauri + Svelte) for running Claude Code, Op
 
 ## Status
 
-drovr is at version 0.13.0. <!-- x-release-please-version -->
+drovr is at version 0.14.0. <!-- x-release-please-version -->
 
 **Tested so far:**
 
