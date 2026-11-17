@@ -206,14 +206,10 @@ impl Harness for OpenCode {
                 return Some(Transcript::Events(events.clone()));
             }
         }
-        // The newest parts (their IDs sort by time), oldest first.
-        let sql = format!(
-            "SELECT * FROM (SELECT p.id, p.data AS part, json_extract(m.data, '$.role') AS role, \
-               p.time_created AS t FROM part p JOIN message m ON m.id = p.message_id \
-               WHERE p.session_id = '{id}' ORDER BY p.message_id DESC, p.id DESC LIMIT {TRANSCRIPT_PARTS}) \
-             ORDER BY 1"
-        );
-        let events = transcript_events(id, &db(cfg, &sql).ok()?);
+        let messages = open_db(cfg)
+            .and_then(|db| session_messages(&db, id, TRANSCRIPT_MESSAGES))
+            .ok()?;
+        let events = transcript_events(id, &messages);
         if let Ok(mut s) = seen.lock() {
             s.insert(id.to_string(), (Instant::now(), events.clone()));
         }
@@ -379,39 +375,163 @@ export default {{
     )
 }
 
-/// How many of a session's newest parts the native view of a herdr agent
-/// reads.
-const TRANSCRIPT_PARTS: usize = 2000;
+/// How many of a session's newest messages the native view of a herdr
+/// agent reads.
+const TRANSCRIPT_MESSAGES: usize = 500;
 
-/// Part rows (`{part, role, t}`, the part as JSON text) as `run --format
-/// json` events: finished text and tool calls, steps, and the prompts you
-/// typed (a user message's text that OpenCode didn't add itself).
-fn transcript_events(id: &str, rows: &[Value]) -> Vec<Value> {
-    rows.iter()
-        .filter_map(|r| {
-            let part: Value = serde_json::from_str(r["part"].as_str()?).ok()?;
-            let t = &r["t"];
-            let event =
-                |kind: &str| json!({ "type": kind, "timestamp": t, "sessionID": id, "part": part });
-            match (r["role"].as_str()?, part["type"].as_str()?) {
-                ("user", "text") if part["synthetic"] != true && part["ignored"] != true => {
-                    Some(json!({ "type": "prompt", "timestamp": t, "text": part["text"] }))
-                }
-                ("assistant", "text") if !part["time"]["end"].is_null() => Some(event("text")),
-                ("assistant", "tool")
-                    if matches!(
-                        part["state"]["status"].as_str(),
-                        Some("completed" | "error")
-                    ) =>
-                {
-                    Some(event("tool_use"))
-                }
-                ("assistant", "step-start") => Some(event("step_start")),
-                ("assistant", "step-finish") => Some(event("step_finish")),
-                _ => None,
+/// A session's newest messages, oldest first, as OpenCode 2 puts them back
+/// together: each row's `data` with its `type`, and an assistant message's
+/// `content` made of its `session_part` rows in order (a part's type is its
+/// row's), then any content kept inline by an older build.
+fn session_messages(db: &rusqlite::Connection, id: &str, limit: usize) -> Result<Vec<Value>> {
+    let mut q = db.prepare(
+        "SELECT id, type, data FROM session_message WHERE session_id = ?1 \
+         ORDER BY seq DESC LIMIT ?2",
+    )?;
+    let mut messages: Vec<(String, Value)> = q
+        .query_map(rusqlite::params![id, limit as i64], |r| {
+            let data: String = r.get(2)?;
+            let mut m: Value = serde_json::from_str(&data).unwrap_or_else(|_| json!({}));
+            if !m.is_object() {
+                m = json!({});
             }
+            m["type"] = json!(r.get::<_, String>(1)?);
+            Ok((r.get(0)?, m))
+        })?
+        .collect::<Result<_, _>>()?;
+    messages.reverse();
+    let mut q = db.prepare(
+        "SELECT message_id, type, data FROM session_part WHERE session_id = ?1 AND message_id IN \
+           (SELECT id FROM session_message WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2) \
+         ORDER BY message_id, ordinal",
+    )?;
+    let mut parts: HashMap<String, Vec<Value>> = HashMap::new();
+    for row in q.query_map(rusqlite::params![id, limit as i64], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })? {
+        let (message, kind, data) = row?;
+        let Ok(mut part) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
+        if part.is_object() {
+            part["type"] = json!(kind);
+            parts.entry(message).or_default().push(part);
+        }
+    }
+    Ok(messages
+        .into_iter()
+        .map(|(mid, mut m)| {
+            if let Some(mut content) = parts.remove(&mid) {
+                if let Some(inline) = m["content"].as_array() {
+                    content.extend(inline.iter().cloned());
+                }
+                m["content"] = Value::Array(content);
+            }
+            m
         })
-        .collect()
+        .collect())
+}
+
+/// A session's messages (`session_messages`) as the events `opencode run
+/// --format json` prints from them: for each answer a step's start, its
+/// finished tool calls and its text, then the step's finish with its cost
+/// and tokens; and before them the prompts you typed, as `prompt` events.
+/// Text still being written is left for the next read.
+fn transcript_events(id: &str, messages: &[Value]) -> Vec<Value> {
+    let mut events = vec![];
+    for m in messages {
+        let created = &m["time"]["created"];
+        match m["type"].as_str() {
+            Some("user") => {
+                if let Some(text) = m["text"].as_str().filter(|t| !t.trim().is_empty()) {
+                    events.push(json!({ "type": "prompt", "timestamp": created, "text": text }));
+                }
+            }
+            Some("assistant") => {
+                let done = !m["time"]["completed"].is_null();
+                let at = if done {
+                    &m["time"]["completed"]
+                } else {
+                    created
+                };
+                let event = |kind: &str, at: &Value, part: Value| json!({ "type": kind, "timestamp": at, "sessionID": id, "part": part });
+                events.push(event(
+                    "step_start",
+                    created,
+                    json!({ "type": "step-start" }),
+                ));
+                let content = m["content"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+                for (i, item) in content.iter().enumerate() {
+                    let last = i + 1 == content.len();
+                    match item["type"].as_str() {
+                        Some("tool") => {
+                            let state = &item["state"];
+                            let name = item["name"].as_str().unwrap_or("tool");
+                            let part = match state["status"].as_str() {
+                                Some("completed") => json!({
+                                    "type": "tool", "tool": name,
+                                    "state": { "status": "completed", "input": state["input"], "output": tool_output(name, &state["content"]) },
+                                }),
+                                Some("error") => json!({
+                                    "type": "tool", "tool": name,
+                                    "state": { "status": "error", "input": state["input"], "error": state["error"]["message"] },
+                                }),
+                                _ => continue,
+                            };
+                            let at = &item["time"]["completed"];
+                            events.push(event(
+                                "tool_use",
+                                if at.is_null() { created } else { at },
+                                part,
+                            ));
+                        }
+                        Some("text") if done || !last => {
+                            events.push(event(
+                                "text",
+                                at,
+                                json!({ "type": "text", "text": item["text"] }),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                if !m["error"].is_null() {
+                    events.push(json!({ "type": "error", "timestamp": at, "sessionID": id, "error": m["error"] }));
+                }
+                if !m["finish"].is_null() && !m["tokens"].is_null() {
+                    let part = json!({
+                        "type": "step-finish",
+                        "reason": m["finish"],
+                        "cost": m["cost"].as_f64().unwrap_or(0.0),
+                        "tokens": m["tokens"],
+                    });
+                    events.push(event("step_finish", at, part));
+                }
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
+/// A finished tool call's output as OpenCode shows it: a shell command's
+/// first text (what follows is for the model), other tools' texts joined.
+fn tool_output(name: &str, content: &Value) -> String {
+    let texts = content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["type"] == "text")
+        .filter_map(|c| c["text"].as_str());
+    if matches!(name, "shell" | "bash") {
+        texts.take(1).collect()
+    } else {
+        texts.collect::<Vec<_>>().join("\n")
+    }
 }
 
 /// A session's transcript events and when they were read.
@@ -1216,56 +1336,49 @@ mod tests {
 
     #[test]
     fn reads_a_sessions_transcript() {
-        let row = |role: &str, t: i64, part: Value| json!({ "role": role, "t": t, "part": part.to_string() });
-        let rows = [
-            row(
-                "user",
-                1000,
-                json!({ "type": "text", "text": "Fix the login bug" }),
-            ),
-            row(
-                "user",
-                1000,
-                json!({ "type": "text", "text": "<file contents>", "synthetic": true }),
-            ),
-            row("assistant", 1100, json!({ "type": "step-start" })),
-            row(
-                "assistant",
-                1200,
-                json!({ "type": "tool", "tool": "bash", "state": { "status": "completed", "input": { "command": "ls" }, "output": "a.rs" } }),
-            ),
-            row(
-                "assistant",
-                1250,
-                json!({ "type": "tool", "tool": "edit", "state": { "status": "running", "input": {} } }),
-            ),
-            row(
-                "assistant",
-                1300,
-                json!({ "type": "step-finish", "reason": "tool-calls", "cost": 0.5, "tokens": { "input": 10, "output": 5, "cache": { "read": 0, "write": 0 } } }),
-            ),
-            row(
-                "assistant",
-                1400,
-                json!({ "type": "text", "text": "Fixed.", "time": { "start": 1, "end": 2 } }),
-            ),
-            row(
-                "assistant",
-                1500,
-                json!({ "type": "text", "text": "still typing", "time": { "start": 1 } }),
-            ),
-            row(
-                "assistant",
-                3000,
-                json!({ "type": "step-finish", "reason": "stop", "cost": 0.25, "tokens": { "input": 20, "output": 5, "cache": { "read": 0, "write": 0 } } }),
-            ),
-            row(
-                "user",
-                5000,
-                json!({ "type": "text", "text": "Now add a test" }),
-            ),
-        ];
-        let events = transcript_events("ses_1", &rows);
+        let db = test_db();
+        db.execute_batch(
+            r#"
+            CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT,
+              time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL,
+              PRIMARY KEY (message_id, ordinal));
+            INSERT INTO session_message VALUES
+              ('msg_1', 'ses_t', 'user', 1, 0, 0, '{"time":{"created":1000},"text":"Fix the login bug"}'),
+              ('msg_2', 'ses_t', 'synthetic', 2, 0, 0, '{"time":{"created":1000},"text":"<file contents>"}'),
+              ('msg_3', 'ses_t', 'assistant', 3, 0, 0,
+               '{"time":{"created":1100,"completed":1300},"finish":"tool-calls","cost":0.5,
+                 "tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":0,"write":0}},
+                 "content":[{"type":"text","text":"Listed."}]}'),
+              ('msg_4', 'ses_t', 'assistant', 4, 0, 0,
+               '{"time":{"created":1400,"completed":3000},"finish":"stop","cost":0.25,
+                 "tokens":{"input":20,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}'),
+              ('msg_5', 'ses_t', 'user', 5, 0, 0, '{"time":{"created":5000},"text":"Now add a test"}'),
+              ('msg_6', 'ses_t', 'assistant', 6, 0, 0, '{"time":{"created":5100}}');
+            INSERT INTO session_part VALUES
+              ('msg_3', 'ses_t', 0, 'tool', 'c1', 0, 0,
+               '{"id":"c1","name":"shell","state":{"status":"completed","input":{"command":"ls"},
+                 "content":[{"type":"text","text":"a.rs"},{"type":"text","text":"exit 0"}]},"time":{"created":1150,"completed":1200}}'),
+              ('msg_3', 'ses_t', 1, 'tool', 'c2', 0, 0,
+               '{"id":"c2","name":"edit","state":{"status":"running","input":{},"metadata":{}},"time":{"created":1250}}'),
+              ('msg_4', 'ses_t', 0, 'reasoning', NULL, 0, 0, '{"text":"thinking it over"}'),
+              ('msg_4', 'ses_t', 1, 'text', NULL, 0, 0, '{"text":"Fixed."}'),
+              ('msg_6', 'ses_t', 0, 'tool', 'c3', 0, 0,
+               '{"id":"c3","name":"write","state":{"status":"error","input":{"path":"src/a.rs"},
+                 "error":{"type":"permission","message":"Denied."}},"time":{"created":5200,"completed":5300}}'),
+              ('msg_6', 'ses_t', 1, 'text', NULL, 0, 0, '{"text":"still typing"}'),
+              ('msg_x', 'ses_other', 0, 'text', NULL, 0, 0, '{"text":"not this session"}');
+            "#,
+        )
+        .unwrap();
+        // The newest messages only, oldest first, with their parts.
+        let newest = session_messages(&db, "ses_t", 2).unwrap();
+        assert_eq!(newest.len(), 2);
+        assert_eq!(newest[0]["text"], "Now add a test");
+        assert_eq!(newest[1]["content"][0]["name"], "write");
+        assert!(session_messages(&db, "ses_none", 10).unwrap().is_empty());
+
+        let events = transcript_events("ses_t", &session_messages(&db, "ses_t", 500).unwrap());
         let mut run = Value::Null;
         let shown: Vec<String> = events
             .iter()
@@ -1282,12 +1395,19 @@ mod tests {
             shown,
             [
                 "prompt Fix the login bug",
-                "tool bash ls",
+                // A shell command's output without what follows for the model.
+                "tool shell ls",
                 "result a.rs",
+                // Content an older build kept inline comes after the parts.
+                "text Listed.",
                 "text Fixed.",
                 // The turn's cost and time, from its prompt.
                 "end 0.75 2000.0",
                 "prompt Now add a test",
+                // The answer still being written: its finished tool call,
+                // but not its unfinished text.
+                "tool write src/a.rs",
+                "error Denied.",
             ]
         );
     }

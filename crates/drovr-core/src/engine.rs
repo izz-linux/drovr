@@ -3320,40 +3320,41 @@ esac
         std::fs::create_dir_all(&prompts).unwrap();
         let long = prompts.join("1.md");
         std::fs::write(&long, "A long ticket\nwith two lines").unwrap();
-        // OpenCode's database, as `opencode db … --format json` prints it.
-        let row = |role: &str, t: i64, part: Value| json!({ "role": role, "t": t, "part": part.to_string() });
-        let rows = json!([
-            row(
-                "user",
-                1000,
-                json!({ "type": "text", "text": "Fix the login bug" })
-            ),
-            row(
-                "assistant",
-                1200,
-                json!({ "type": "tool", "tool": "bash", "state": { "status": "completed", "input": { "command": "ls" }, "output": "a.rs" } })
-            ),
-            row(
-                "assistant",
-                1400,
-                json!({ "type": "text", "text": "Fixed.", "time": { "start": 1, "end": 2 } })
-            ),
-            row(
-                "assistant",
-                3000,
-                json!({ "type": "step-finish", "reason": "stop", "cost": 0.25, "tokens": { "input": 20, "output": 5, "cache": { "read": 0, "write": 0 } } })
-            ),
-            row(
-                "user",
-                5000,
-                json!({ "type": "text", "text": format!("[drovr] Read {} and act on it.", long.display()) })
-            ),
-        ]);
+        // OpenCode 2's database, which `opencode debug paths db` names.
         let dir = long.parent().unwrap().parent().unwrap().to_path_buf();
-        let rows_file = dir.join("rows.json");
-        std::fs::write(&rows_file, rows.to_string()).unwrap();
+        let db_file = dir.join("opencode.db");
+        let _ = std::fs::remove_file(&db_file);
+        let db = rusqlite::Connection::open(&db_file).unwrap();
+        db.execute_batch(
+            r#"
+            CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+              type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+              time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+            CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+              ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT,
+              time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL,
+              PRIMARY KEY (message_id, ordinal));
+            INSERT INTO session_message VALUES
+              ('msg_1', 'ses_native_test', 'user', 1, 0, 0, '{"time":{"created":1000},"text":"Fix the login bug"}'),
+              ('msg_2', 'ses_native_test', 'assistant', 2, 0, 0,
+               '{"time":{"created":1100,"completed":3000},"finish":"stop","cost":0.25,
+                 "tokens":{"input":20,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}');
+            INSERT INTO session_part VALUES
+              ('msg_2', 'ses_native_test', 0, 'tool', 'c1', 0, 0,
+               '{"id":"c1","name":"shell","state":{"status":"completed","input":{"command":"ls"},
+                 "content":[{"type":"text","text":"a.rs"}]},"time":{"created":1150,"completed":1200}}'),
+              ('msg_2', 'ses_native_test', 1, 'text', NULL, 0, 0, '{"text":"Fixed."}');
+            "#,
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO session_message VALUES ('msg_3', 'ses_native_test', 'user', 3, 0, 0, ?1)",
+            [json!({ "time": { "created": 5000 }, "text": format!("[drovr] Read {} and act on it.", long.display()) }).to_string()],
+        )
+        .unwrap();
+        drop(db);
         let stub = dir.join("opencode");
-        std::fs::write(&stub, format!("#!/bin/sh\ncat {}\n", rows_file.display())).unwrap();
+        std::fs::write(&stub, format!("#!/bin/sh\necho {}\n", db_file.display())).unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         engine.cfg.opencode.command = stub.display().to_string();
         engine
@@ -3380,7 +3381,7 @@ esac
             shown(&engine, false),
             [
                 "prompt: Fix the login bug",
-                "tool: bash ls",
+                "tool: shell ls",
                 "result: a.rs",
                 "text: Fixed.",
                 "final: finished in 2s · $0.250 · 1 turns",
