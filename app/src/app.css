@@ -122,8 +122,9 @@ pre, code { font-family: var(--mono); font-size: 12px; }
 .s-error { color: var(--red); border-color: var(--red); }
 .s-interrupted { color: var(--yellow); border-color: var(--yellow); border-style: dashed; }
 .s-stopped { color: var(--muted); }
+.md { overflow-wrap: anywhere; }
 .md :is(p, ul, ol, pre) { margin: 4px 0; }
-.md pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow: auto; }
+.md pre { background: var(--bg); padding: 8px; border-radius: 6px; white-space: pre-wrap; }
 .md code { background: var(--bg); padding: 0 3px; border-radius: 3px; }
 .md a { color: var(--accent); }
 .empty { color: var(--muted); padding: 40px; text-align: center; }

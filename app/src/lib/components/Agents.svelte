@@ -424,7 +424,7 @@
   h2 { margin: 0; font-size: 16px; }
   .meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; margin-top: 4px; }
   .needs { margin-top: 8px; border-color: var(--yellow); color: var(--yellow); background: transparent; }
-  .log { flex: 1; padding: 12px 16px; min-height: 0; }
+  .log { flex: 1; padding: 12px 16px; min-height: 0; overflow-x: hidden; }
   .sep { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; border-top: 1px dashed var(--border); margin: 14px 0 6px; padding-top: 6px; }
   .prompt { border-left: 3px solid var(--purple); padding: 4px 10px; background: var(--panel); border-radius: 4px; margin: 6px 0; }
   .text { margin: 6px 0; }
