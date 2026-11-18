@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.0](https://github.com/izz-linux/drovr/compare/v0.13.0...v0.14.0) (2026-11-17)
+
+
+### Features
+
+* show herdr agents' sessions like headless ones ([#64](https://github.com/izz-linux/drovr/issues/64)) ([c51a9aa](https://github.com/izz-linux/drovr/commit/c51a9aaa2b9c72a01e32732fc4e47cbab329f0b5))
+
+
+### Bug Fixes
+
+* let OpenCode agents edit the plans folder without asking ([#70](https://github.com/izz-linux/drovr/issues/70)) ([ed7f286](https://github.com/izz-linux/drovr/commit/ed7f2869806b2729ff9fd3f47068c10a5758fa8c))
+
 ## [0.13.0](https://github.com/izz-linux/drovr/compare/v0.12.0...v0.13.0) (2026-11-17)
 
 
