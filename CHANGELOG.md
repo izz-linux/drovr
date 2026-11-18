@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/izz-linux/drovr/compare/v0.14.0...v0.14.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* wrap code blocks in agent messages instead of scrolling them ([#72](https://github.com/izz-linux/drovr/issues/72)) ([a800ac7](https://github.com/izz-linux/drovr/commit/a800ac7989be0875333674fcab03f88057800a77))
+
 ## [0.14.0](https://github.com/izz-linux/drovr/compare/v0.13.0...v0.14.0) (2026-11-17)
 
 
