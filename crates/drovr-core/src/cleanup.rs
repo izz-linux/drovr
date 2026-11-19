@@ -24,9 +24,15 @@ pub struct Outcome {
     pub errors: Vec<String>,
 }
 
-/// Whether `root` may be swept: absolute, and neither `/` nor `home`.
+/// Whether `root` may be swept: absolute, and neither `/`, nor `home`, nor a
+/// folder above `home`. Symlinks are resolved first when they can be.
 fn safe_root(root: &Path, home: &Path) -> bool {
-    root.is_absolute() && root.components().count() > 1 && !root.components().eq(home.components())
+    if !root.is_absolute() {
+        return false;
+    }
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    root.components().count() > 1 && !home.starts_with(&root)
 }
 
 /// Archive old plans and prune resolved Inbox items. With `dry`, report what
@@ -41,10 +47,10 @@ pub fn run(cfg: &Config, store: &Store, now: f64, dry: bool) -> Result<Outcome> 
         let cutoff = now - f64::from(cfg.reports.archive_after_days) * DAY;
         let root = cfg.reports.path();
         if !safe_root(&root, &crate::config::user_home()) {
-            out.errors.push(format!(
-                "plans folder {} isn't an absolute path below your home folder; not archiving",
-                root.display()
-            ));
+            out.errors.push(
+                "reports.dir must be an absolute folder that isn't / or your home folder or above it"
+                    .to_string(),
+            );
         } else {
             archive(&root, store, cutoff, dry, &mut out);
         }
@@ -597,6 +603,30 @@ mod tests {
         assert!(!safe_root(Path::new("/Users/someone/"), home));
         assert!(!safe_root(Path::new("plans"), home));
         assert!(!safe_root(Path::new(""), home));
+    }
+
+    #[test]
+    fn an_ancestor_of_home_is_refused() {
+        let home = Path::new("/Users/x");
+        assert!(!safe_root(Path::new("/Users"), home));
+        assert!(safe_root(Path::new("/Users/x/plans"), home));
+        assert!(safe_root(Path::new("/Users/y"), home));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_home_is_refused() {
+        let e = env("linkhome");
+        let real = e.dir.join("real-home").canonicalize().unwrap_or_else(|_| {
+            std::fs::create_dir_all(e.dir.join("real-home")).unwrap();
+            e.dir.join("real-home").canonicalize().unwrap()
+        });
+        let link = e.dir.join("link-home");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(!safe_root(&real, &link));
+        assert!(!safe_root(&link, &real));
+        assert!(!safe_root(real.parent().unwrap(), &link));
+        let _ = std::fs::remove_dir_all(&e.dir);
     }
 
     #[test]
