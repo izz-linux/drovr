@@ -738,6 +738,7 @@ fn kind_label(kind: &str) -> &str {
         "jira" => "Jira draft",
         "handoff" => "Handoff",
         "confluence" => "Confluence",
+        "review" => "PR review",
         other => other,
     }
 }

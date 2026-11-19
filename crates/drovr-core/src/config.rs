@@ -26,6 +26,7 @@ pub struct Config {
     pub remote: Remote,
     pub workflow: Workflow,
     pub watch: Watch,
+    pub review: Review,
     pub stages: Stages,
     pub retro: RetroConfig,
     pub inbox: Inbox,
@@ -229,6 +230,38 @@ impl Default for Watch {
             rules: Rules::default(),
             merged_transition: String::new(),
             dispatch_transition: String::new(),
+        }
+    }
+}
+
+/// Finding PRs that need your review: links posted in Slack channels, and
+/// GitHub review requests to your teams. Off until a channel or team is set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Review {
+    /// Channels to watch for GitHub PR links, e.g. `#sre-reviews`.
+    pub slack_channels: Vec<String>,
+    /// Teams whose review requests to follow, as `org/team`.
+    pub github_teams: Vec<String>,
+    /// How often to look, in seconds; 0 is off.
+    pub poll_secs: u64,
+    /// Start a reviewer without asking.
+    pub auto_dispatch: bool,
+    /// Remove a reviewer once its PR merges or closes.
+    pub remove_when_closed: bool,
+    /// Where local clones live; empty is `defaults.cwd`.
+    pub repos_dir: String,
+}
+
+impl Default for Review {
+    fn default() -> Self {
+        Review {
+            slack_channels: vec![],
+            github_teams: vec![],
+            poll_secs: 600,
+            auto_dispatch: false,
+            remove_when_closed: true,
+            repos_dir: String::new(),
         }
     }
 }
@@ -648,6 +681,7 @@ impl Default for Config {
             memory: Memory::default(),
             workflow: Workflow::default(),
             watch: Watch::default(),
+            review: Review::default(),
             stages: Stages::default(),
             retro: RetroConfig::default(),
             inbox: Inbox::default(),

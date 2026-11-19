@@ -23,7 +23,7 @@
 
   const kinds: Record<string, string> = {
     decision: "Decision", command: "Command", permission: "Permission", spawn: "Spawn", done: "Finished",
-    watch: "Watcher", jira: "Jira draft", handoff: "Handoff", confluence: "Confluence",
+    watch: "Watcher", jira: "Jira draft", handoff: "Handoff", confluence: "Confluence", review: "PR review",
   };
   let models = $state<Record<number, string>>({});
 

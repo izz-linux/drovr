@@ -10,6 +10,7 @@ pub mod harness;
 pub mod ledger;
 pub mod mcp;
 pub mod memory;
+pub mod pr_review;
 pub mod prompts;
 pub mod push;
 pub mod remote;

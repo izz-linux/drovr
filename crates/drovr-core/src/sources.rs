@@ -379,6 +379,25 @@ impl<'a> Sources<'a> {
         }
     }
 
+    /// Messages posted in `channels` since `since` (unix seconds) that link
+    /// to GitHub. Slack's search is day-granular, so this reaches back to the
+    /// day before; the caller dedupes.
+    pub fn slack_pr_messages(&self, channels: &[String], since: f64) -> Result<Vec<SlackMessage>> {
+        let day = crate::ledger::iso(since - 86_400.0)[..10].to_string();
+        if !matches!(self.cfg.slack.provider.as_str(), "rest" | "command") {
+            let list = channels.join(", ");
+            let v = self.ask_agent(&format!(
+                "Use your Slack MCP tools to find messages posted in these Slack channels since {day}: {list}\nReturn only messages that contain GitHub pull request links (https://github.com/<owner>/<repo>/pull/<n>), as a JSON array of objects shaped like {SLACK_SHAPE}."
+            ))?;
+            return Ok(serde_json::from_value(v).unwrap_or_default());
+        }
+        let mut out = vec![];
+        for channel in channels {
+            out.extend(self.slack_search(&format!("in:{channel} github.com after:{day}"))?);
+        }
+        Ok(out)
+    }
+
     /// Free-form question answered by an agent with all its MCPs (Slack,
     /// Jira, Confluence, ...). Returns markdown.
     pub fn ask(&self, question: &str, cwd: Option<&str>) -> Result<String> {
