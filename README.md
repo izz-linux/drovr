@@ -34,7 +34,7 @@ A lightweight macOS desktop control plane (Rust, Tauri + Svelte) for orchestrati
 
 ## Status
 
-drovr is at version 0.15.0. <!-- x-release-please-version -->
+drovr is at version 0.15.1. <!-- x-release-please-version -->
 
 **Tested so far:**
 

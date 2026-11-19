@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/izz-linux/drovr/compare/v0.15.0...v0.15.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* install the drovr CLI on your PATH from the app ([#81](https://github.com/izz-linux/drovr/issues/81)) ([d1a3f46](https://github.com/izz-linux/drovr/commit/d1a3f460de3cc2e9cc5accc4e3b64269afe12488))
+
 ## [0.15.0](https://github.com/izz-linux/drovr/compare/v0.14.1...v0.15.0) (2026-11-19)
 
 
