@@ -56,6 +56,12 @@ pub fn on_pr(engine: &Engine, before: &Pr, pr: &mut Pr) {
     if pr.ci == "failure" && before.ci != "failure" {
         triggers.push("ci_failed");
     }
+    if pr.state == "OPEN"
+        && pr.ci == "success"
+        && matches!(before.ci.as_str(), "pending" | "failure")
+    {
+        triggers.push("ci_passed");
+    }
     if pr.review == "CHANGES_REQUESTED" && before.review != "CHANGES_REQUESTED" {
         triggers.push("changes_requested");
     } else if pr.reviews > before.reviews && pr.review != "APPROVED" {
@@ -68,6 +74,14 @@ pub fn on_pr(engine: &Engine, before: &Pr, pr: &mut Pr) {
     if green(pr) && !green(before) {
         triggers.push("approved_green");
     }
+    if pr.state == "OPEN"
+        && !pr.draft
+        && matches!(pr.ci.as_str(), "success" | "none")
+        && pr.mergeable == "MERGEABLE"
+        && !matches!(pr.review.as_str(), "APPROVED" | "CHANGES_REQUESTED")
+    {
+        triggers.push("ready_for_review");
+    }
     if pr.state == "MERGED" && before.state != "MERGED" {
         triggers.push("merged");
     }
@@ -75,7 +89,11 @@ pub fn on_pr(engine: &Engine, before: &Pr, pr: &mut Pr) {
         triggers.push("pr_closed");
     }
     for trigger in triggers {
-        let key = format!("{trigger}@{}", pr.head);
+        let key = if trigger == "new_review" {
+            format!("new_review@{}#{}", pr.head, pr.reviews)
+        } else {
+            format!("{trigger}@{}", pr.head)
+        };
         if pr.fired.contains(&key) {
             continue;
         }
@@ -153,6 +171,8 @@ pub fn on_ticket(engine: &Engine, t: &Ticket, changes: &[(&'static str, Value)])
 fn headline(trigger: &str) -> &'static str {
     match trigger {
         "ci_failed" => "CI failed",
+        "ci_passed" => "CI passed",
+        "ready_for_review" => "green, waiting on review",
         "changes_requested" => "changes requested",
         "new_review" => "new review",
         "conflict" => "merge conflict",
@@ -263,6 +283,15 @@ fn pr_text(engine: &Engine, trigger: &str, pr: &Pr) -> (String, String) {
                     .into(),
             )
         }
+        "ci_passed" => (
+            head + "\nIts checks all passed.",
+            "Continue with what you were waiting on for this PR. If nothing is left, say so."
+                .into(),
+        ),
+        "ready_for_review" => (
+            head + "\nIts checks pass and it has no conflicts; it needs a review.",
+            String::new(),
+        ),
         "conflict" => (
             head,
             "Merge the base branch in, resolve the conflicts, run the checks, and push.".into(),
@@ -450,7 +479,7 @@ pub fn draft_jira(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, Rules};
     use crate::store::Store;
 
     fn setup(name: &str) -> (std::path::PathBuf, Engine) {
@@ -487,6 +516,109 @@ mod tests {
             head: "a1".into(),
             ..Pr::default()
         }
+    }
+
+    fn asking(engine: &mut Engine) {
+        let r = &mut engine.cfg.watch.rules;
+        r.ci_passed = "ask".into();
+        r.ready_for_review = "ask".into();
+        r.new_review = "ask".into();
+    }
+
+    #[test]
+    fn ci_passed_fires_when_checks_turn_green() {
+        let (dir, mut engine) = setup("ci-passed");
+        asking(&mut engine);
+        for from in ["pending", "failure"] {
+            let before = pr(from, "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+            let mut now = pr("success", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+            on_pr(&engine, &before, &mut now);
+            assert!(now.fired.contains(&"ci_passed@a1".to_string()), "{from}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ci_passed_ignores_a_pr_seen_green_first() {
+        let (dir, mut engine) = setup("ci-first");
+        asking(&mut engine);
+        let before = Pr {
+            state: "OPEN".into(),
+            ..Pr::default()
+        };
+        let mut now = pr("success", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+        on_pr(&engine, &before, &mut now);
+        assert!(!now.fired.iter().any(|k| k.starts_with("ci_passed@")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ready_for_review_fires_once_per_head() {
+        let (dir, mut engine) = setup("ready");
+        asking(&mut engine);
+        let before = pr("success", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+        let mut now = before.clone();
+        on_pr(&engine, &before, &mut now);
+        assert_eq!(now.fired, ["ready_for_review@a1"]);
+        on_pr(&engine, &before, &mut now);
+        assert_eq!(engine.store.items(Some("pending"), 50).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ready_for_review_needs_green_mergeable_and_no_decision() {
+        let (dir, mut engine) = setup("ready-not");
+        asking(&mut engine);
+        let fires = |engine: &Engine, now: &Pr| {
+            let mut now = now.clone();
+            on_pr(engine, &now.clone(), &mut now);
+            now.fired.contains(&"ready_for_review@a1".to_string())
+        };
+        let base = pr("success", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+        let mut draft = base.clone();
+        draft.draft = true;
+        assert!(!fires(&engine, &draft));
+        for review in ["CHANGES_REQUESTED", "APPROVED"] {
+            let p = pr("success", review, "MERGEABLE", "OPEN");
+            assert!(!fires(&engine, &p), "{review}");
+        }
+        assert!(!fires(
+            &engine,
+            &pr("success", "REVIEW_REQUIRED", "CONFLICTING", "OPEN")
+        ));
+        for ci in ["failure", "pending"] {
+            let p = pr(ci, "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+            assert!(!fires(&engine, &p), "{ci}");
+        }
+        assert!(fires(
+            &engine,
+            &pr("none", "REVIEW_REQUIRED", "MERGEABLE", "OPEN")
+        ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn new_review_fires_for_each_review_on_a_head() {
+        let (dir, mut engine) = setup("each-review");
+        asking(&mut engine);
+        let mut before = pr("pending", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+        before.reviews = 0;
+        let mut now = before.clone();
+        now.reviews = 1;
+        on_pr(&engine, &before, &mut now);
+        assert!(now.fired.contains(&"new_review@a1#1".to_string()));
+        let before = now.clone();
+        now.reviews = 2;
+        on_pr(&engine, &before, &mut now);
+        assert!(now.fired.contains(&"new_review@a1#2".to_string()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn default_rules_for_new_triggers() {
+        let r = Rules::default();
+        assert_eq!(r.action("ci_passed"), "wake");
+        assert_eq!(r.action("ready_for_review"), "ask");
     }
 
     #[test]
@@ -577,9 +709,9 @@ mod tests {
             .unwrap();
         assert!(engine.answer(mv.id, "Complete").is_err());
         assert_eq!(engine.store.item(mv.id).unwrap().unwrap().status, "pending");
-        // All of it is in the ticket's record.
+        // All of it is in the ticket's record (CI failed, CI passed, ready to merge, merged, two Jira drafts).
         let t = ledger::timeline(&engine.cfg, "SRE-3229");
-        assert_eq!(t.iter().filter(|e| e["kind"] == "asked").count(), 5);
+        assert_eq!(t.iter().filter(|e| e["kind"] == "asked").count(), 6);
         assert_eq!(t.iter().filter(|e| e["kind"] == "answered").count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }

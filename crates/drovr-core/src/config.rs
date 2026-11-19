@@ -160,8 +160,12 @@ pub struct Watch {
 pub struct Rules {
     /// A PR's checks finished and some failed.
     pub ci_failed: String,
+    /// A PR's checks went from pending or failing to passing.
+    pub ci_passed: String,
     /// A reviewer requested changes.
     pub changes_requested: String,
+    /// Green and mergeable with no review decision yet: waiting on a review.
+    pub ready_for_review: String,
     /// A new review or review comments, without a change request.
     pub new_review: String,
     /// The PR has merge conflicts.
@@ -180,7 +184,9 @@ impl Default for Rules {
         let s = |v: &str| v.to_string();
         Rules {
             ci_failed: s("wake"),
+            ci_passed: s("wake"),
             changes_requested: s("wake"),
+            ready_for_review: s("ask"),
             new_review: s("wake"),
             conflict: s("wake"),
             approved_green: s("ask"),
@@ -196,7 +202,9 @@ impl Rules {
     pub fn action(&self, trigger: &str) -> &str {
         match trigger {
             "ci_failed" => &self.ci_failed,
+            "ci_passed" => &self.ci_passed,
             "changes_requested" => &self.changes_requested,
+            "ready_for_review" => &self.ready_for_review,
             "new_review" => &self.new_review,
             "conflict" => &self.conflict,
             "approved_green" => &self.approved_green,

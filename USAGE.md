@@ -108,7 +108,7 @@ Everything waiting on you is in the **Inbox** (⌘2), oldest first: new items jo
 - **Permission:** **Allow**, or **Deny** with a reason. A Bash command that pushes has the same **View push**. Unless the command gives a full path, drovr starts from the agent's working folder and says so; check the repo and branch on the summary line.
 - **Spawn** (with `orchestrator.auto_spawn = false`): a lead wants to start a worker. **Start worker** or **Decline**. The box next to it is the model the worker runs on: the lead's pick if it made one, else empty for the default shown in it (a stage's `stages.models`, or `defaults.model`). Type another to override it.
 - **Finished:** read the summary, then **Review changes**.
-- **Watcher** (with `workflow.enabled`): something changed on a ticket or its PR (checks failed, a review, a conflict, ready to merge, merged or closed, or a Jira change) and its rule in `watch.rules` is `"ask"`. **Send to <agent>** passes it on with the details, or dismiss it.
+- **Watcher** (with `workflow.enabled`): something changed on a ticket or its PR (checks failed or passed, a review, a conflict, waiting on review, ready to merge, merged or closed, or a Jira change) and its rule in `watch.rules` is `"ask"`. **Send to <agent>** passes it on with the details, or dismiss it.
 - **Confluence:** an agent wrote a page. Read the diff against the live draft and the full page, then **Save as draft in Confluence** or **Send back** with notes. drovr reads the page again before saving and shows you a new diff if it changed; it never publishes.
 - **Handoff** (with `workflow.enabled`, in a group created while it was on): a stage finished. Read its handoff, then **Approve** (the lead starts the next stage; change its model in the box if you want) or **Send back** with notes.
 - **Jira draft:** a comment or status move drafted by drovr (when a PR merges) or by an agent. Edit it, then **Post to Jira** (drovr runs `jira.comment_cmd` / `jira.transition_cmd`), or **Discard**.
@@ -282,7 +282,7 @@ Turning it on doesn't change groups you already have: only groups created while 
    github_repos = ["yourorg/*"]
    ```
 2. **Pipeline** (⌘9): each ticket's Jira status, its agents, its PRs (CI ✓ ✗ ●, review state, conflicts, drafts), what's waiting for you and what it's cost. A PR belongs to a ticket when its title has the key. **Refresh now** reads Jira and GitHub straight away; errors show at the top.
-3. **Decide what happens on a change** with `[watch.rules]`: per trigger (`ci_failed`, `changes_requested`, `new_review`, `conflict`, `approved_green`, `merged`, `pr_closed`, `jira_changed`), `"wake"` the agent with the details, `"ask"` you in the Inbox, or `"ignore"`. Start with `"ask"` everywhere and loosen one at a time.
+3. **Decide what happens on a change** with `[watch.rules]`: per trigger (`ci_failed`, `ci_passed`, `changes_requested`, `new_review`, `ready_for_review`, `conflict`, `approved_green`, `merged`, `pr_closed`, `jira_changed`), `"wake"` the agent with the details, `"ask"` you in the Inbox, or `"ignore"`. Start with `"ask"` everywhere and loosen one at a time.
 4. **Jira updates:** with `jira.comment_cmd` set, a merge drafts a comment for you to edit and post (and a move, with `watch.merged_transition`). With `watch.dispatch_transition`, dispatching a ticket moves it straight away, say to In Progress. For twg, a transition is its id: `twg jira workitem transition --id SRE-123 -o json` lists them without moving anything.
 
 ### Run a ticket through stages

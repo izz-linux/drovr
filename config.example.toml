@@ -62,8 +62,10 @@ dispatch_transition = ""      # when you dispatch a ticket, make this move strai
 
 [watch.rules]                 # wake the agent, ask you in the Inbox, or ignore (it's still recorded)
 ci_failed = "wake"            # with the failing log
+ci_passed = "wake"            # checks went from pending or failing to passing
 changes_requested = "wake"    # with the reviews and review comments
-new_review = "wake"
+new_review = "wake"                # fires for each review
+ready_for_review = "ask"      # green, mergeable, no review decision yet
 conflict = "wake"
 approved_green = "ask"        # ready to merge
 merged = "ask"                # plus Jira drafts
