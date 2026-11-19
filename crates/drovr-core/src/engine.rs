@@ -917,6 +917,7 @@ impl Engine {
         let (owner, repo, number) = crate::pr_review::parse(url).ok_or_else(|| {
             anyhow!("{url} isn't a GitHub PR link like https://github.com/o/r/pull/1")
         })?;
+        let url = &format!("https://github.com/{owner}/{repo}/pull/{number}");
         for part in [&owner, &repo] {
             let plain = part
                 .bytes()

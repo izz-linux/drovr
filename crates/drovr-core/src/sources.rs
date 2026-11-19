@@ -382,7 +382,11 @@ impl<'a> Sources<'a> {
     /// Messages posted in `channels` since `since` (unix seconds) that link
     /// to GitHub. Slack's search is day-granular, so this reaches back to the
     /// day before; the caller dedupes.
-    pub fn slack_pr_messages(&self, channels: &[String], since: f64) -> Result<Vec<SlackMessage>> {
+    pub(crate) fn slack_pr_messages(
+        &self,
+        channels: &[String],
+        since: f64,
+    ) -> Result<Vec<SlackMessage>> {
         let day = crate::ledger::iso(since - 86_400.0)[..10].to_string();
         if !matches!(self.cfg.slack.provider.as_str(), "rest" | "command") {
             let list = channels.join(", ");

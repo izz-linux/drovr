@@ -78,10 +78,17 @@ pub fn append(cfg: &Config, folder: &str, ticket: &str, event: &Value) -> Result
 
 /// Holds an flock until dropped, so lines from several processes don't
 /// interleave.
-struct Lock(i32);
+pub(crate) struct Lock(i32);
 
 impl Lock {
-    fn exclusive(f: &std::fs::File) -> Lock {
+    /// The lock if nobody holds it, without waiting.
+    pub(crate) fn try_exclusive(f: &std::fs::File) -> Option<Lock> {
+        use std::os::unix::io::AsRawFd;
+        let fd = f.as_raw_fd();
+        (unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(Lock(fd))
+    }
+
+    pub(crate) fn exclusive(f: &std::fs::File) -> Lock {
         use std::os::unix::io::AsRawFd;
         let fd = f.as_raw_fd();
         unsafe { libc::flock(fd, libc::LOCK_EX) };

@@ -7,6 +7,7 @@
 //! once ever, keyed by its URL, in `review.json` in drovr's data folder.
 
 use crate::engine::Engine;
+use crate::ledger::Lock;
 use crate::shell::{self, quote};
 use crate::sources::Sources;
 use anyhow::{anyhow, Result};
@@ -14,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Duration;
 
 /// How long a seen PR is remembered.
@@ -78,7 +78,7 @@ fn save(state: &State, p: &Path) -> Result<()> {
 
 /// The PR links in a message, normalized to `https://github.com/o/r/pull/n`
 /// and deduped in order.
-pub fn pr_urls(text: &str) -> Vec<String> {
+pub(crate) fn pr_urls(text: &str) -> Vec<String> {
     const HOST: &str = "https://github.com/";
     let mut out: Vec<String> = vec![];
     let mut rest = text;
@@ -111,18 +111,26 @@ pub fn pr_urls(text: &str) -> Vec<String> {
     out
 }
 
-/// A PR url's owner, repo and number.
+/// A PR url's owner, repo and number; only `/pull/<n>` links, with
+/// whatever follows the number ignored.
 pub(crate) fn parse(url: &str) -> Option<(String, String, u64)> {
     let mut seg = url.strip_prefix("https://github.com/")?.split('/');
-    let (owner, repo, _, n) = (seg.next()?, seg.next()?, seg.next()?, seg.next()?);
+    let (owner, repo, kind, n) = (seg.next()?, seg.next()?, seg.next()?, seg.next()?);
+    if kind != "pull" || owner.is_empty() || repo.is_empty() {
+        return None;
+    }
     Some((owner.into(), repo.into(), n.parse().ok()?))
 }
 
-/// One poll at a time, whether from the timer or `drovr review poll`.
-static POLLING: Mutex<()> = Mutex::new(());
+/// A PR's link as drovr keeps it, without anything after the number.
+pub(crate) fn canonical(url: &str) -> Option<String> {
+    let (owner, repo, n) = parse(url)?;
+    Some(format!("https://github.com/{owner}/{repo}/pull/{n}"))
+}
 
 /// Look for PRs if a poll is due (always, with `force`), offer the new ones
-/// and return them.
+/// and return them. One poll runs at a time across processes: a forced poll
+/// (`drovr review poll`) waits for the one running, the app's timer skips.
 pub fn poll(engine: &Engine, force: bool) -> Vec<Found> {
     poll_at(engine, force, &path())
 }
@@ -138,10 +146,25 @@ struct Candidate {
 
 fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     let cfg = &engine.cfg.review;
-    if cfg.poll_secs == 0 || (cfg.slack_channels.is_empty() && cfg.github_teams.is_empty()) {
+    if cfg.poll_secs == 0 {
         return vec![];
     }
-    let _one = POLLING.lock().unwrap_or_else(|e| e.into_inner());
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(file.with_extension("lock"));
+    let _one = match &lock_file {
+        Ok(f) if force => Some(Lock::exclusive(f)),
+        Ok(f) => match Lock::try_exclusive(f) {
+            Some(l) => Some(l),
+            None => return vec![],
+        },
+        Err(e) => {
+            eprintln!("drovr: couldn't lock PR review polling: {e}");
+            None
+        }
+    };
     let mut state = load_from(file);
     let now = crate::store::now();
     if !force && now - state.last_poll < cfg.poll_secs as f64 {
@@ -179,20 +202,31 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
             }
         }
     }
+    let mut me: Option<String> = None;
     for team in &cfg.github_teams {
         match team_prs(&engine.cfg.watch.gh, team) {
-            Ok(urls) => candidates.extend(urls.into_iter().map(|(url, title)| Candidate {
-                url,
-                title,
-                source: format!("team {team}"),
-                permalink: String::new(),
-                poster: String::new(),
-            })),
+            Ok(prs) => {
+                for (url, title, draft, author) in prs {
+                    // The search already says which are drafts and whose.
+                    let mine =
+                        !author.is_empty() && author.eq_ignore_ascii_case(whoami(engine, &mut me));
+                    if draft || mine {
+                        continue;
+                    }
+                    candidates.push(Candidate {
+                        url,
+                        title,
+                        source: format!("team {team}"),
+                        permalink: String::new(),
+                        poster: String::new(),
+                    });
+                }
+            }
             Err(e) => eprintln!("drovr: couldn't search {team}'s review requests: {e:#}"),
         }
     }
 
-    let mut me: Option<String> = None;
+    let mut all_ok = slack_ok;
     let mut views: BTreeMap<String, Option<Value>> = BTreeMap::new();
     let mut found: Vec<Found> = vec![];
     let mut offered: Vec<Found> = vec![];
@@ -208,34 +242,32 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
                 .ok()
         });
         let Some(pr) = view.clone() else {
+            all_ok = false;
             continue;
         };
         if pr["state"].as_str() != Some("OPEN") || pr["isDraft"].as_bool().unwrap_or(false) {
             continue;
         }
-        let canonical = pr["url"]
+        let Some(canonical) = pr["url"]
             .as_str()
-            .filter(|u| !u.is_empty())
-            .unwrap_or(&c.url);
-        let Some((owner, repo, number)) = parse(canonical).or_else(|| parse(&c.url)) else {
+            .and_then(canonical)
+            .or_else(|| canonical(&c.url))
+        else {
+            continue;
+        };
+        let Some((owner, repo, number)) = parse(&canonical) else {
             continue;
         };
         if !cfg.allows(&owner) {
             continue;
         }
-        let canonical = canonical.to_string();
         if state.seen.contains_key(&canonical.to_lowercase())
             || found.iter().any(|f| f.url.eq_ignore_ascii_case(&canonical))
         {
             continue;
         }
         let author = pr["author"]["login"].as_str().unwrap_or("").to_string();
-        let me = me.get_or_insert_with(|| {
-            gh_user(&engine.cfg.watch.gh).unwrap_or_else(|e| {
-                eprintln!("drovr: couldn't tell who you are on GitHub: {e:#}");
-                String::new()
-            })
-        });
+        let me = whoami(engine, &mut me);
         if !me.is_empty() && author.eq_ignore_ascii_case(me) {
             continue;
         }
@@ -260,12 +292,14 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         if offer(engine, &f) {
             state.seen.insert(f.url.to_lowercase(), now);
             offered.push(f);
+        } else {
+            all_ok = false;
         }
     }
     let found = offered;
     state.last_poll = now;
-    // A failed Slack read is tried again from the same point.
-    if slack_ok {
+    // A failed Slack read, lookup or offer is tried again from the same point.
+    if all_ok {
         state.since = now;
     }
     if let Err(e) = save(&state, file) {
@@ -277,13 +311,14 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     found
 }
 
-/// Remove each idle reviewer whose PR has merged or closed.
+/// Remove each reviewer that isn't working whose PR has merged or closed.
 fn remove_closed(engine: &Engine) {
     let agents = engine.store.agents(None).unwrap_or_default();
-    for a in agents
-        .iter()
-        .filter(|a| a.role == "pr-reviewer" && a.run_state == "idle" && !a.ticket.is_empty())
-    {
+    for a in agents.iter().filter(|a| {
+        a.role == "pr-reviewer"
+            && matches!(a.run_state.as_str(), "idle" | "done" | "error" | "stopped")
+            && !a.ticket.is_empty()
+    }) {
         let cmd = format!(
             "{} pr view {} --json state",
             quote(&engine.cfg.watch.gh),
@@ -356,8 +391,8 @@ fn gh_json(cmd: &str) -> Result<Value> {
     serde_json::from_str(out.trim()).map_err(|e| anyhow!("`{cmd}` didn't print JSON: {e}"))
 }
 
-/// The open PRs requesting a team's review, as (url, title).
-fn team_prs(gh: &str, team: &str) -> Result<Vec<(String, String)>> {
+/// The open PRs requesting a team's review, as (url, title, draft, author).
+fn team_prs(gh: &str, team: &str) -> Result<Vec<(String, String, bool, String)>> {
     let cmd = format!(
         "{} search prs --review-requested={} --state=open --json url,title,isDraft,author --limit 100",
         quote(gh),
@@ -371,9 +406,21 @@ fn team_prs(gh: &str, team: &str) -> Result<Vec<(String, String)>> {
             Some((
                 p["url"].as_str()?.to_string(),
                 p["title"].as_str().unwrap_or("").to_string(),
+                p["isDraft"].as_bool().unwrap_or(false),
+                p["author"]["login"].as_str().unwrap_or("").to_string(),
             ))
         })
         .collect())
+}
+
+/// Your GitHub login, asked once; empty if it can't be.
+fn whoami<'a>(engine: &Engine, slot: &'a mut Option<String>) -> &'a str {
+    slot.get_or_insert_with(|| {
+        gh_user(&engine.cfg.watch.gh).unwrap_or_else(|e| {
+            eprintln!("drovr: couldn't tell who you are on GitHub: {e:#}");
+            String::new()
+        })
+    })
 }
 
 fn pr_view(gh: &str, url: &str) -> Result<Value> {
@@ -433,6 +480,12 @@ mod tests {
     struct Env {
         dir: PathBuf,
         engine: Engine,
+    }
+
+    impl Drop for Env {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 
     fn write(dir: &Path, name: &str, body: &str) {
@@ -1279,5 +1332,90 @@ mod tests {
         for n in names {
             let _ = e.engine.remove(&n);
         }
+    }
+
+    #[test]
+    fn a_held_lock_makes_the_timers_poll_skip() {
+        let e = env("lock", |_| {});
+        team_pr(&e, 5, "OPEN", false, "alice");
+        search_has(&e, &[5]);
+        let file = e.dir.join("review.json");
+        let held = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(e.dir.join("review.lock"))
+            .unwrap();
+        let _l = Lock::exclusive(&held);
+        assert!(poll_at(&e.engine, false, &file).is_empty());
+        assert!(!e.dir.join("gh.log").exists());
+    }
+
+    #[test]
+    fn a_failed_lookup_keeps_slacks_since_and_is_retried() {
+        let e = env("retry", |c| c.review.github_teams.clear());
+        write(
+            &e.dir,
+            "slack.json",
+            r#"[{"channel":"c","user":"b","ts":"1","text":"https://github.com/acme/api/pull/5","permalink":""}]"#,
+        );
+        let file = e.dir.join("review.json");
+        assert!(poll_at(&e.engine, true, &file).is_empty());
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(v["since"].as_f64().unwrap() < crate::store::now() - 80_000.0);
+        team_pr(&e, 5, "OPEN", false, "alice");
+        assert_eq!(poll_at(&e.engine, true, &file).len(), 1);
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(v["since"].as_f64().unwrap() > crate::store::now() - 100.0);
+    }
+
+    #[test]
+    fn reviewers_are_removed_with_no_sources_configured() {
+        let (e, file) = closed_state("nosrc", "MERGED", |c| {
+            c.review.slack_channels.clear();
+            c.review.github_teams.clear();
+        });
+        for (n, st) in [
+            ("rvnosrc-i", "idle"),
+            ("rvnosrc-d", "done"),
+            ("rvnosrc-e", "error"),
+            ("rvnosrc-s", "stopped"),
+        ] {
+            reviewer(&e, n, st, &url("api", 7), "/tmp");
+        }
+        reviewer(&e, "rvnosrc-w", "working", &url("api", 7), "/tmp");
+        poll_at(&e.engine, true, &file);
+        let left: Vec<String> = e
+            .engine
+            .store
+            .agents(None)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+        assert_eq!(left, ["rvnosrc-w"]);
+    }
+
+    #[test]
+    fn only_pull_links_parse() {
+        assert!(parse("https://github.com/a/b/issues/5/x").is_none());
+        assert!(parse("https://github.com/a/b/pull/x").is_none());
+        assert_eq!(
+            canonical("https://github.com/a/b/pull/5/files").unwrap(),
+            "https://github.com/a/b/pull/5"
+        );
+    }
+
+    #[test]
+    fn the_search_drops_drafts_and_your_own_before_looking_them_up() {
+        let e = env("prefilter", |c| c.review.slack_channels.clear());
+        write(
+            &e.dir,
+            "search.json",
+            r#"[{"url":"https://github.com/acme/api/pull/1","title":"T","isDraft":true,"author":{"login":"x"}},{"url":"https://github.com/acme/api/pull/2","title":"T","isDraft":false,"author":{"login":"ME"}}]"#,
+        );
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
+        assert!(!log.contains("pr view"), "{log}");
     }
 }

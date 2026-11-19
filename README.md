@@ -490,13 +490,15 @@ For any agent, this lists every git repo and worktree it worked in, so it works 
 
 ### Review PRs from Slack and GitHub
 
-drovr can watch Slack channels for GitHub PR links and your GitHub teams for review requests, and offer each PR in the Inbox as a **PR review** item. Set `review.slack_channels` (such as `"#sre-reviews"`) and `review.github_teams` (`"org/team"`), and drovr looks every `review.poll_secs` while the app runs. **Start review** starts a reviewer; with `review.auto_dispatch` it starts without asking.
+drovr can watch Slack channels for GitHub PR links and your GitHub teams for review requests, and offer each PR in the Inbox as a **PR review** item. Set `review.slack_channels` (such as `"#sre-reviews"`) and `review.github_teams` (`"org/team"`), and drovr looks every `review.poll_secs` while the app runs. **Dispatch reviewer** starts a reviewer and **Dismiss** drops the item; with `review.auto_dispatch` it starts without asking.
 
-- **Where it works:** each reviewer gets its own worktree at the PR's head. The clone is `<review.repos_dir>/<repo>` (`defaults.cwd` when `repos_dir` is empty), and drovr clones it with `gh` if it's missing. It fetches from whichever remote points at the PR's repo, so a clone with `origin` as your fork and `upstream` as the base works. If no remote matches, the reviewer fails with an error that says so.
+- **Where it works:** each reviewer gets its own folder, `<home>/worktrees/<name>`, and the PR's head is checked out in `./pr` inside it. The reviewer runs in the folder, not in `pr`, so the PR's own agent config (`.claude/settings.json` hooks, `.mcp.json`, `opencode.json`, `.opencode/`, Codex config) is never loaded: a link in Slack can't run code on your machine. It reads the PR with `git -C pr …` and `gh pr diff`. The clone is `<review.repos_dir>/<repo>` (`defaults.cwd` when `repos_dir` is empty), and drovr clones it with `gh` if it's missing. It fetches from whichever remote points at the PR's repo, so a clone with `origin` as your fork and `upstream` as the base works. If no remote matches, the reviewer fails with an error that says so.
 - **Read-only:** the reviewer doesn't change anything on GitHub until you tell it to post. That's enforced by its instructions, so to make it a hard stop, keep `gh pr review` and `gh pr comment` out of `permissions.auto_allow`. It doesn't run the PR's code, scripts or tests unless you ask.
+- **Skill and model:** reviewers follow `stages.review_skill` (empty, they do a thorough review on their own) and run on `stages.models.review`, with the harness in `defaults.harness`.
+- **Only some owners:** set `review.owners = ["my-org"]` to offer and dispatch only PRs in those GitHub orgs or users (case-insensitive); empty is any. `drovr review <url>` refuses other owners too.
 - **What it produces:** a report titled "Review owner/repo#n" and a message with a summary. It stays running, so you can talk to it.
-- **Removing it** deletes its worktree and its branch, even with uncommitted files. With `review.remove_when_closed`, an idle reviewer is removed once its PR merges or closes.
-- **What's skipped:** drafts (offered once they're ready), closed PRs and your own. Each PR is offered once. The first poll looks back one day, and never more than 7.
+- **Removing it** deletes its worktree and its branch, even with uncommitted files. With `review.remove_when_closed`, a reviewer that isn't working is removed once its PR merges or closes, including ones you started with `drovr review <url>`, as long as `review.poll_secs` isn't 0.
+- **What's skipped:** closed PRs and your own. A draft requested from your team is offered once it's ready; one linked in Slack is skipped. Each PR is offered once. The first poll looks back one day, and never more than 7.
 - **Slack** is read through the configured [Slack provider](#jira-confluence-and-slack-lookups). With `provider = "agent"`, each poll is a short `claude -p` run, so it costs a little each time.
 
 ### Phone access
@@ -687,12 +689,12 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `confluence.page_get_cmd`, `.page_update_cmd`, `.page_create_cmd` | `""` | How drovr reads a Confluence page and saves an agent's page as a draft once you approve it (see [Pages agents write](#pages-agents-write)) |
 | `jira.ticket_skill` | `""` | The skill an agent follows to write a ticket for its own task (New agent → **Create a Jira ticket**), e.g. `"~/.claude/skills/ticket-writing/SKILL.md"`; empty asks for a summary, description and acceptance criteria |
 | `stages.order` | triage, research, blueprint, build, close | The ticket workflow's stages, in order |
-| `stages.models.<stage>` | none | The model a stage's agent runs on (e.g. `stages.models.triage = "claude-haiku-5-5"`) |
+| `stages.models.<stage>` | none | The model a stage's agent runs on (e.g. `stages.models.triage = "claude-haiku-5-5"`); `stages.models.review` is also the model of build reviewers and PR reviewers |
 | `stages.build_checkpoint_tokens` | `150000` | The build stage checkpoints and starts fresh past this much context; `0` turns it off |
 | `stages.build_checkpoint_usd` | `15` | …or once its session has cost this much; `0` turns it off |
 | `stages.tidy_on_close` | `true` | Remove stopped stage agents when the last stage's handoff is approved |
 | `stages.review` | `false` | Pair each build agent with a reviewer that runs alongside it, can't edit files, and proposes diffs to it (see [Reviews alongside the build](#stages)); its model is `stages.models.review` |
-| `stages.review_skill` | `""` | A SKILL.md the reviewers follow, e.g. `"~/.claude/skills/code-review/SKILL.md"`; empty, they review on their own |
+| `stages.review_skill` | `""` | A SKILL.md the build reviewers and PR reviewers follow, e.g. `"~/.claude/skills/code-review/SKILL.md"`; empty, they review on their own |
 | `retro.model` | `""` | The retro agent's model; empty for the default |
 | `retro.skills_dir` | `"~/.claude/skills"` | Where approved skill proposals are written |
 | `permissions.auto_allow` | read-only tools, `WebSearch` and `mcp__drovr__*` | Tools headless agents use without asking; a trailing `*` matches a prefix. `WebFetch` asks in the Inbox: with `Read` allowed too, an agent misled by text in a ticket, page or Slack message could otherwise send your files to any URL. Add it back if you accept that. |
@@ -709,8 +711,9 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `review.github_teams` | `[]` | Teams whose review requests to follow, as `org/team` |
 | `review.poll_secs` | `600` | How often to look; `0` turns it off. Needs a channel or a team |
 | `review.auto_dispatch` | `false` | Start a reviewer without asking |
-| `review.remove_when_closed` | `true` | Remove an idle reviewer, and its worktree, once its PR merges or closes |
+| `review.remove_when_closed` | `true` | Remove a reviewer that isn't working, and its worktree, once its PR merges or closes |
 | `review.repos_dir` | `""` | Where your local clones live, as `<repos_dir>/<repo>`; empty means `defaults.cwd` |
+| `review.owners` | `[]` | Only review PRs in these GitHub orgs or users; empty is any |
 | `memory.dir` | `""` | An auto memory folder every Claude Code agent reads, wherever it works; leads and solo agents write it, and workers send what's worth keeping to their lead (see [Shared memory](#shared-memory)). Empty: Claude Code's own memory per project |
 | `[herdr]` | herdr's documented CLI | The herdr command templates (see below) |
 | `jira`, `confluence`, `slack` | `provider = "agent"` | How lookups reach each service (see below) |

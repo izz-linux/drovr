@@ -217,7 +217,12 @@ fn run() -> Result<()> {
             }
             ReviewCmd::Poll => {
                 let found = drovr_core::pr_review::poll(&engine, true);
-                if found.is_empty() {
+                let r = &engine.cfg.review;
+                if r.poll_secs == 0 || (r.slack_channels.is_empty() && r.github_teams.is_empty()) {
+                    println!(
+                        "review polling is off: set review.slack_channels or review.github_teams"
+                    );
+                } else if found.is_empty() {
                     println!("nothing new");
                 }
                 for f in found {

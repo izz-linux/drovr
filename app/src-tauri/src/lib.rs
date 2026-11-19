@@ -907,6 +907,13 @@ pub fn run() {
                     eprintln!("drovr: cleanup: {err:#}");
                 }
             }
+        }
+        std::thread::sleep(Duration::from_secs(15));
+    });
+    // PRs to review ([review] in the config). Its own thread: a slow Slack
+    // read mustn't hold up the watcher above.
+    std::thread::spawn(|| loop {
+        if let Ok(e) = Engine::open() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 drovr_core::pr_review::poll(&e, false)
             }));

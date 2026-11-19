@@ -176,11 +176,13 @@ drovr attach pay-api-lead          # prints: cd … && claude --resume …
    repos_dir = "~/code"
    ```
 
+   PR reviewers follow `stages.review_skill` and run on `stages.models.review` (harness `defaults.harness`). To only review PRs in some GitHub orgs, set `owners = ["my-org"]`.
+
    Slack is read through your Slack provider, and `gh` must be signed in. With `provider = "agent"`, each poll is a short `claude -p` run, so it costs a little each time; raise `poll_secs` (600 by default) to poll less. `drovr review poll` looks right away.
-2. **Check the Inbox.** Each new PR shows up once as a **PR review** item with its title, where it came from and a link. Drafts, closed PRs and your own aren't offered, and a draft is offered once it's ready. Slack is read back one day on the first poll, and never more than 7. **Start review** starts the reviewer. With `review.auto_dispatch = true` it starts without asking, and the item only appears if that fails.
-3. **Let it work.** The reviewer gets its own worktree at the PR's head, in `<repos_dir>/<repo>` (cloned with `gh` if it's missing). It reads the PR, doesn't run its code, scripts or tests unless you ask, publishes a report titled "Review owner/repo#n" and messages you a summary. It stays running, so you can ask follow-ups.
+2. **Check the Inbox.** Each new PR shows up once as a **PR review** item with its title, where it came from and a link. Closed PRs and your own aren't offered. A draft requested from your team is offered once it's ready; one linked in Slack is skipped. Slack is read back one day on the first poll, and never more than 7. **Dispatch reviewer** starts the reviewer and **Dismiss** drops the item. With `review.auto_dispatch = true` it starts without asking: the item always appears, already answered ("Reviewer <name> started"), under resolved, and it's a pending item with the error only if the reviewer couldn't start.
+3. **Let it work.** The reviewer gets its own folder, and the PR's head is checked out in `./pr` inside it, from the clone in `<repos_dir>/<repo>` (cloned with `gh` if it's missing). It runs outside `pr`, so the PR's own agent config (hooks, MCP servers, OpenCode and Codex config) is never loaded. It reads the PR, doesn't run its code, scripts or tests unless you ask, publishes a report titled "Review owner/repo#n" and messages you a summary. It stays running, so you can ask follow-ups.
 4. **Tell it to post.** It changes nothing on GitHub until you say so, for example "post this as a review with those two comments". That's a rule in its instructions, so for a hard stop keep `gh pr review` and `gh pr comment` out of `permissions.auto_allow`: each post then asks in the Inbox.
-5. **Clean up.** **✕**, then **Remove?**, deletes its worktree and branch even if it has uncommitted files. With `review.remove_when_closed = true` (the default), an idle reviewer is removed once its PR merges or closes.
+5. **Clean up.** **✕**, then **Remove?**, deletes its worktree and branch even if it has uncommitted files. With `review.remove_when_closed = true` (the default), a reviewer that isn't working is removed once its PR merges or closes.
 
 To review one PR by hand, run `drovr review <pr-url>`.
 
@@ -384,7 +386,7 @@ Agent and group names are lowercase letters, digits, `-` and `_`, starting with 
 | `drovr sessions` | List recent Claude Code sessions (`--harness opencode`: OpenCode's) |
 | `drovr adopt <session-id> <name> [--fork] [task…]` | Start an agent from an existing Claude Code session, or an OpenCode one (`ses_…`) |
 | `drovr review <pr-url>` | Start a read-only reviewer for a GitHub PR in its own worktree; prints `started <name> in <cwd>` |
-| `drovr review poll` | Look now for PRs to review (see `[review]`) and offer the new ones in the Inbox; prints `offered <owner>/<repo>#<n>: <title> (<source>)` for each, or `nothing new` |
+| `drovr review poll` | Look now for PRs to review (see `[review]`) and offer the new ones in the Inbox; prints `offered <owner>/<repo>#<n>: <title> (<source>)` for each, or `nothing new`; with nothing to watch it says `review polling is off: set review.slack_channels or review.github_teams` |
 | `drovr prompt <agent> <text…>` | Send an agent a prompt (queued if it's busy) |
 | `drovr stop <agent>` | Stop an agent's current run |
 | `drovr resume <agent> [text…]` | Resume a stopped, failed or interrupted agent |
