@@ -1,0 +1,202 @@
+[
+  {
+    "id": "light",
+    "name": "Light",
+    "scheme": "light",
+    "colors": {
+      "bg": "#ffffff",
+      "panel": "#f7f7f5",
+      "panel-2": "#efefed",
+      "border": "rgba(0, 0, 0, 0.1)",
+      "text": "#37352f",
+      "muted": "#91918e",
+      "accent": "#2383e2",
+      "on-accent": "#ffffff",
+      "green": "#0f7b6c",
+      "yellow": "#7a5a00",
+      "red": "#c4382f",
+      "purple": "#6940a5",
+      "cyan": "#2eaadc"
+    }
+  },
+  {
+    "id": "dark",
+    "name": "Dark",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#1e1e1e",
+      "panel": "#181818",
+      "panel-2": "#262626",
+      "border": "rgba(255, 255, 255, 0.08)",
+      "text": "#e8e6e3",
+      "muted": "#9a9893",
+      "accent": "#4ea1f5",
+      "on-accent": "#ffffff",
+      "green": "#73c991",
+      "yellow": "#f2d48a",
+      "red": "#ff7b72",
+      "purple": "#c792ea",
+      "cyan": "#5ccfe6"
+    }
+  },
+  {
+    "id": "darcula",
+    "name": "Darcula",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#2b2b2b",
+      "panel": "#3c3f41",
+      "panel-2": "#45494a",
+      "border": "rgba(0, 0, 0, 0.35)",
+      "text": "#a9b7c6",
+      "muted": "#808080",
+      "accent": "#4e8cc2",
+      "on-accent": "#ffffff",
+      "green": "#6a8759",
+      "yellow": "#e8c46a",
+      "red": "#ff6b68",
+      "purple": "#9876aa",
+      "cyan": "#6897bb"
+    }
+  },
+  {
+    "id": "solarized-dark",
+    "name": "Solarized Dark",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#002b36",
+      "panel": "#073642",
+      "panel-2": "#0b3f4c",
+      "border": "rgba(0, 0, 0, 0.35)",
+      "text": "#93a1a1",
+      "muted": "#657b83",
+      "accent": "#268bd2",
+      "on-accent": "#fdf6e3",
+      "green": "#859900",
+      "yellow": "#d9a400",
+      "red": "#dc322f",
+      "purple": "#6c71c4",
+      "cyan": "#2aa198"
+    }
+  },
+  {
+    "id": "nord",
+    "name": "Nord",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#2e3440",
+      "panel": "#3b4252",
+      "panel-2": "#434c5e",
+      "border": "rgba(0, 0, 0, 0.3)",
+      "text": "#d8dee9",
+      "muted": "#81a1c1",
+      "accent": "#88c0d0",
+      "on-accent": "#2e3440",
+      "green": "#a3be8c",
+      "yellow": "#ebcb8b",
+      "red": "#bf616a",
+      "purple": "#b48ead",
+      "cyan": "#8fbcbb"
+    }
+  },
+  {
+    "id": "gilded",
+    "name": "Gilded",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#15120d",
+      "panel": "#100e0a",
+      "panel-2": "#1f1b14",
+      "border": "rgba(212, 175, 55, 0.16)",
+      "text": "#e9e2d0",
+      "muted": "#9c907a",
+      "accent": "#d4af37",
+      "on-accent": "#15120d",
+      "green": "#9cc58a",
+      "yellow": "#e8c66a",
+      "red": "#e07a5f",
+      "purple": "#c9a0dc",
+      "cyan": "#8fc7c0"
+    },
+    "lettering": {
+      "color": "#e6c768",
+      "foil": "linear-gradient(180deg, #f8e7a6 0%, #e2bf5a 45%, #a8802a 70%, #e9cd78 100%)",
+      "font": "Cinzel"
+    }
+  },
+  {
+    "id": "deco",
+    "name": "Deco Navy",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#0e1621",
+      "panel": "#0a1019",
+      "panel-2": "#16202e",
+      "border": "rgba(201, 162, 75, 0.22)",
+      "text": "#e4e0d4",
+      "muted": "#8a93a3",
+      "accent": "#c9a24b",
+      "on-accent": "#0e1621",
+      "green": "#7fc4a4",
+      "yellow": "#e5c56f",
+      "red": "#e3796b",
+      "purple": "#b6a2e0",
+      "cyan": "#7cc3d9"
+    },
+    "lettering": {
+      "color": "#d9b45e",
+      "foil": "linear-gradient(180deg, #f3dc9c 0%, #c9a24b 55%, #8e6a26 100%)",
+      "font": "Poiret One"
+    }
+  },
+  {
+    "id": "oxblood",
+    "name": "Oxblood",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#1a1012",
+      "panel": "#140c0e",
+      "panel-2": "#241619",
+      "border": "rgba(230, 200, 140, 0.14)",
+      "text": "#ece0d6",
+      "muted": "#a08f88",
+      "accent": "#e3c38a",
+      "on-accent": "#1a1012",
+      "green": "#a8c48c",
+      "yellow": "#f0cf86",
+      "red": "#ff8a7a",
+      "purple": "#d0a3c8",
+      "cyan": "#9cc9c4"
+    },
+    "lettering": {
+      "color": "#ecd29a",
+      "foil": "linear-gradient(180deg, #fff1cf 0%, #e3c38a 50%, #b08a4f 100%)",
+      "font": "Cormorant Garamond"
+    }
+  },
+  {
+    "id": "ink",
+    "name": "Ink & Gold",
+    "scheme": "dark",
+    "colors": {
+      "bg": "#0b0b0b",
+      "panel": "#070707",
+      "panel-2": "#151515",
+      "border": "rgba(255, 255, 255, 0.07)",
+      "text": "#d9d6cf",
+      "muted": "#7e7b74",
+      "accent": "#cfa646",
+      "on-accent": "#0b0b0b",
+      "green": "#86c08f",
+      "yellow": "#e2c060",
+      "red": "#e8786a",
+      "purple": "#bb9bd6",
+      "cyan": "#7fbfc9"
+    },
+    "lettering": {
+      "color": "#d8b24e",
+      "foil": "linear-gradient(180deg, #f1d985 0%, #cfa646 50%, #9a7428 100%)",
+      "font": "Marcellus"
+    }
+  }
+]

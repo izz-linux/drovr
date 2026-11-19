@@ -11,15 +11,6 @@ use tauri::menu::{
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 
-// The themes in src/lib/themes.ts (a test below checks they match), for View > Theme.
-pub const THEMES: [(&str, &str); 6] = [
-    ("system", "Match System"),
-    ("light", "Light"),
-    ("dark", "Dark"),
-    ("darcula", "Darcula"),
-    ("solarized-dark", "Solarized Dark"),
-    ("nord", "Nord"),
-];
 const DEFAULT_THEME: &str = "system";
 const STORE: &str = "session.json";
 
@@ -137,13 +128,13 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 
     let mut items = Vec::new();
     let mut theme_menu = SubmenuBuilder::new(handle, "Theme");
-    for (i, (id, name)) in THEMES.iter().enumerate() {
+    for (i, (id, name)) in crate::themes::menu_entries().into_iter().enumerate() {
         let item = CheckMenuItem::with_id(
             handle,
             format!("menu-view-theme-{id}"),
-            *name,
+            name,
             true,
-            *id == current,
+            id == current,
             None::<&str>,
         )?;
         theme_menu = theme_menu.item(&item);
@@ -151,7 +142,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
         if i == 0 {
             theme_menu = theme_menu.separator();
         }
-        items.push((id.to_string(), item));
+        items.push((id, item));
     }
     let theme_menu = theme_menu.build()?;
     app.manage(ThemeMenu(items));
@@ -216,8 +207,6 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::THEMES;
-
     #[test]
     fn help_links_to_the_repo() {
         assert!(super::REPO_URL.starts_with("https://github.com/"));
@@ -277,22 +266,9 @@ mod tests {
     }
 
     #[test]
-    fn themes_match_the_ui() {
-        let ts = include_str!("../../src/lib/themes.ts");
-        let ui: Vec<&str> = ts
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix("{ id: \""))
-            .filter_map(|l| l.split('"').next())
-            .collect();
-        let menu: Vec<&str> = THEMES.iter().map(|(id, _)| *id).collect();
-        // themes.ts lists "system" in THEME_SETTINGS after the themes.
-        let mut ui_sorted = ui.clone();
-        ui_sorted.sort();
-        let mut menu_sorted = menu.clone();
-        menu_sorted.sort();
-        assert_eq!(
-            ui_sorted, menu_sorted,
-            "src/lib/themes.ts and the View > Theme menu disagree"
-        );
+    fn unknown_saved_theme_checks_nothing() {
+        assert!(!crate::themes::menu_entries()
+            .iter()
+            .any(|(id, _)| id == "no-such-theme"));
     }
 }

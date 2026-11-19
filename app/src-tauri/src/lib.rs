@@ -6,6 +6,7 @@
 
 mod menu;
 mod terminal;
+mod themes;
 
 use drovr_core::engine::{Dispatch, Line, NewGroup};
 use drovr_core::reports::ReportFile;
