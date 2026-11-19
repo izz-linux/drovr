@@ -1,6 +1,7 @@
 //! drovr core: shared state, agent lifecycle, the coordination MCP server,
 //! and Jira / Confluence / Slack lookups. Used by the desktop app and the CLI.
 
+pub mod cleanup;
 pub mod config;
 pub mod confluence;
 pub mod datadog;

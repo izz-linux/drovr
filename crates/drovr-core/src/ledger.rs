@@ -125,6 +125,9 @@ fn is_retro_event(kind: &str) -> bool {
     kind.starts_with("retro_") || kind.starts_with("proposal_")
 }
 
+/// The plans folder's subfolder that holds archived plans; listings skip it.
+pub const ARCHIVE: &str = "archive";
+
 /// Every record in the plans folder, most recently updated first.
 pub fn list(cfg: &Config) -> Vec<Record> {
     let root = cfg.reports.path();
@@ -164,6 +167,9 @@ pub fn list(cfg: &Config) -> Vec<Record> {
     };
     for entry in subdirs(&root) {
         let name = entry.file_name().to_string_lossy().to_string();
+        if name == ARCHIVE {
+            continue;
+        }
         if is_record(&entry.path()) {
             add(&entry.path(), "", &name);
             continue;

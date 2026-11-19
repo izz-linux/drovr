@@ -28,6 +28,7 @@ pub struct Config {
     pub watch: Watch,
     pub stages: Stages,
     pub retro: RetroConfig,
+    pub inbox: Inbox,
 }
 
 /// The retro you start from the timeline or Pipeline.
@@ -527,14 +528,26 @@ pub struct Source {
 #[serde(default)]
 pub struct Reports {
     pub dir: String,
+    /// Move top-level entries of the plans folder whose newest file is older
+    /// than this many days into `archive/`; 0 never archives.
+    pub archive_after_days: u32,
 }
 
 impl Default for Reports {
     fn default() -> Self {
         Reports {
             dir: "~/.claude/plans".into(),
+            archive_after_days: 0,
         }
     }
+}
+
+/// The Inbox's housekeeping.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Inbox {
+    /// Delete resolved items older than this many days; 0 never deletes.
+    pub keep_days: u32,
 }
 
 /// The terminal panel under an agent's output.
@@ -637,6 +650,7 @@ impl Default for Config {
             watch: Watch::default(),
             stages: Stages::default(),
             retro: RetroConfig::default(),
+            inbox: Inbox::default(),
         }
     }
 }

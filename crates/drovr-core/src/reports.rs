@@ -228,7 +228,7 @@ fn report_files(root: &Path) -> Vec<(PathBuf, String)> {
     for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
         if entry.path().is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with('.') {
+            if !name.starts_with('.') && name != crate::ledger::ARCHIVE {
                 visit(&entry.path(), &name);
             }
         }
@@ -339,7 +339,10 @@ pub fn folders(cfg: &Config) -> Vec<PlansFolder> {
         // A solo ticket's record and the retros sit here too; they're not
         // plans folders.
         .filter(|e| {
-            e.path().is_dir() && !crate::ledger::is_record(&e.path()) && e.file_name() != "retros"
+            e.path().is_dir()
+                && !crate::ledger::is_record(&e.path())
+                && e.file_name() != "retros"
+                && e.file_name() != crate::ledger::ARCHIVE
         })
         .map(|e| e.file_name().to_string_lossy().to_string())
         .filter(|n| !n.starts_with('.'))

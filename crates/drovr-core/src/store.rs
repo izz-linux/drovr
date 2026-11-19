@@ -593,6 +593,24 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Delete resolved items last touched before `before` (a Unix time), or
+    /// just count them when `dry`. Answers an agent hasn't received yet stay.
+    pub fn prune_items(&self, before: f64, dry: bool) -> Result<usize> {
+        const WHERE: &str = "status != 'pending' AND COALESCE(answered_ts, ts) < ?1 \
+             AND NOT (status IN ('answered', 'rejected') AND delivered = 0)";
+        if dry {
+            let n: i64 = self.db.query_row(
+                &format!("SELECT COUNT(*) FROM inbox WHERE {WHERE}"),
+                [before],
+                |r| r.get(0),
+            )?;
+            return Ok(n as usize);
+        }
+        Ok(self
+            .db
+            .execute(&format!("DELETE FROM inbox WHERE {WHERE}"), [before])?)
+    }
+
     // -- reports --------------------------------------------------------------
 
     /// Record that an agent published `path`; it shows as unread until opened.
@@ -646,6 +664,18 @@ impl Store {
         )?;
         tx.execute("DELETE FROM report_meta WHERE path = ?1", [from])?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Rewrite report paths starting with `from_prefix` to start with
+    /// `to_prefix` instead, for files moved on disk.
+    pub fn move_report_meta(&self, from_prefix: &str, to_prefix: &str) -> Result<()> {
+        let len = from_prefix.chars().count() as i64;
+        self.db.execute(
+            "UPDATE OR REPLACE report_meta SET path = ?2 || substr(path, ?3 + 1) \
+             WHERE substr(path, 1, ?3) = ?1",
+            params![from_prefix, to_prefix, len],
+        )?;
         Ok(())
     }
 
