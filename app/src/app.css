@@ -58,6 +58,7 @@
 [data-foil] .lettered { color: var(--title) !important; font-family: var(--display); font-synthesis: none; }
 @supports (background-clip: text) {
   [data-foil] .lettered { background: var(--title-fill); -webkit-background-clip: text; background-clip: text; color: transparent !important; }
+  [data-foil] .lettered::selection { color: var(--text) !important; -webkit-text-fill-color: var(--text); }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);

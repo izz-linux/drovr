@@ -151,7 +151,8 @@ mod tests {
             ]
         );
         assert_eq!(ids[ids.len() - 4..], ["gilded", "deco", "oxblood", "ink"]);
-        assert_eq!(ids.len(), 10);
+        let builtin_ids: Vec<String> = builtin().iter().map(|t| t.id.clone()).collect();
+        assert_eq!(ids[1..], builtin_ids[..]);
     }
 
     #[test]
