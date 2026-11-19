@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.15.0](https://github.com/izz-linux/drovr/compare/v0.14.1...v0.15.0) (2026-11-19)
+
+
+### Features
+
+* add gold lettering themes ([#74](https://github.com/izz-linux/drovr/issues/74)) ([5ddf2b5](https://github.com/izz-linux/drovr/commit/5ddf2b5ff7ad48546819670dec06789386d3bd3e))
+* add standing instructions to every agent's system prompt ([#76](https://github.com/izz-linux/drovr/issues/76)) ([ce8f7ae](https://github.com/izz-linux/drovr/commit/ce8f7ae97a1503dd963451d0db798836e43c8127))
+* archive old plans and prune resolved Inbox items ([#78](https://github.com/izz-linux/drovr/issues/78)) ([676fc4c](https://github.com/izz-linux/drovr/commit/676fc4c2e356f0fbc4c23ff183d688582d212f0c))
+* offer PRs from Slack and team review requests to a read-only reviewer ([#79](https://github.com/izz-linux/drovr/issues/79)) ([988b06b](https://github.com/izz-linux/drovr/commit/988b06b35eb7bc76f018cce2d5ecb9ae14b45bf6))
+
+
+### Bug Fixes
+
+* wake on green CI and flag PRs waiting on review ([#75](https://github.com/izz-linux/drovr/issues/75)) ([d2e2204](https://github.com/izz-linux/drovr/commit/d2e2204eabf20bd92eca503b316101983366d2e0))
+
 ## [0.14.1](https://github.com/izz-linux/drovr/compare/v0.14.0...v0.14.1) (2026-11-18)
 
 
