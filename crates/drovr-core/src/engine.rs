@@ -413,6 +413,51 @@ fn remove_pr_worktree(dir: &Path, name: &str) -> String {
     "Its worktree and branch were removed.".into()
 }
 
+/// Whether a git remote URL (https or ssh) points at GitHub's `owner/repo`.
+pub(crate) fn remote_is(url: &str, owner: &str, repo: &str) -> bool {
+    let url = url.trim().to_lowercase();
+    let url = url.strip_suffix(".git").unwrap_or(&url);
+    let Some(i) = url.find("github.com") else {
+        return false;
+    };
+    let rest = &url[i + "github.com".len()..];
+    let Some(path) = rest.strip_prefix('/').or_else(|| rest.strip_prefix(':')) else {
+        return false;
+    };
+    path.trim_end_matches('/') == format!("{}/{}", owner.to_lowercase(), repo.to_lowercase())
+}
+
+/// The clone's first remote that points at `owner/repo`. The clone must be
+/// a repo of its own, not a folder inside another one. Remote URLs are read
+/// from the config as written, before any `insteadOf` rewriting.
+fn pr_remote(clone: &Path, owner: &str, repo: &str) -> Result<String> {
+    let top = git_in(clone, "rev-parse --show-toplevel")?;
+    let same = top.ok()
+        && std::fs::canonicalize(top.stdout.trim()).ok() == std::fs::canonicalize(clone).ok();
+    if !same {
+        bail!(
+            "{} isn't a git clone; remove it or set review.repos_dir",
+            clone.display()
+        );
+    }
+    let out = git_in(clone, "config --get-regexp '^remote\\..*\\.url$'")?;
+    for line in out.stdout.lines() {
+        let Some((key, url)) = line.split_once(' ') else {
+            continue;
+        };
+        let name = key
+            .strip_prefix("remote.")
+            .and_then(|k| k.strip_suffix(".url"));
+        if let Some(name) = name.filter(|_| remote_is(url, owner, repo)) {
+            return Ok(name.to_string());
+        }
+    }
+    bail!(
+        "{} has no remote for {owner}/{repo}; add one or set review.repos_dir",
+        clone.display()
+    )
+}
+
 /// A worker's name: `<group>-<name>`, cut to fit the 40-character limit.
 fn worker_name(group: &str, name: &str) -> String {
     let base = slug(name);
@@ -866,9 +911,19 @@ impl Engine {
     /// Start a reviewer for a PR: a solo agent in its own worktree at the
     /// PR's head commit, in the local clone (cloned first if it's missing).
     pub fn dispatch_review(&self, url: &str) -> Result<Agent> {
+        static DISPATCH: Mutex<()> = Mutex::new(());
         let (owner, repo, number) = crate::pr_review::parse(url).ok_or_else(|| {
             anyhow!("{url} isn't a GitHub PR link like https://github.com/o/r/pull/1")
         })?;
+        for part in [&owner, &repo] {
+            let plain = part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+            if part.is_empty() || !plain || part.starts_with(['-', '.']) {
+                bail!("{url} has an owner or repo name drovr won't use as a folder");
+            }
+        }
+        let _one = DISPATCH.lock().unwrap_or_else(|e| e.into_inner());
         let repos = match self.cfg.review.repos_dir.trim() {
             "" => PathBuf::from(self.cfg.default_cwd()),
             dir => PathBuf::from(expand_tilde(dir)),
@@ -884,11 +939,12 @@ impl Engine {
             );
             shell::sh(&cmd, None, None, Duration::from_secs(300))?.into_stdout("gh repo clone")?;
         }
-        let base: String = format!("review-{}-{number}", slug(&repo))
-            .chars()
-            .take(36)
-            .collect();
-        let base = base.trim_end_matches(['-', '_']).to_string();
+        let remote = pr_remote(&clone, &owner, &repo)?;
+        // `review-<repo>-<n>`, with room left for a `-NN` suffix.
+        let digits = number.to_string();
+        let room = 40 - "review-".len() - 1 - digits.len() - 3;
+        let stem: String = slug(&repo).chars().take(room).collect();
+        let base = format!("review-{}-{digits}", stem.trim_end_matches(['-', '_']));
         let name = (1..)
             .map(|i| {
                 if i == 1 {
@@ -898,11 +954,11 @@ impl Engine {
                 }
             })
             .find(|n| {
-                !self.store.agent(n).ok().flatten().is_some()
+                self.store.agent(n).ok().flatten().is_none()
                     && !home().join("worktrees").join(n).exists()
             })
             .unwrap_or(base);
-        let cwd = self.make_pr_worktree(&clone, &name, number)?;
+        let cwd = self.make_pr_worktree(&clone, &remote, &name, number)?;
         let started = self.start_agent(NewAgent {
             name: name.clone(),
             role: "pr-reviewer".into(),
@@ -923,35 +979,48 @@ impl Engine {
         started
     }
 
-    /// A worktree for PR `number`'s head commit, in `<home>/worktrees/<name>`
-    /// on branch `drovr/<name>`.
-    fn make_pr_worktree(&self, clone: &Path, name: &str, number: u64) -> Result<String> {
+    /// A worktree for PR `number`'s head commit, fetched from `remote`, in
+    /// `<home>/worktrees/<name>` on branch `drovr/<name>`.
+    fn make_pr_worktree(
+        &self,
+        clone: &Path,
+        remote: &str,
+        name: &str,
+        number: u64,
+    ) -> Result<String> {
         let dir = home().join("worktrees").join(name);
         let shown = dir.display().to_string();
         if dir.exists() {
             bail!("{shown} already exists; remove it or pick another name");
         }
+        let tmp = format!("refs/drovr/pr/{name}");
         git_in(
             clone,
             &format!(
-                "fetch --quiet origin {}",
-                quote(&format!("pull/{number}/head"))
+                "fetch --quiet {} {}",
+                quote(remote),
+                quote(&format!("+pull/{number}/head:{tmp}"))
             ),
         )?
         .into_stdout("git fetch the PR")?;
         let _ = git_in(clone, "worktree prune");
         let branch = format!("drovr/{name}");
+        let existed = dir.exists();
         let added = git_in(
             clone,
             &format!(
-                "worktree add -B {} {} FETCH_HEAD",
+                "worktree add {} -b {} {}",
+                quote(&shown),
                 quote(&branch),
-                quote(&shown)
+                quote(&tmp)
             ),
         )
         .and_then(|o| o.into_stdout("git worktree add"));
+        let _ = git_in(clone, &format!("update-ref -d {}", quote(&tmp)));
         if let Err(e) = added {
-            let _ = std::fs::remove_dir_all(&dir);
+            if !existed {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
             let _ = git_in(clone, "worktree prune");
             return Err(e);
         }

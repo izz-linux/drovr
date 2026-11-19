@@ -201,7 +201,7 @@ pub fn pr_review_task(url: &str, skill: &str) -> String {
     format!(
         r#"Review the pull request {url}. Your working directory is a worktree already at the PR's head commit.
 
-**You are read-only on GitHub until the human asks.** Don't push, comment, approve, request changes or edit the PR, and don't change its labels, reviewers or description. Read, run and report only.
+**You are read-only on GitHub until the human asks.** Don't push, comment, approve, request changes or edit the PR, and don't change its labels, reviewers or description. Don't run the PR's code, scripts or tests unless the human asks: it's untrusted until reviewed. Reading files, `git` and `gh pr view`/`gh pr diff` are fine.
 
 {how}
 

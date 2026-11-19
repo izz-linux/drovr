@@ -342,7 +342,8 @@ fn offer(engine: &Engine, f: &Found) -> bool {
         }
         Err(e) => {
             eprintln!("drovr: couldn't offer {}: {e:#}", f.url);
-            false
+            // A reviewer already started must not start again next poll.
+            started.is_some()
         }
     }
 }
@@ -461,7 +462,7 @@ mod tests {
             &dir,
             "gh",
             &format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/gh.log\ncase \"$1\" in\n search) cat {d}/search.json;;\n api) echo me;;\n pr) cat {d}/view-$(basename \"$3\").json;;\n repo) git clone -q \"$(cat {d}/origin)\" \"$4\";;\nesac\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/gh.log\ncase \"$1\" in\n search) cat {d}/search.json;;\n api) echo me;;\n pr) cat {d}/view-$(basename \"$3\").json;;\n repo) git clone -q \"$(cat {d}/origin)\" \"$4\" && git -C \"$4\" remote set-url origin \"https://github.com/$3.git\" && git -C \"$4\" config \"url.$(cat {d}/origin).insteadOf\" \"https://github.com/$3.git\";;\nesac\n"
             ),
         );
         let mut cfg = Config::default();
@@ -791,6 +792,16 @@ mod tests {
             &e.dir,
             &format!("clone -q origin.git {}", repos.join(repo).display()),
         );
+        let url = format!("https://github.com/acme/{repo}.git");
+        let clone = repos.join(repo);
+        git(&clone, &format!("remote set-url origin {url}"));
+        git(
+            &clone,
+            &format!(
+                "config url.{}.insteadOf {url}",
+                e.dir.join("origin.git").display()
+            ),
+        );
     }
 
     fn review_env(name: &str, tweak: impl FnOnce(&mut Config)) -> Env {
@@ -1086,5 +1097,149 @@ mod tests {
         assert_eq!(it[0].status, "pending");
         assert!(it[0].body.contains("fetch"), "{}", it[0].body);
         assert!(e.engine.store.agents(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn dispatch_uses_the_remote_that_points_at_the_prs_repo() {
+        let e = review_env("remote", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvremote");
+        let clone = e.dir.join("repos/rvremote");
+        git(
+            &clone,
+            "remote set-url origin https://github.com/someone/rvremote.git",
+        );
+        git(
+            &clone,
+            "remote add upstream git@github.com:Acme/RVRemote.git",
+        );
+        git(
+            &clone,
+            &format!(
+                "config url.{}.insteadOf git@github.com:Acme/RVRemote.git",
+                e.dir.join("origin.git").display()
+            ),
+        );
+        let a = e.engine.dispatch_review(&url("rvremote", 7)).unwrap();
+        assert!(Path::new(&a.cwd).join("f.txt").exists());
+        assert_eq!(git(&clone, "for-each-ref refs/drovr"), "");
+        let _ = e.engine.remove(&a.name);
+    }
+
+    #[test]
+    fn dispatch_without_a_matching_remote_errors_cleanly() {
+        let e = review_env("noremote", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvnoremote");
+        let clone = e.dir.join("repos/rvnoremote");
+        git(
+            &clone,
+            "remote set-url origin https://github.com/someone/rvnoremote.git",
+        );
+        let err = e.engine.dispatch_review(&url("rvnoremote", 7)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("has no remote for acme/rvnoremote"),
+            "{err:#}"
+        );
+        assert!(e.engine.store.agents(None).unwrap().is_empty());
+        assert!(!worktree("review-rvnoremote-7").exists());
+    }
+
+    #[test]
+    fn dispatch_refuses_a_folder_that_isnt_the_clone() {
+        let e = review_env("notgit", |_| {});
+        origin(&e);
+        std::fs::create_dir_all(e.dir.join("repos/rvnotgit")).unwrap();
+        assert!(e.engine.dispatch_review(&url("rvnotgit", 7)).is_err());
+        assert!(!worktree("review-rvnotgit-7").exists());
+    }
+
+    #[test]
+    fn remote_urls_match_in_every_form() {
+        for u in [
+            "https://github.com/Acme/Api.git",
+            "https://github.com/acme/api",
+            "git@github.com:acme/api.git",
+            "ssh://git@github.com/acme/api",
+        ] {
+            assert!(crate::engine::remote_is(u, "acme", "api"), "{u}");
+        }
+        for u in [
+            "https://github.com/acme/api-x.git",
+            "https://github.com/xacme/api",
+            "/srv/acme/api",
+        ] {
+            assert!(!crate::engine::remote_is(u, "acme", "api"), "{u}");
+        }
+    }
+
+    #[test]
+    fn dispatch_rejects_odd_owners_and_repos() {
+        let e = review_env("odd", |_| {});
+        for u in [
+            "https://github.com/acme/../pull/7",
+            "https://github.com/acme/-x/pull/7",
+            "https://github.com/-o/r/pull/7",
+            "https://github.com/acme/.hid/pull/7",
+        ] {
+            assert!(e.engine.dispatch_review(u).is_err(), "{u}");
+        }
+    }
+
+    #[test]
+    fn long_repo_names_keep_the_number() {
+        let e = review_env("long", |_| {});
+        origin(&e);
+        let repo = "rvlong-a-very-long-repository-name-indeed-yes";
+        clone_repo(&e, repo);
+        let a = e.engine.dispatch_review(&url(repo, 7)).unwrap();
+        let b = e.engine.dispatch_review(&url(repo, 7)).unwrap();
+        assert!(a.name.len() <= 40 && a.name.ends_with("-7"), "{}", a.name);
+        assert!(b.name.len() <= 40 && b.name.ends_with("-7-2"), "{}", b.name);
+        let _ = e.engine.remove(&a.name);
+        let _ = e.engine.remove(&b.name);
+    }
+
+    #[test]
+    fn a_reviewer_that_cant_start_leaves_no_worktree_or_branch() {
+        let e = review_env("startfail", |c| c.defaults.harness = "nope".into());
+        origin(&e);
+        clone_repo(&e, "rvstartfail");
+        assert!(e.engine.dispatch_review(&url("rvstartfail", 7)).is_err());
+        let clone = e.dir.join("repos/rvstartfail");
+        assert!(!worktree("review-rvstartfail-7").exists());
+        assert_eq!(git(&clone, "branch --list drovr/*"), "");
+        assert_eq!(git(&clone, "for-each-ref refs/drovr"), "");
+    }
+
+    #[test]
+    fn concurrent_dispatches_get_distinct_reviewers() {
+        let e = review_env("conc", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvconc");
+        let u = url("rvconc", 7);
+        let names: Vec<String> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..3)
+                .map(|_| {
+                    s.spawn(|| {
+                        let engine = Engine::with(
+                            Store::open(&e.dir.join("t.db")).unwrap(),
+                            e.engine.cfg.clone(),
+                            "drovr".into(),
+                        );
+                        engine.dispatch_review(&u).unwrap().name
+                    })
+                })
+                .collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut sorted = names.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 3, "{names:?}");
+        for n in names {
+            let _ = e.engine.remove(&n);
+        }
     }
 }
