@@ -390,26 +390,28 @@ fn remove_worktree(dir: &Path, name: &str) -> String {
     }
 }
 
-/// Remove a PR reviewer's worktree and its branch, uncommitted files and all:
-/// it never holds work worth keeping.
+/// Remove a PR reviewer's folder: its `pr` worktree and branch, uncommitted
+/// files and all, then the folder around them. It never holds work worth
+/// keeping.
 fn remove_pr_worktree(dir: &Path, name: &str) -> String {
-    let Some(main) = git_common_dir(dir).and_then(|c| c.parent().map(Path::to_path_buf)) else {
+    let pr = dir.join("pr");
+    if let Some(main) = git_common_dir(&pr).and_then(|c| c.parent().map(Path::to_path_buf)) {
+        let _ = git_in(
+            &main,
+            &format!(
+                "worktree remove --force {}",
+                quote(&pr.display().to_string())
+            ),
+        );
         let _ = std::fs::remove_dir_all(dir);
-        return String::new();
-    };
-    let _ = git_in(
-        &main,
-        &format!(
-            "worktree remove --force {}",
-            quote(&dir.display().to_string())
-        ),
-    );
-    let _ = std::fs::remove_dir_all(dir);
-    let _ = git_in(
-        &main,
-        &format!("branch -D {}", quote(&format!("drovr/{name}"))),
-    );
-    let _ = git_in(&main, "worktree prune");
+        let _ = git_in(
+            &main,
+            &format!("branch -D {}", quote(&format!("drovr/{name}"))),
+        );
+        let _ = git_in(&main, "worktree prune");
+    } else {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     "Its worktree and branch were removed.".into()
 }
 
@@ -923,6 +925,9 @@ impl Engine {
                 bail!("{url} has an owner or repo name drovr won't use as a folder");
             }
         }
+        if !self.cfg.review.allows(&owner) {
+            bail!("{owner} isn't in review.owners, so drovr won't review {url}");
+        }
         let _one = DISPATCH.lock().unwrap_or_else(|e| e.into_inner());
         let repos = match self.cfg.review.repos_dir.trim() {
             "" => PathBuf::from(self.cfg.default_cwd()),
@@ -945,55 +950,73 @@ impl Engine {
         let room = 40 - "review-".len() - 1 - digits.len() - 3;
         let stem: String = slug(&repo).chars().take(room).collect();
         let base = format!("review-{}-{digits}", stem.trim_end_matches(['-', '_']));
-        let name = (1..)
-            .map(|i| {
-                if i == 1 {
-                    base.clone()
-                } else {
-                    format!("{base}-{i}")
+        // Reserve `<home>/worktrees/<name>` by creating it: whoever creates
+        // it owns the name, even against another drovr process.
+        let worktrees = home().join("worktrees");
+        std::fs::create_dir_all(&worktrees)?;
+        let mut name = String::new();
+        for i in 1..1000 {
+            let n = if i == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{i}")
+            };
+            if self.store.agent(&n)?.is_some() {
+                continue;
+            }
+            match std::fs::create_dir(worktrees.join(&n)) {
+                Ok(()) => {
+                    name = n;
+                    break;
                 }
-            })
-            .find(|n| {
-                self.store.agent(n).ok().flatten().is_none()
-                    && !home().join("worktrees").join(n).exists()
-            })
-            .unwrap_or(base);
-        let cwd = self.make_pr_worktree(&clone, &remote, &name, number)?;
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if name.is_empty() {
+            bail!("couldn't find a free name for {base}");
+        }
+        let cwd = worktrees.join(&name);
+        let tidy = |clone: &Path| {
+            let _ = git_in(
+                clone,
+                &format!(
+                    "worktree remove --force {}",
+                    quote(&cwd.join("pr").display().to_string())
+                ),
+            );
+            let _ = git_in(
+                clone,
+                &format!("branch -D {}", quote(&format!("drovr/{name}"))),
+            );
+            let _ = git_in(clone, "worktree prune");
+            let _ = std::fs::remove_dir_all(&cwd);
+        };
+        if let Err(e) = self.make_pr_worktree(&clone, &remote, &name, number) {
+            tidy(&clone);
+            return Err(e);
+        }
         let started = self.start_agent(NewAgent {
             name: name.clone(),
             role: "pr-reviewer".into(),
-            cwd: cwd.clone(),
+            cwd: cwd.display().to_string(),
             ticket: url.to_string(),
             task: prompts::pr_review_task(url, &self.cfg.stages.review_skill),
             model: self.cfg.stages.model(crate::config::REVIEW).to_string(),
             ..NewAgent::default()
         });
         if started.is_err() {
-            let _ = git_in(&clone, &format!("worktree remove --force {}", quote(&cwd)));
-            let _ = git_in(
-                &clone,
-                &format!("branch -D {}", quote(&format!("drovr/{name}"))),
-            );
-            let _ = git_in(&clone, "worktree prune");
+            tidy(&clone);
         }
         started
     }
 
-    /// A worktree for PR `number`'s head commit, fetched from `remote`, in
-    /// `<home>/worktrees/<name>` on branch `drovr/<name>`.
-    fn make_pr_worktree(
-        &self,
-        clone: &Path,
-        remote: &str,
-        name: &str,
-        number: u64,
-    ) -> Result<String> {
-        let dir = home().join("worktrees").join(name);
-        let shown = dir.display().to_string();
-        if dir.exists() {
-            bail!("{shown} already exists; remove it or pick another name");
-        }
-        let tmp = format!("refs/drovr/pr/{name}");
+    /// The PR's head commit, fetched from `remote`, as a worktree at
+    /// `<home>/worktrees/<name>/pr` on branch `drovr/<name>`. The agent runs
+    /// in the folder around it, so the PR's own agent config never loads.
+    fn make_pr_worktree(&self, clone: &Path, remote: &str, name: &str, number: u64) -> Result<()> {
+        let dir = home().join("worktrees").join(name).join("pr");
+        let tmp = format!("refs/drovr/pr/{name}-{}", std::process::id());
         git_in(
             clone,
             &format!(
@@ -1004,27 +1027,18 @@ impl Engine {
         )?
         .into_stdout("git fetch the PR")?;
         let _ = git_in(clone, "worktree prune");
-        let branch = format!("drovr/{name}");
-        let existed = dir.exists();
         let added = git_in(
             clone,
             &format!(
                 "worktree add {} -b {} {}",
-                quote(&shown),
-                quote(&branch),
+                quote(&dir.display().to_string()),
+                quote(&format!("drovr/{name}")),
                 quote(&tmp)
             ),
         )
         .and_then(|o| o.into_stdout("git worktree add"));
         let _ = git_in(clone, &format!("update-ref -d {}", quote(&tmp)));
-        if let Err(e) = added {
-            if !existed {
-                let _ = std::fs::remove_dir_all(&dir);
-            }
-            let _ = git_in(clone, "worktree prune");
-            return Err(e);
-        }
-        Ok(shown)
+        added.map(|_| ())
     }
 
     /// Stop a build agent's reviewer, if it has one that's still going.

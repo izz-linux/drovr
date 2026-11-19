@@ -220,6 +220,9 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         let Some((owner, repo, number)) = parse(canonical).or_else(|| parse(&c.url)) else {
             continue;
         };
+        if !cfg.allows(&owner) {
+            continue;
+        }
         let canonical = canonical.to_string();
         if state.seen.contains_key(&canonical.to_lowercase())
             || found.iter().any(|f| f.url.eq_ignore_ascii_case(&canonical))
@@ -775,7 +778,10 @@ mod tests {
         git(&work, "commit -q --allow-empty -m one");
         git(&work, &format!("push -q {} main", bare.display()));
         std::fs::write(work.join("f.txt"), "pr").unwrap();
-        git(&work, "add f.txt");
+        std::fs::create_dir_all(work.join(".claude")).unwrap();
+        std::fs::write(work.join(".claude/settings.json"), "{}").unwrap();
+        std::fs::write(work.join(".mcp.json"), "{}").unwrap();
+        git(&work, "add -A");
         git(&work, "commit -q -m two");
         git(
             &work,
@@ -851,12 +857,19 @@ mod tests {
         assert_eq!(a.ticket, url("rvdisp", 7));
         assert_eq!(a.model, "rev-model");
         assert_eq!(a.cwd, worktree("review-rvdisp-7").display().to_string());
-        assert_eq!(git(Path::new(&a.cwd), "rev-parse HEAD"), sha);
+        assert_eq!(git(&Path::new(&a.cwd).join("pr"), "rev-parse HEAD"), sha);
+        // The PR's own agent config must not load: none of it is at the root.
+        for f in [".claude", ".mcp.json", ".opencode", "opencode.json"] {
+            assert!(!Path::new(&a.cwd).join(f).exists(), "{f} at the root");
+        }
+        assert!(Path::new(&a.cwd).join("pr/.claude/settings.json").exists());
+        assert!(Path::new(&a.cwd).join("pr/.mcp.json").exists());
         for want in [
             url("rvdisp", 7).as_str(),
             "/s/SKILL.md",
             "read-only",
             "Review acme/rvdisp#7",
+            "git -C pr",
         ] {
             assert!(a.task.contains(want), "{want} not in {}", a.task);
         }
@@ -960,7 +973,8 @@ mod tests {
         origin(&e);
         clone_repo(&e, "rvrm");
         let a = e.engine.dispatch_review(&url("rvrm", 7)).unwrap();
-        std::fs::write(Path::new(&a.cwd).join("scratch.txt"), "x").unwrap();
+        std::fs::write(Path::new(&a.cwd).join("pr/scratch.txt"), "x").unwrap();
+        std::fs::write(Path::new(&a.cwd).join("stray.txt"), "x").unwrap();
         let note = e.engine.remove(&a.name).unwrap();
         assert_eq!(note, "Its worktree and branch were removed.");
         assert!(!Path::new(&a.cwd).exists());
@@ -1121,7 +1135,7 @@ mod tests {
             ),
         );
         let a = e.engine.dispatch_review(&url("rvremote", 7)).unwrap();
-        assert!(Path::new(&a.cwd).join("f.txt").exists());
+        assert!(Path::new(&a.cwd).join("pr/f.txt").exists());
         assert_eq!(git(&clone, "for-each-ref refs/drovr"), "");
         let _ = e.engine.remove(&a.name);
     }
@@ -1175,6 +1189,29 @@ mod tests {
     }
 
     #[test]
+    fn only_listed_owners_are_offered_or_dispatched() {
+        let e = review_env("owners", |c| {
+            c.review.owners = vec!["ACME".into()];
+        });
+        origin(&e);
+        clone_repo(&e, "rvowners");
+        let a = e.engine.dispatch_review(&url("rvowners", 7)).unwrap();
+        let _ = e.engine.remove(&a.name);
+        let err = e
+            .engine
+            .dispatch_review("https://github.com/other/rvowners/pull/7")
+            .unwrap_err();
+        assert!(err.to_string().contains("review.owners"), "{err:#}");
+        assert!(!worktree("review-rvowners-7-2").exists());
+
+        let e = review_env("owners2", |c| c.review.owners = vec!["other".into()]);
+        team_pr(&e, 5, "OPEN", false, "alice");
+        search_has(&e, &[5]);
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert!(items(&e).is_empty());
+    }
+
+    #[test]
     fn dispatch_rejects_odd_owners_and_repos() {
         let e = review_env("odd", |_| {});
         for u in [
@@ -1209,6 +1246,7 @@ mod tests {
         assert!(e.engine.dispatch_review(&url("rvstartfail", 7)).is_err());
         let clone = e.dir.join("repos/rvstartfail");
         assert!(!worktree("review-rvstartfail-7").exists());
+        assert_eq!(git(&clone, "worktree list").lines().count(), 1);
         assert_eq!(git(&clone, "branch --list drovr/*"), "");
         assert_eq!(git(&clone, "for-each-ref refs/drovr"), "");
     }

@@ -251,6 +251,16 @@ pub struct Review {
     pub remove_when_closed: bool,
     /// Where local clones live; empty is `defaults.cwd`.
     pub repos_dir: String,
+    /// Only offer and dispatch PRs in these GitHub owners (orgs or users),
+    /// case-insensitive; empty is any.
+    pub owners: Vec<String>,
+}
+
+impl Review {
+    /// Whether PRs in this owner may be offered and reviewed.
+    pub fn allows(&self, owner: &str) -> bool {
+        self.owners.is_empty() || self.owners.iter().any(|o| o.eq_ignore_ascii_case(owner))
+    }
 }
 
 impl Default for Review {
@@ -262,6 +272,7 @@ impl Default for Review {
             auto_dispatch: false,
             remove_when_closed: true,
             repos_dir: String::new(),
+            owners: vec![],
         }
     }
 }
