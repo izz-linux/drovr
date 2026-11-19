@@ -39,6 +39,8 @@ pub struct Found {
     pub source: String,
     pub permalink: String,
     pub poster: String,
+    /// A dismissed PR posted again in Slack, coming back.
+    pub reoffer: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +161,28 @@ struct Candidate {
     source: String,
     permalink: String,
     poster: String,
+    /// When its Slack message was posted (unix seconds); 0 for a team
+    /// search or a message with no usable time.
+    msg_ts: f64,
+}
+
+/// Whether a candidate PR is already tracked. A Slack post made after a PR
+/// was dismissed, or was last offered before the PRs view, makes it new again.
+enum Known {
+    No,
+    Yes,
+    Dismissed,
+}
+
+fn known(engine: &Engine, state: &State, key: &str, msg_ts: f64) -> Known {
+    match engine.store.review_pr(key).ok().flatten() {
+        Some(r) if r.status == "dismissed" && msg_ts > r.decided_ts => Known::Dismissed,
+        Some(_) => Known::Yes,
+        None => match state.seen.get(key) {
+            Some(at) if msg_ts <= *at => Known::Yes,
+            _ => Known::No,
+        },
+    }
 }
 
 fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
@@ -209,6 +233,7 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
                             source: source.clone(),
                             permalink: m.permalink.clone(),
                             poster: m.user.clone(),
+                            msg_ts: m.ts.parse::<f64>().ok().filter(|t| *t > 0.0).unwrap_or(0.0),
                         });
                     }
                 }
@@ -236,6 +261,7 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
                         source: format!("team {team}"),
                         permalink: String::new(),
                         poster: String::new(),
+                        msg_ts: 0.0,
                     });
                 }
             }
@@ -250,9 +276,8 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     for c in candidates {
         // Case doesn't matter in a URL; the first source to name a PR keeps it.
         let key = c.url.to_lowercase();
-        if state.seen.contains_key(&key)
+        if matches!(known(engine, &state, &key, c.msg_ts), Known::Yes)
             || found.iter().any(|f| f.url.to_lowercase() == key)
-            || engine.store.review_pr(&key).ok().flatten().is_some()
         {
             continue;
         }
@@ -299,14 +324,9 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         if !cfg.allows(&owner) {
             continue;
         }
-        if state.seen.contains_key(&canonical.to_lowercase())
+        let status = known(engine, &state, &canonical.to_lowercase(), c.msg_ts);
+        if matches!(status, Known::Yes)
             || found.iter().any(|f| f.url.eq_ignore_ascii_case(&canonical))
-            || engine
-                .store
-                .review_pr(&canonical.to_lowercase())
-                .ok()
-                .flatten()
-                .is_some()
         {
             continue;
         }
@@ -329,6 +349,7 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
             source: c.source,
             permalink: c.permalink,
             poster: c.poster,
+            reoffer: matches!(status, Known::Dismissed),
         });
     }
 
@@ -529,6 +550,12 @@ fn offer(engine: &Engine, f: &Found) -> bool {
     let saved = engine
         .store
         .upsert_review_pr(&row)
+        .and_then(|()| {
+            if f.reoffer {
+                engine.store.reoffer_review_pr(&row.key)?;
+            }
+            Ok(())
+        })
         .and_then(|()| match &started {
             Some(name) => engine
                 .store
@@ -2038,5 +2065,121 @@ mod tests {
         seed(&e, "api", 9, "dismissed", "");
         settle_closed(&e.engine, &key(&url("api", 9)));
         assert_eq!(row(&e, "api", 9).status, "dismissed");
+    }
+
+    fn slack_post(e: &Env, ts: &str, n: u32) {
+        let ts = if ts.is_empty() {
+            String::new()
+        } else {
+            format!(r#""ts":"{ts}","#)
+        };
+        write(
+            &e.dir,
+            "slack.json",
+            &format!(
+                r#"[{{"channel":"sre-reviews","user":"bob",{ts}"text":"pls https://github.com/acme/api/pull/{n}","permalink":"https://slack/p2"}}]"#
+            ),
+        );
+    }
+
+    fn at(offset: f64) -> String {
+        format!("{:.6}", crate::store::now() + offset)
+    }
+
+    #[test]
+    fn a_dismissed_pr_posted_in_slack_later_comes_back() {
+        let e = env("reoffer", |_| {});
+        team_pr(&e, 5, "OPEN", false, "alice");
+        seed(&e, "api", 5, "dismissed", "rvold");
+        slack_post(&e, &at(100.0), 5);
+        let found = poll_at(&e.engine, true, &e.dir.join("review.json"));
+        assert_eq!(found.len(), 1);
+        let r = row(&e, "api", 5);
+        assert_eq!((r.status.as_str(), r.agent.as_str()), ("new", ""));
+        assert_eq!(
+            (r.source.as_str(), r.poster.as_str(), r.permalink.as_str()),
+            ("#sre-reviews", "bob", "https://slack/p2")
+        );
+        assert_eq!(r.decided_ts, 0.0);
+        assert!(r.offered_ts > 0.0);
+        // The same message doesn't bring it back again once dismissed anew.
+        e.engine.dismiss_pr(&r.key).unwrap();
+        // (The test's message is dated in the future; make the dismissal later.)
+        let db = rusqlite::Connection::open(e.dir.join("t.db")).unwrap();
+        db.execute(
+            "UPDATE review_prs SET decided_ts = ?1 WHERE key = ?2",
+            rusqlite::params![crate::store::now() + 1000.0, r.key],
+        )
+        .unwrap();
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert_eq!(row(&e, "api", 5).status, "dismissed");
+    }
+
+    #[test]
+    fn a_post_from_before_the_dismissal_changes_nothing() {
+        let e = env("reoffer-early", |_| {});
+        team_pr(&e, 5, "OPEN", false, "alice");
+        seed(&e, "api", 5, "dismissed", "");
+        slack_post(&e, &at(-100.0), 5);
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert_eq!(row(&e, "api", 5).status, "dismissed");
+    }
+
+    #[test]
+    fn a_team_search_hit_does_not_bring_a_dismissed_pr_back() {
+        let e = env("reoffer-team", |c| c.review.slack_channels.clear());
+        team_pr(&e, 5, "OPEN", false, "alice");
+        search_has(&e, &[5]);
+        seed(&e, "api", 5, "dismissed", "");
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert_eq!(row(&e, "api", 5).status, "dismissed");
+    }
+
+    #[test]
+    fn a_seen_pr_with_no_row_is_offered_on_a_later_post() {
+        for (offset, offered) in [(100.0, 1), (-1000.0, 0)] {
+            let e = env(&format!("seen{offered}"), |_| {});
+            team_pr(&e, 5, "OPEN", false, "alice");
+            slack_post(&e, &at(offset), 5);
+            let now = crate::store::now();
+            write(
+                &e.dir,
+                "review.json",
+                &format!(
+                    r#"{{"since":{},"last_poll":0,"seen":{{"{}":{}}}}}"#,
+                    now - 100.0,
+                    url("api", 5),
+                    now - 500.0
+                ),
+            );
+            assert_eq!(
+                poll_at(&e.engine, true, &e.dir.join("review.json")).len(),
+                offered
+            );
+            assert_eq!(rows(&e).len(), offered);
+        }
+    }
+
+    #[test]
+    fn a_closed_pr_posted_again_stays_closed() {
+        let e = env("reoffer-closed", |_| {});
+        team_pr(&e, 5, "OPEN", false, "alice");
+        seed(&e, "api", 5, "closed", "");
+        slack_post(&e, &at(100.0), 5);
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert_eq!(row(&e, "api", 5).status, "closed");
+    }
+
+    #[test]
+    fn a_slack_post_without_a_time_never_brings_a_pr_back() {
+        let e = env("reoffer-nots", |_| {});
+        team_pr(&e, 5, "OPEN", false, "alice");
+        seed(&e, "api", 5, "dismissed", "");
+        slack_post(&e, "", 5);
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert_eq!(row(&e, "api", 5).status, "dismissed");
+        slack_post(&e, "garbage", 5);
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert_eq!(row(&e, "api", 5).status, "dismissed");
     }
 }

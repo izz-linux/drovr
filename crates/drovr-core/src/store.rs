@@ -774,6 +774,16 @@ impl Store {
         Ok(())
     }
 
+    /// A dismissed PR that's been posted again: back to `new`, with no
+    /// reviewer and no decision. Returns how many rows changed.
+    pub fn reoffer_review_pr(&self, key: &str) -> Result<usize> {
+        Ok(self.db.execute(
+            "UPDATE review_prs SET status = 'new', agent = '', offered_ts = ?2, decided_ts = 0 \
+             WHERE key = ?1 AND status = 'dismissed'",
+            params![key, now()],
+        )?)
+    }
+
     /// Set the title and author from GitHub; an empty one leaves what's there.
     pub fn update_review_pr_details(&self, key: &str, title: &str, author: &str) -> Result<()> {
         self.db.execute(

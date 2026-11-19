@@ -500,7 +500,7 @@ drovr can watch Slack channels for GitHub PR links and your GitHub teams for rev
 - **Only some owners:** set `review.owners = ["my-org"]` to offer and dispatch only PRs in those GitHub orgs or users (case-insensitive); empty is any. `drovr review <url>` refuses other owners too.
 - **What it produces:** a report titled "Review owner/repo#n" and a message with a summary. It stays running, so you can talk to it.
 - **Removing it** deletes its worktree and its branch, even with uncommitted files. With `review.remove_when_closed`, a reviewer that isn't working is removed once its PR merges or closes, including ones you started with `drovr review <url>`, as long as `review.poll_secs` isn't 0.
-- **What's skipped:** closed PRs and your own. A draft requested from your team is offered once it's ready; one linked in Slack is skipped. Each PR is offered once. The first poll looks back one day, and never more than 7.
+- **What's skipped:** closed PRs and your own. A draft requested from your team is offered once it's ready; one linked in Slack is skipped. Each PR is offered once. A PR you dismissed comes back if someone posts it in a watched channel after you dismissed it. The first poll looks back one day, and never more than 7.
 - **Slack** is read through the configured [Slack provider](#jira-confluence-and-slack-lookups). With `provider = "agent"`, each poll is a short `claude -p` run, so it costs a little each time.
 
 ### Phone access
