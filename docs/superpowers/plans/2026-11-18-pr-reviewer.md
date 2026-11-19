@@ -5,10 +5,10 @@
 **Goal:** Notice PRs posted in configured Slack channels, or requesting a configured GitHub team's review, and offer them in the Inbox. On Dispatch, start a read-only reviewer agent in its own worktree of the PR, running the review skill on the review model. Clean it up when the human removes it, or when the PR closes.
 
 **Architecture:**
-- A new core module, `review.rs`, finds and dedupes PRs and makes Inbox items (kind `review`).
+- A new core module, `pr_review.rs`, finds and dedupes PRs and makes Inbox items (kind `review`).
 - `Engine::dispatch_review(url)` prepares the clone and the PR worktree, then starts a solo agent with role `pr-reviewer`.
 - `Engine::remove` force-cleans a `pr-reviewer`'s worktree and branch.
-- The app's background loop calls `review::poll`. The CLI gets `drovr review <url>` and `drovr review poll`.
+- The app's background loop calls `pr_review::poll`. The CLI gets `drovr review <url>` and `drovr review poll`.
 
 **Tech Stack:** Rust (`drovr-core`, `drovr-cli`, Tauri `drovr-app`), Svelte 5 (an Inbox label), pnpm.
 
@@ -65,7 +65,7 @@
 ### Task 1: Find PRs and offer them
 
 **Files:**
-- Create: `crates/drovr-core/src/review.rs` (with `mod tests`), and register it in `lib.rs`.
+- Create: `crates/drovr-core/src/pr_review.rs` (with `mod tests`), and register it in `lib.rs`. (`review.rs` already exists for agent diff reviews; don't touch it.)
 - Modify: `crates/drovr-core/src/config.rs`: add `Review` with `Default` and a `review` field on `Config` (follow how `Watch` is declared, ~:135).
 - Modify: `crates/drovr-core/src/sources.rs`: add `pub fn slack_pr_messages(&self, channels: &[String], since: f64) -> Result<Vec<SlackMessage>>`.
   - `rest`/`command`: one `slack_search` per channel with the query `in:<channel> github.com after:<YYYY-MM-DD of since minus 1 day>`. The search is day-granular; dedupe handles the overlap.
@@ -101,11 +101,11 @@
     - not due yet (`since` recent, `force = false`) gives nothing
   - State: entries older than 90 days are dropped on save, and corrupt JSON means a fresh state.
 
-- [ ] **Step 2: Run them and confirm they fail.** `cargo test -p drovr-core review::`
+- [ ] **Step 2: Run them and confirm they fail.** `cargo test -p drovr-core pr_review::`
 
 - [ ] **Step 3: Implement** following the Global Constraints. For the due check, keep `last_poll` in state, and poll when `now - last_poll >= poll_secs` or when forced.
 
-- [ ] **Step 4: Run the tests and confirm they pass.** `cargo test -p drovr-core review::`, then `cargo test -p drovr-core`.
+- [ ] **Step 4: Run the tests and confirm they pass.** `cargo test -p drovr-core pr_review::`, then `cargo test -p drovr-core`.
 
 - [ ] **Step 5: Run the checks.** As separate commands: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cd app && pnpm check`.
 
@@ -132,7 +132,7 @@
   - publish the findings with `publish_report` titled `Review <owner>/<repo>#<n>`
   - `send_message` to `human`: the verdict plus the top findings in a few lines
   - then end your turn and wait; if the human asks you to post the review, post exactly what they approve with `gh pr review` or `gh pr comment`
-- Modify: `crates/drovr-core/src/review.rs`:
+- Modify: `crates/drovr-core/src/pr_review.rs`:
   - `offer()` gets the `auto_dispatch` branch: dispatch, plus an item already resolved `answered` with `Reviewer <name> started`. On error, fall back to a normal pending item with the error in the body.
   - At the end of `poll_at`, when `remove_when_closed`: for each `pr-reviewer` agent with `run_state == "idle"`, `gh pr view <ticket> --json state`. If MERGED or CLOSED, `engine.remove(name)` and record nothing else.
 
@@ -175,7 +175,7 @@
 ### Task 3: Run it from the app and the CLI, plus the docs
 
 **Files:**
-- Modify: `app/src-tauri/src/lib.rs`: in the 15-second watcher thread, call `drovr_core::review::poll(&e, false)` outside the `workflow.enabled` check, beside cleanup.
+- Modify: `app/src-tauri/src/lib.rs`: in the 15-second watcher thread, call `drovr_core::pr_review::poll(&e, false)` outside the `workflow.enabled` check, beside cleanup.
 - Modify: `crates/drovr-cli/src/main.rs`:
   - `drovr review <pr-url>` dispatches and prints `started <name> in <cwd>`
   - `drovr review poll` runs `poll(engine, true)` and prints `offered <owner>/<repo>#<n>: <title> (<source>)` per PR, or `nothing new`
