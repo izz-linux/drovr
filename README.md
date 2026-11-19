@@ -4,7 +4,7 @@
 
 # drovr - Multi-Agent Control Plane for Claude Code, OpenCode & Codex
 
-A lightweight macOS desktop cockpit (Tauri + Svelte) for running Claude Code, OpenCode, and Codex agents. Pull up a Jira ticket, hand it to one agent or to a group led by an orchestrator, and review what they do.
+A lightweight macOS desktop control plane (Rust, Tauri + Svelte) for orchestrating, monitoring and sharing context across Claude Code, OpenCode and OpenAI Codex agents. Pull up a Jira ticket, hand it to one agent or to a group led by an orchestrator, and review what they do.
 
 - **One inbox:** agents bring you their decisions, proposed commands and permission requests there.
 - **Agents coordinate:** they message each other directly when their work overlaps.

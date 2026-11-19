@@ -5,7 +5,7 @@ use crate::store::{Agent, Group};
 const COORDINATION: &str = r#"
 ## Working inside drovr
 
-You are one agent in drovr, a cockpit where a human supervises several Claude Code agents. You have a `drovr` MCP server. Use it:
+You are one agent in drovr, a control plane where a human supervises several coding agents (Claude Code, OpenCode or Codex). You have a `drovr` MCP server. Use it:
 
 - `read_messages` at the start, and between major steps. Peers and the orchestrator send you context there.
 - `send_message` to coordinate with agents whose work is related to yours: interface or schema changes, files you are about to touch, things you found that affect them. Be brief and specific.
