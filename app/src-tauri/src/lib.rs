@@ -4,6 +4,7 @@
 //! config edits apply immediately and nothing holds a lock across slow calls
 //! such as an agent querying Jira through its MCP.
 
+mod cli_install;
 mod menu;
 mod terminal;
 mod themes;
@@ -32,6 +33,16 @@ async fn blocking<T: Send + 'static>(
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn cli_status() -> Res<cli_install::CliStatus> {
+    blocking(|_| Ok(cli_install::status())).await
+}
+
+#[tauri::command]
+async fn install_cli() -> Res<String> {
+    blocking(|_| cli_install::install().map_err(anyhow::Error::msg)).await
 }
 
 #[derive(Serialize)]
@@ -945,6 +956,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             menu::load_theme,
             menu::save_theme,
+            cli_status,
+            install_cli,
             snapshot,
             agent_output,
             new_agent,

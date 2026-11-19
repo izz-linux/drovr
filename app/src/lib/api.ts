@@ -94,6 +94,8 @@ export type NewAgent = {
 };
 export type ClaudeSession = { id: string; cwd: string; first_prompt: string; modified: number };
 
+export interface CliStatus { installed: boolean; target: string; points_to: string | null; on_path: string | null; shadowed: boolean }
+
 export const api = {
   snapshot: () => invoke<Snapshot>("snapshot"),
   /** `pane`: a herdr agent's pane as it is on screen, not its session's record. */
@@ -152,6 +154,8 @@ export const api = {
     invoke<PushPreview>("push_preview", { command, cwd, namedCwd }),
   pushGithubMoved: (root: string, branch: string, tracking: string | null) =>
     invoke<boolean | null>("push_github_moved", { root, branch, tracking }),
+  cliStatus: () => invoke<CliStatus>("cli_status"),
+  installCli: () => invoke<string>("install_cli"),
   cleanupNow: () => invoke<{ archived: [string, string][]; inbox_deleted: number; errors: string[] }>("cleanup_now"),
   configInfo: () => invoke<{ path: string; home: string; text: string; effective: string }>("config_info"),
   saveConfig: (text: string) => invoke<void>("save_config", { text }),

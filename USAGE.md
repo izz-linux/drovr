@@ -371,7 +371,7 @@ model = "haiku"
 
 ## CLI reference
 
-The `drovr` CLI does what the app does, from a shell, a herdr pane, or a script. It uses the same database, so the app shows whatever the CLI does. Put it on your PATH with `cargo install --path crates/drovr-cli`.
+The `drovr` CLI does what the app does, from a shell, a herdr pane, or a script. It uses the same database, so the app shows whatever the CLI does. Put it on your PATH with **drovr → Install Command Line Tool…** (or Settings → Command line tool), which links `/usr/local/bin/drovr` to the app's bundled CLI and may ask for your password. From source, use `cargo install --path crates/drovr-cli`.
 
 Agent and group names are lowercase letters, digits, `-` and `_`, starting with a letter. `new`, `adopt` and `group` lowercase the name and turn spaces into dashes, so `drovr new "Fix login" …` starts `fix-login`; the name it prints is the one to use afterwards.
 

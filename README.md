@@ -86,7 +86,7 @@ pnpm tauri dev
 
 The first build compiles the Rust side and takes a few minutes. After that, `pnpm tauri dev` starts in seconds.
 
-**Optional:** put the CLI on your PATH, for scripting and for herdr panes:
+**Optional:** put the CLI on your PATH, for scripting and for herdr panes. Choose **drovr → Install Command Line Tool…** (or Settings → Command line tool). It links `/usr/local/bin/drovr` to the CLI bundled in the app, so it updates with the app, and may ask for your password. If you build from source instead:
 
 ```sh
 cargo install --path crates/drovr-cli

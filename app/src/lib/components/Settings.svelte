@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type RemoteInfo } from "#lib/api.ts";
+  import { api, type CliStatus, type RemoteInfo } from "#lib/api.ts";
   import { app, act, toast } from "#lib/state.svelte.ts";
   import { theme, setTheme } from "#lib/theme.svelte.ts";
   import { THEME_SETTINGS, isThemeSetting } from "#lib/themes.ts";
@@ -11,7 +11,22 @@
   let remote = $state<RemoteInfo | null>(null);
   let showQr = $state(false);
 
+  let cli = $state<CliStatus | null>(null);
+  let installing = $state(false);
+  const loadCli = () => api.cliStatus().then((c) => (cli = c)).catch(() => {});
+  async function installCli() {
+    installing = true;
+    try {
+      const msg = await act(() => api.installCli());
+      if (msg) toast(msg);
+    } finally {
+      installing = false;
+      loadCli();
+    }
+  }
+
   async function load() {
+    loadCli();
     api.remoteInfo().then((r) => (remote = r)).catch(() => {});
     try {
       info = await api.configInfo();
@@ -81,6 +96,16 @@
       <p class="muted">To check in from your phone, set <code>[remote] enabled = true</code> below and restart drovr. README → Phone access has the rest.</p>
     {/if}
   </div>
+  <div class="cli">
+    <label for="cli-install">Command line tool</label>
+    <div class="row">
+      <button id="cli-install" onclick={installCli} disabled={installing}>{installing ? "Installing…" : cli?.installed ? "Reinstall" : "Install"}</button>
+      <span class="muted">{cli?.installed ? `Installed at ${cli.target}.` : "Not installed."} Also in the drovr menu → Install Command Line Tool…</span>
+    </div>
+    {#if cli?.shadowed && cli.on_path}
+      <p class="muted">Your shell runs <code>{cli.on_path}</code> first.</p>
+    {/if}
+  </div>
   <div class="cleanup">
     <div class="row">
       <button onclick={cleanUp} disabled={cleaning || dirty} title={dirty ? "Save first" : ""}>{cleaning ? "Cleaning up…" : "Clean up now"}</button>
@@ -115,6 +140,7 @@
   .theme select { width: 200px; }
   .phone { margin: 0 0 14px; max-width: 900px; }
   .phone input { flex: 1; font-family: var(--mono); font-size: 12px; }
+  .cli { margin: 0 0 14px; max-width: 900px; }
   .cleanup { margin: 0 0 14px; max-width: 900px; }
   .qr { background: #fff; padding: 12px; border-radius: 8px; width: fit-content; }
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }

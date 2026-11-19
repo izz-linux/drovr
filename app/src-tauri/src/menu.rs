@@ -93,6 +93,13 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
             Some(&format!("About {name}")),
             Some(about),
         )?)
+        .item(&MenuItem::with_id(
+            handle,
+            "menu-install-cli",
+            "Install Command Line Tool…",
+            true,
+            None::<&str>,
+        )?)
         .separator()
         .item(&PredefinedMenuItem::hide(
             handle,
