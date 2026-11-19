@@ -5,6 +5,7 @@
 //! such as an agent querying Jira through its MCP.
 
 mod cli_install;
+mod login_path;
 mod menu;
 mod terminal;
 mod themes;
@@ -12,7 +13,6 @@ mod themes;
 use drovr_core::engine::{Dispatch, Line, NewGroup};
 use drovr_core::reports::ReportFile;
 use drovr_core::review::{self, Repo};
-use drovr_core::shell::quote;
 use drovr_core::sources::{Page, SlackMessage, Sources, Ticket};
 use drovr_core::store::{Agent, Group, Item, Message, Note};
 use drovr_core::{config, Engine, NewAgent};
@@ -27,6 +27,7 @@ async fn blocking<T: Send + 'static>(
     f: impl FnOnce(&Engine) -> anyhow::Result<T> + Send + 'static,
 ) -> Res<T> {
     tauri::async_runtime::spawn_blocking(move || {
+        path_ready();
         let engine = Engine::open()?;
         f(&engine)
     })
@@ -861,35 +862,22 @@ async fn save_config(text: String) -> Res<()> {
     .await
 }
 
-/// Apps launched from Finder or the Dock get a minimal PATH
-/// (/usr/bin:/bin:/usr/sbin:/sbin), so `claude`, `herdr`, `node` and
-/// Homebrew tools wouldn't be found. Take PATH from the user's login shell.
-fn adopt_login_shell_path() {
-    if !cfg!(target_os = "macos") || std::env::var_os("DROVR_KEEP_PATH").is_some() {
-        return;
-    }
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let script = "printf '__DROVR_PATH__%s__DROVR_PATH__' \"$PATH\"";
-    // Interactive so ~/.zshrc runs too; bounded in case it waits on something.
-    let cmd = format!("{} -l -i -c {}", quote(&shell), quote(script));
-    let Ok(out) = drovr_core::shell::sh(&cmd, None, None, Duration::from_secs(5)) else {
-        return;
-    };
-    if let Some(path) = out
-        .stdout
-        .split("__DROVR_PATH__")
-        .nth(1)
-        .filter(|p| !p.is_empty())
-    {
-        std::env::set_var("PATH", path);
-    }
+#[tauri::command]
+fn login_path_info() -> login_path::Info {
+    login_path::info()
+}
+
+/// Don't start work that spawns `gh`, `claude` or `opencode` before PATH is settled.
+fn path_ready() {
+    login_path::wait_ready(Duration::from_secs(35));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    adopt_login_shell_path();
+    login_path::start();
     // Notice headless runs that died without reporting back, and track herdr panes.
     std::thread::spawn(|| loop {
+        path_ready();
         if let Ok(e) = Engine::open() {
             let _ = e.refresh();
             let _ = e.refresh_herdr();
@@ -899,6 +887,7 @@ pub fn run() {
     // The ticket workflow's watcher: Jira and PR status, polled as each
     // falls due (watch.jira_poll_secs, watch.pr_poll_secs).
     std::thread::spawn(|| loop {
+        path_ready();
         if let Ok(e) = Engine::open() {
             if e.cfg.workflow.enabled {
                 drovr_core::watch::poll(&e, false);
@@ -924,6 +913,7 @@ pub fn run() {
     // PRs to review ([review] in the config). Its own thread: a slow Slack
     // read mustn't hold up the watcher above.
     std::thread::spawn(|| loop {
+        path_ready();
         if let Ok(e) = Engine::open() {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 drovr_core::pr_review::poll(&e, false)
@@ -935,6 +925,7 @@ pub fn run() {
     if let Ok(cfg) = drovr_core::Config::load() {
         if cfg.remote.enabled {
             std::thread::spawn(move || {
+                path_ready();
                 if let Err(e) = drovr_core::remote::serve(&cfg) {
                     eprintln!("drovr: phone page: {e:#}");
                 }
@@ -957,6 +948,7 @@ pub fn run() {
             menu::load_theme,
             menu::save_theme,
             cli_status,
+            login_path_info,
             install_cli,
             snapshot,
             agent_output,

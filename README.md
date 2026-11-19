@@ -783,7 +783,7 @@ If your herdr version takes different arguments, edit these templates instead of
 | `DROVR_CONFIG` | Use another config file |
 | `DROVR_HOME` | Use another state folder (default `~/.local/share/drovr`) |
 | `DROVR_BIN` | Path to the `drovr` CLI that agents run (default: the copy bundled in the app) |
-| `DROVR_KEEP_PATH` | Don't load PATH from your login shell at startup |
+| `DROVR_KEEP_PATH` | Keep the PATH drovr was launched with instead of asking your login shell (the common folders, such as `/opt/homebrew/bin`, are still added) |
 | `DROVR_AGENT` | Set by drovr inside each agent's process; you don't set this |
 
 ## Files and data

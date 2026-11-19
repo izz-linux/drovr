@@ -60,6 +60,26 @@ impl Output {
     }
 }
 
+/// How long a timed-out command gets to clean up (lock files, EXIT traps)
+/// after SIGTERM, on top of its timeout, before SIGKILL.
+pub const KILL_GRACE: Duration = Duration::from_secs(3);
+
+/// Stop the process group led by `child`: SIGTERM, wait up to `grace` for the
+/// leader to exit, then SIGKILL the group. SIGKILL alone skips shell traps, so
+/// tools that remove a lock on exit (pyenv's shim lock) would leave it behind.
+pub fn terminate_group(child: &mut std::process::Child, grace: Duration) {
+    let pgid = child.id() as i32;
+    unsafe { libc::killpg(pgid, libc::SIGTERM) };
+    let start = Instant::now();
+    while start.elapsed() < grace {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    unsafe { libc::killpg(pgid, libc::SIGKILL) };
+}
+
 /// Run `sh -c script` in `cwd`, feeding `stdin`, killing it after `timeout`.
 pub fn sh(
     script: &str,
@@ -108,7 +128,7 @@ pub fn sh(
         }
         if start.elapsed() > timeout {
             timed_out = true;
-            unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+            terminate_group(&mut child, KILL_GRACE);
             break child.wait()?;
         }
         std::thread::sleep(nap);
@@ -155,6 +175,21 @@ pub fn extract_json(text: &str) -> Option<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn timeout_sends_term_first_so_traps_run() {
+        let dir = std::env::temp_dir().join(format!("drovr-term-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("cleaned");
+        let _ = std::fs::remove_file(&marker);
+        let script = format!(
+            "trap 'touch {}; exit 0' TERM; sleep 30 & wait",
+            marker.display()
+        );
+        let out = super::sh(&script, None, None, std::time::Duration::from_millis(300)).unwrap();
+        assert!(out.timed_out);
+        assert!(marker.exists());
+    }
+
     use super::*;
 
     #[test]

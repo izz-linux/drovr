@@ -96,6 +96,8 @@ export type ClaudeSession = { id: string; cwd: string; first_prompt: string; mod
 
 export interface CliStatus { installed: boolean; target: string; points_to: string | null; on_path: string | null; shadowed: boolean }
 
+export interface LoginPathInfo { source: "interactive" | "login" | "saved" | "system" | "kept" | "pending"; ms: number; error: string | null; path: string }
+
 export const api = {
   snapshot: () => invoke<Snapshot>("snapshot"),
   /** `pane`: a herdr agent's pane as it is on screen, not its session's record. */
@@ -155,6 +157,7 @@ export const api = {
   pushGithubMoved: (root: string, branch: string, tracking: string | null) =>
     invoke<boolean | null>("push_github_moved", { root, branch, tracking }),
   cliStatus: () => invoke<CliStatus>("cli_status"),
+  loginPathInfo: () => invoke<LoginPathInfo>("login_path_info"),
   installCli: () => invoke<string>("install_cli"),
   cleanupNow: () => invoke<{ archived: [string, string][]; inbox_deleted: number; errors: string[] }>("cleanup_now"),
   configInfo: () => invoke<{ path: string; home: string; text: string; effective: string }>("config_info"),

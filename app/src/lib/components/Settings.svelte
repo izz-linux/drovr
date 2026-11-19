@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type CliStatus, type RemoteInfo } from "#lib/api.ts";
+  import { api, type CliStatus, type LoginPathInfo, type RemoteInfo } from "#lib/api.ts";
   import { app, act, toast } from "#lib/state.svelte.ts";
   import { theme, setTheme } from "#lib/theme.svelte.ts";
   import { THEME_SETTINGS, isThemeSetting } from "#lib/themes.ts";
@@ -13,6 +13,20 @@
 
   let cli = $state<CliStatus | null>(null);
   let installing = $state(false);
+  let pathInfo = $state<LoginPathInfo | null>(null);
+  const hint = (p: LoginPathInfo) =>
+    p.error?.includes("no answer") ? " Something in your .zshrc may be waiting for input; run `zsh -l -i -c 'echo done'` to see it." : "";
+  function pathLine(p: LoginPathInfo): string {
+    const secs = (p.ms / 1000).toFixed(1);
+    switch (p.source) {
+      case "interactive": return `PATH: from your shell (${secs}s)`;
+      case "login": return `PATH: from your login profile; your interactive shell didn't answer in 20s${hint(p)}`;
+      case "saved": return `PATH: saved from an earlier start; your shell didn't answer${hint(p)}`;
+      case "system": return `PATH: macOS's default; your shell didn't answer and nothing was saved. Set full paths (watch.gh, opencode.command) or see USAGE.${hint(p)}`;
+      case "kept": return "PATH: kept as launched (DROVR_KEEP_PATH)";
+      default: return "";
+    }
+  }
   const loadCli = () => api.cliStatus().then((c) => (cli = c)).catch(() => {});
   async function installCli() {
     installing = true;
@@ -27,6 +41,7 @@
 
   async function load() {
     loadCli();
+    api.loginPathInfo().then((p) => (pathInfo = p)).catch(() => {});
     api.remoteInfo().then((r) => (remote = r)).catch(() => {});
     try {
       info = await api.configInfo();
@@ -112,6 +127,9 @@
     </div>
     <p class="muted">Archives plans whose newest file is older than <code>reports.archive_after_days</code> and removes resolved Inbox items older than <code>inbox.keep_days</code> (0 = off). Also runs daily.</p>
   </div>
+  {#if pathInfo && pathLine(pathInfo)}
+    <p class="muted" title={pathInfo.error ?? pathInfo.path}>{pathLine(pathInfo)}</p>
+  {/if}
   {#if info}
     <p class="muted">Config: <code>{info.path}</code> · State and run logs: <code>{info.home}</code></p>
     <div class="cols">
