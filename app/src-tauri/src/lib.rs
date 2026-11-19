@@ -807,6 +807,17 @@ async fn remote_info() -> Res<RemoteInfo> {
 }
 
 #[tauri::command]
+async fn cleanup_now() -> Res<Value> {
+    blocking(|e| {
+        let now = drovr_core::store::now();
+        let out = drovr_core::cleanup::run(&e.cfg, &e.store, now, false)?;
+        drovr_core::cleanup::mark_ran(&config::home(), now)?;
+        Ok(serde_json::to_value(out)?)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn config_info() -> Res<Value> {
     blocking(|e| {
         let path = config::config_path();
@@ -879,6 +890,21 @@ pub fn run() {
         if let Ok(e) = Engine::open() {
             if e.cfg.workflow.enabled {
                 drovr_core::watch::poll(&e, false);
+            }
+            let now = drovr_core::store::now();
+            if drovr_core::cleanup::due(&config::home(), now) {
+                let ran = drovr_core::cleanup::run(&e.cfg, &e.store, now, false);
+                match ran {
+                    Ok(out) => {
+                        for err in &out.errors {
+                            eprintln!("drovr: cleanup: {err}");
+                        }
+                    }
+                    Err(err) => eprintln!("drovr: cleanup: {err:#}"),
+                }
+                if let Err(err) = drovr_core::cleanup::mark_ran(&config::home(), now) {
+                    eprintln!("drovr: cleanup: {err:#}");
+                }
             }
         }
         std::thread::sleep(Duration::from_secs(15));
@@ -954,6 +980,7 @@ pub fn run() {
             review_diff,
             push_preview,
             push_github_moved,
+            cleanup_now,
             config_info,
             save_config,
             remote_info,

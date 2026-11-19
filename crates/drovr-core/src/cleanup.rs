@@ -606,6 +606,19 @@ mod tests {
     }
 
     #[test]
+    fn outcome_serializes() {
+        let o = Outcome {
+            archived: vec![("a".into(), "a-2".into())],
+            inbox_deleted: 3,
+            errors: vec!["x: y".into()],
+        };
+        let v = serde_json::to_value(&o).unwrap();
+        assert_eq!(v["archived"][0][1], "a-2");
+        assert_eq!(v["inbox_deleted"], 3);
+        assert_eq!(v["errors"][0], "x: y");
+    }
+
+    #[test]
     fn an_ancestor_of_home_is_refused() {
         let home = Path::new("/Users/x");
         assert!(!safe_root(Path::new("/Users"), home));

@@ -166,6 +166,10 @@ dir = ""                      # an auto memory folder every Claude Code agent re
 
 [reports]
 dir = "~/.claude/plans"       # HTML reports; a group's go in <dir>/<group>/
+archive_after_days = 0        # move plans untouched this long into <dir>/archive/; 0 = never
+
+[inbox]
+keep_days = 0                 # remove resolved Inbox items older than this; 0 = never
 
 [terminal]                    # the terminal panel (⌃`) under an agent's output
 shell = ""                    # empty: $SHELL, else /bin/zsh; runs as a login shell

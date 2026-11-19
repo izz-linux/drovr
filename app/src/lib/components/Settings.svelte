@@ -30,6 +30,17 @@
     if (ok) await load();
   }
 
+  async function cleanUp() {
+    const out = await act(() => api.cleanupNow(), "");
+    if (!out) return;
+    const n = out.archived.length;
+    const bad = out.errors.length;
+    toast(
+      `Archived ${n} plan${n === 1 ? "" : "s"} and removed ${out.inbox_deleted} Inbox item${out.inbox_deleted === 1 ? "" : "s"}.` +
+        (bad ? ` ${bad} problem${bad === 1 ? "" : "s"}: see \`drovr cleanup --dry-run\`.` : ""),
+    );
+  }
+
   function onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); if (dirty) save(); }
   }
@@ -63,6 +74,12 @@
       <p class="muted">To check in from your phone, set <code>[remote] enabled = true</code> below and restart drovr. README → Phone access has the rest.</p>
     {/if}
   </div>
+  <div class="cleanup">
+    <div class="row">
+      <button onclick={cleanUp}>Clean up now</button>
+    </div>
+    <p class="muted">Archives plans older than <code>reports.archive_after_days</code> and removes resolved Inbox items older than <code>inbox.keep_days</code> (0 = off). Also runs daily.</p>
+  </div>
   {#if info}
     <p class="muted">Config: <code>{info.path}</code> · State and run logs: <code>{info.home}</code></p>
     <div class="cols">
@@ -91,6 +108,7 @@
   .theme select { width: 200px; }
   .phone { margin: 0 0 14px; max-width: 900px; }
   .phone input { flex: 1; font-family: var(--mono); font-size: 12px; }
+  .cleanup { margin: 0 0 14px; max-width: 900px; }
   .qr { background: #fff; padding: 12px; border-radius: 8px; width: fit-content; }
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
   .eff { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px; max-height: 620px; overflow: auto; margin: 0; }

@@ -152,6 +152,7 @@ export const api = {
     invoke<PushPreview>("push_preview", { command, cwd, namedCwd }),
   pushGithubMoved: (root: string, branch: string, tracking: string | null) =>
     invoke<boolean | null>("push_github_moved", { root, branch, tracking }),
+  cleanupNow: () => invoke<{ archived: [string, string][]; inbox_deleted: number; errors: string[] }>("cleanup_now"),
   configInfo: () => invoke<{ path: string; home: string; text: string; effective: string }>("config_info"),
   saveConfig: (text: string) => invoke<void>("save_config", { text }),
   remoteInfo: () => invoke<RemoteInfo>("remote_info"),

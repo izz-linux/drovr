@@ -688,6 +688,8 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `orchestrator.max_workers` | `6` | Maximum number of workers per group |
 | `commands.timeout_seconds` | `600` | Time limit for commands you approve |
 | `reports.dir` | `"~/.claude/plans"` | Where reports are saved and listed |
+| `reports.archive_after_days` | `0` | Move plans whose newest file is older than this many days into `<reports.dir>/archive/`, whole and never deleted; `0` turns it off. Runs daily and from Settings → **Clean up now**. A group's folder, `retros`, `archive` and anything starting with `.` stay |
+| `inbox.keep_days` | `0` | Remove resolved Inbox items older than this many days, except an answer its agent hasn't received yet; `0` turns it off |
 | `datadog.pup` | `false` | Agents query Datadog with `pup`: read-only pup commands run without asking (with `--read-only` added), writes come to the Inbox (see [Datadog](#datadog)) |
 | `datadog.site` | `""` | Your Datadog site if it isn't US1, e.g. `"us5.datadoghq.com"`; passed to agents and lookups as `DD_SITE` |
 | `memory.dir` | `""` | An auto memory folder every Claude Code agent reads, wherever it works; leads and solo agents write it, and workers send what's worth keeping to their lead (see [Shared memory](#shared-memory)). Empty: Claude Code's own memory per project |
@@ -788,6 +790,7 @@ drovr inbox && drovr answer 7 "24h"       # see and answer what's waiting on you
 drovr adopt <session-id> my-agent         # continue a Claude Code (or OpenCode ses_…) session as a drovr agent
 drovr new --harness opencode fix-ci ~/code/api "Make CI green"   # an OpenCode agent
 drovr new --harness codex fix-ci ~/code/api "Make CI green"   # a Codex agent (experimental)
+drovr cleanup --dry-run                   # what archiving old plans and pruning the Inbox would do
 drovr config                              # where drovr reads its config and keeps its data
 drovr remote                              # the phone page's sign-in link and QR code
 ```

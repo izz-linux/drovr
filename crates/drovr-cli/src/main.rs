@@ -33,6 +33,8 @@ usage:
   drovr attach <agent>                       print the command to open its session interactively
   drovr msgs [group]                         the message bus
   drovr ask <question...>                    ask an agent with your MCPs (Slack, Jira, …)
+  drovr cleanup [--dry-run]                  archive old plans and prune resolved Inbox items
+                                             (reports.archive_after_days, inbox.keep_days)
   drovr config                               where drovr reads its config and keeps its data
   drovr remote [--test]                      the phone page's sign-in link and QR code;
                                              --test sends a test push notification
@@ -287,6 +289,26 @@ fn run() -> Result<()> {
                 "{}",
                 Sources::with_progress(&engine.cfg, &progress).ask(&rest(&args, 1), None)?
             );
+        }
+        "cleanup" => {
+            let dry = args.iter().any(|a| a == "--dry-run");
+            let now = drovr_core::store::now();
+            let out = drovr_core::cleanup::run(&engine.cfg, &engine.store, now, dry)?;
+            let would = if dry { "would " } else { "" };
+            for (from, to) in &out.archived {
+                println!("{would}archived {from} → archive/{to}");
+            }
+            for err in &out.errors {
+                eprintln!("error: {err}");
+            }
+            println!(
+                "{would}archived {} plan(s) and removed {} Inbox item(s)",
+                out.archived.len(),
+                out.inbox_deleted
+            );
+            if !dry {
+                drovr_core::cleanup::mark_ran(&drovr_core::config::home(), now)?;
+            }
         }
         "config" => println!(
             "{}",

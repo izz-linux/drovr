@@ -210,6 +210,22 @@ drovr resume pay-api-sweeper "Continue with the cleanup"
 drovr rm pay-api-sweeper
 ```
 
+### Clean up old plans and Inbox items
+
+Both are off until you set them (`0` means off):
+
+- `reports.archive_after_days`: a plan or folder in `reports.dir` whose newest file is older than this many days moves, whole, into `<reports.dir>/archive/`. Nothing is deleted, and a name already in `archive/` gets `-2`, `-3` and so on. Archived plans no longer show in Reports or the ticket timelines. A group's folder, `retros`, `archive`, symlinks and anything starting with `.` are never moved.
+- `inbox.keep_days`: resolved Inbox items older than this many days are removed. Pending items, and an answer its agent hasn't collected yet, stay.
+
+It runs once a day while drovr is open. To run it now, click **Clean up now** in Settings, or use the CLI. `--dry-run` lists what would happen and changes nothing:
+
+```sh
+drovr cleanup --dry-run
+drovr cleanup
+```
+
+Problems with single entries are printed as `error: …` and don't stop the rest. `reports.dir` must be an absolute folder that isn't `/` or your home folder or above it.
+
 ### Check in from your phone
 
 With `[remote] enabled = true` (README → [Phone access](README.md#phone-access)), drovr serves a page for your phone with the Inbox, agents and their output, code review, reports and, with the ticket workflow, the Pipeline.
@@ -359,6 +375,7 @@ Agent and group names are lowercase letters, digits, `-` and `_`, starting with 
 | `drovr run <id> [local\|herdr]` | Run a proposed command; with `local`, the output goes back to the agent |
 | `drovr msgs [group]` | Show the message bus |
 | `drovr ask <question…>` | Ask a one-shot agent that uses your MCP servers |
+| `drovr cleanup [--dry-run]` | Archive old plans and remove resolved Inbox items, per `reports.archive_after_days` and `inbox.keep_days`; `--dry-run` only lists what it would do |
 | `drovr config` | Print where drovr reads its config and keeps its data, as JSON |
 | `drovr remote [--test]` | Print the phone page's sign-in link and its QR code, and whether the page and notifications are on; `--test` sends a test notification |
 | `drovr serve` | Serve the phone page and send notifications without the app (see `[remote]` in the config) |
