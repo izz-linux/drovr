@@ -616,9 +616,13 @@ impl Engine {
             return String::new();
         }
         let you = self.cfg.your_name();
-        let mut out = format!(
-            "\n## Standing instructions\n\n{you} wants these followed in all your work. They override any general habits.\n"
+        let mut out = crate::config::personalize(
+            &format!(
+                "\n## Standing instructions\n\n{you} wants these followed in all your work. They override any general habits.\n"
+            ),
+            &you,
         );
+        let mut used = 0;
         for file in files {
             let path = crate::config::expand_tilde(file);
             let name = std::path::Path::new(&path)
@@ -638,14 +642,21 @@ impl Engine {
             match std::fs::read_to_string(&path) {
                 Ok(raw) => {
                     let body = truncate(&prompts::instruction_text(&raw), 20_000);
+                    used += body.chars().count();
+                    if used > 60_000 {
+                        out += "\n- drovr left out the rest: standing instructions are capped at 60,000 characters.\n";
+                        break;
+                    }
                     out += &format!("\n### {name}\n\n{body}\n");
                 }
                 Err(e) => {
-                    out += &format!("\n- drovr couldn't read {path} ({e}). Tell {you}.\n");
+                    out += &format!(
+                        "\n### {name}\n\n- drovr couldn't read {path} ({e}). Tell {you}.\n"
+                    );
                 }
             }
         }
-        crate::config::personalize(&out, &you)
+        out
     }
 
     fn make_worktree(&self, cwd: &str, name: &str) -> Result<String> {
@@ -2924,6 +2935,52 @@ mod tests {
             p.contains("drovr couldn't read /nonexistent/rules.md"),
             "{p}"
         );
+        assert!(p.contains("### rules.md"), "{p}");
+    }
+
+    #[test]
+    fn tilde_instruction_paths_are_expanded() {
+        let (_d, engine) = instructions_engine("tilde", &["~/drovr-nonexistent-xyz.md".into()]);
+        let p = prompt_of(&engine, "tilde-solo");
+        let want = crate::config::expand_tilde("~/drovr-nonexistent-xyz.md");
+        assert!(p.contains(&format!("couldn't read {want}")), "{p}");
+        assert!(!p.contains("couldn't read ~/"), "{p}");
+    }
+
+    #[test]
+    fn instruction_contents_are_not_personalized() {
+        let dir = std::env::temp_dir().join(format!("drovr-instr-pers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("rules.md");
+        std::fs::write(&f, "ask the human first").unwrap();
+        let (_d, mut engine) = instructions_engine("pers", &[f.display().to_string()]);
+        engine.cfg.defaults.your_name = "Izz".into();
+        let p = prompt_of(&engine, "pers-solo");
+        assert!(p.contains("ask the human first"), "{p}");
+        assert!(p.contains("Izz wants these followed"), "{p}");
+    }
+
+    #[test]
+    fn instructions_are_capped_in_total() {
+        let dir = std::env::temp_dir().join(format!("drovr-instr-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let files: Vec<String> = ["one", "two", "three"]
+            .iter()
+            .map(|n| {
+                let f = dir.join(format!("{n}.md"));
+                std::fs::write(&f, "x".repeat(25_000)).unwrap();
+                f.display().to_string()
+            })
+            .collect();
+        let (_d, engine) = instructions_engine("cap", &files);
+        let p = prompt_of(&engine, "cap-solo");
+        assert!(p.contains("### one.md") && p.contains("### two.md"), "{p}");
+        assert!(!p.contains("### three.md"));
+        assert!(p.contains(
+            "- drovr left out the rest: standing instructions are capped at 60,000 characters."
+        ));
     }
 
     #[test]

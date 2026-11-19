@@ -214,7 +214,7 @@ fn first_line(text: &str) -> String {
 /// A standing-instructions file's text: without the YAML frontmatter a
 /// SKILL.md starts with, and trimmed.
 pub fn instruction_text(raw: &str) -> String {
-    let text = raw.trim_start();
+    let text = raw.trim_start_matches('\u{feff}').trim_start();
     let mut lines = text.split_inclusive('\n');
     if let Some(first) = lines.next() {
         if first.trim_end() == "---" {
@@ -242,6 +242,7 @@ mod tests {
                 "# Rules\n\na\n\n---\n\nb",
             ),
             ("# Rules\nno front", "# Rules\nno front"),
+            ("\u{feff}---\nname: x\n---\nbody\n", "body"),
             ("  \n text \n", "text"),
         ] {
             assert_eq!(instruction_text(raw), want, "{raw:?}");
