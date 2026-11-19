@@ -410,23 +410,41 @@ fn refresh_open(engine: &Engine, login: &str) {
         if state != "MERGED" && state != "CLOSED" {
             continue;
         }
-        let reviewer = engine.store.agent(&row.agent).ok().flatten();
-        if row.status == "dispatched" && engine.cfg.review.remove_when_closed {
-            if let Some(a) = reviewer {
-                // A working reviewer finishes first; the next poll removes it.
-                if a.run_state == "working" {
-                    continue;
-                }
-                if let Err(e) = engine.remove(&a.name) {
-                    // The row stays open so the next poll tries again.
-                    eprintln!("drovr: couldn't remove reviewer {}: {e:#}", a.name);
-                    continue;
-                }
+        settle_closed(engine, &row.key);
+    }
+}
+
+/// A row whose PR merged or closed: close it, and with `remove_when_closed`
+/// remove its reviewer once it isn't working. Decided from the row as it is
+/// now, since a dispatch or a dismissal may have happened during the poll.
+fn settle_closed(engine: &Engine, key: &str) {
+    let row = match engine.store.review_pr(key) {
+        Ok(Some(row)) if matches!(row.status.as_str(), "new" | "dispatched") => row,
+        _ => return,
+    };
+    // A reviewer that's still starting: the next poll settles it.
+    if row.status == "dispatched" && row.agent.is_empty() {
+        return;
+    }
+    if row.status == "dispatched" && engine.cfg.review.remove_when_closed {
+        if let Some(a) = engine.store.agent(&row.agent).ok().flatten() {
+            // A working reviewer finishes first; the next poll removes it.
+            if a.run_state == "working" {
+                return;
+            }
+            if let Err(e) = engine.remove(&a.name) {
+                // The row stays open so the next poll tries again.
+                eprintln!("drovr: couldn't remove reviewer {}: {e:#}", a.name);
+                return;
             }
         }
-        if let Err(e) = engine.store.set_review_pr_status(&row.key, "closed", None) {
-            eprintln!("drovr: couldn't close {}: {e:#}", row.url);
-        }
+    }
+    if let Err(e) =
+        engine
+            .store
+            .set_review_pr_status_if(key, &["new", "dispatched"], "closed", None)
+    {
+        eprintln!("drovr: couldn't close {}: {e:#}", row.url);
     }
 }
 
@@ -1959,5 +1977,66 @@ mod tests {
         poll_at(&e.engine, true, &e.dir.join("review.json"));
         assert!(e.engine.store.agent("rvrowkeep").unwrap().is_some());
         assert_eq!(row(&e, "api", 3).status, "dispatched");
+    }
+
+    #[test]
+    fn a_second_dispatch_of_the_same_row_starts_nothing() {
+        let e = review_env("dbl", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvdbl");
+        seed(&e, "rvdbl", 7, "new", "");
+        let k = key(&url("rvdbl", 7));
+        let a = e.engine.dispatch_pr(&k).unwrap();
+        let err = e.engine.dispatch_pr(&k).unwrap_err();
+        assert!(
+            err.to_string().contains("already dispatched or dismissed"),
+            "{err:#}"
+        );
+        assert_eq!(e.engine.store.agents(None).unwrap().len(), 1);
+        let _ = e.engine.remove(&a.name);
+    }
+
+    #[test]
+    fn a_dismissal_between_the_claim_and_the_agent_write_wins() {
+        let e = review_env("race", |_| {});
+        seed(&e, "api", 7, "new", "");
+        let k = key(&url("api", 7));
+        let st = &e.engine.store;
+        // The claim, then a dismissal, then the late agent write.
+        assert_eq!(
+            st.set_review_pr_status_if(&k, &["new"], "dispatched", None)
+                .unwrap(),
+            1
+        );
+        e.engine.dismiss_pr(&k).unwrap();
+        assert_eq!(
+            st.set_review_pr_status_if(&k, &["dispatched"], "dispatched", Some("late"))
+                .unwrap(),
+            0
+        );
+        let r = row(&e, "api", 7);
+        assert_eq!((r.status.as_str(), r.agent.as_str()), ("dismissed", ""));
+    }
+
+    #[test]
+    fn settling_uses_the_current_row_not_a_stale_one() {
+        let (e, _) = closed_state("settle", "MERGED", |_| {});
+        let k = key(&url("api", 7));
+        // Dispatched after the poll's snapshot: its reviewer goes with it.
+        seed(&e, "api", 7, "dispatched", "rvsettle");
+        reviewer(&e, "rvsettle", "idle", &url("api", 7), "/tmp");
+        settle_closed(&e.engine, &k);
+        assert_eq!(row(&e, "api", 7).status, "closed");
+        assert!(e.engine.store.agent("rvsettle").unwrap().is_none());
+
+        // A dispatch still starting (no agent yet) is left alone.
+        seed(&e, "api", 8, "dispatched", "");
+        settle_closed(&e.engine, &key(&url("api", 8)));
+        assert_eq!(row(&e, "api", 8).status, "dispatched");
+
+        // Already dismissed: untouched.
+        seed(&e, "api", 9, "dismissed", "");
+        settle_closed(&e.engine, &key(&url("api", 9)));
+        assert_eq!(row(&e, "api", 9).status, "dismissed");
     }
 }

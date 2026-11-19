@@ -917,18 +917,36 @@ impl Engine {
             .store
             .review_pr(key)?
             .ok_or_else(|| anyhow!("no PR {key} to review"))?;
-        if row.status != "new" {
-            bail!(
-                "{}/{}#{} isn't waiting for a reviewer (it's {})",
-                row.owner,
-                row.repo,
-                row.number,
-                row.status
-            );
+        let what = format!("{}/{}#{}", row.owner, row.repo, row.number);
+        // Claim the row first, so two dispatches never start two reviewers.
+        // `dispatched` with no agent yet means the reviewer is starting.
+        if self
+            .store
+            .set_review_pr_status_if(key, &["new"], "dispatched", None)?
+            == 0
+        {
+            bail!("{what} was already dispatched or dismissed");
         }
-        let agent = self.dispatch_review(&row.url)?;
-        self.store
-            .set_review_pr_status(key, "dispatched", Some(&agent.name))?;
+        let agent = match self.dispatch_review(&row.url) {
+            Ok(agent) => agent,
+            Err(e) => {
+                let _ = self
+                    .store
+                    .set_review_pr_status_if(key, &["dispatched"], "new", None);
+                return Err(e);
+            }
+        };
+        let named = self.store.set_review_pr_status_if(
+            key,
+            &["dispatched"],
+            "dispatched",
+            Some(&agent.name),
+        );
+        if !matches!(named, Ok(1)) {
+            // Dismissed while it started: nothing is left running.
+            let _ = self.remove(&agent.name);
+            bail!("{what} was dismissed while its reviewer started");
+        }
         Ok(agent)
     }
 

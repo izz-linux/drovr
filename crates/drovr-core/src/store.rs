@@ -393,18 +393,26 @@ impl Store {
     /// Databases from before the PRs view: pending `review` Inbox items
     /// become `new` rows.
     fn move_review_items(&self) -> Result<()> {
+        let any = self
+            .db
+            .prepare("SELECT 1 FROM inbox WHERE kind = 'review' AND status = 'pending' LIMIT 1")?
+            .exists([])?;
+        if !any {
+            return Ok(());
+        }
         for item in self.items(Some("pending"), i64::MAX)? {
             if item.kind != "review" {
                 continue;
             }
             let p = &item.payload;
             let url = p["url"].as_str().unwrap_or("");
-            if url.is_empty() {
+            let Some((owner, repo, number)) = crate::pr_review::parse(url) else {
+                self.resolve_item(item.id, "answered", "Couldn't move to PRs")?;
                 continue;
-            }
+            };
             let text = |k: &str| p[k].as_str().unwrap_or("").to_string();
             let key = crate::pr_review::key(url);
-            let (owner, repo, number) = crate::pr_review::parse(url).unwrap_or_default();
+            let url = crate::pr_review::canonical(url).unwrap_or_else(|| url.to_string());
             self.db.execute(
                 "INSERT OR IGNORE INTO review_prs (key, url, owner, repo, number, title, author, source, status, offered_ts) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'new', ?9)",
@@ -728,6 +736,26 @@ impl Store {
             params![key, status, now(), agent],
         )?;
         Ok(())
+    }
+
+    /// `set_review_pr_status`, but only for a row that's in one of the `from`
+    /// statuses. Returns how many rows changed.
+    pub fn set_review_pr_status_if(
+        &self,
+        key: &str,
+        from: &[&str],
+        to: &str,
+        agent: Option<&str>,
+    ) -> Result<usize> {
+        let mut changed = 0;
+        for status in from {
+            changed += self.db.execute(
+                "UPDATE review_prs SET status = ?3, decided_ts = ?4, agent = COALESCE(?5, agent) \
+                 WHERE key = ?1 AND status = ?2",
+                params![key, status, to, now(), agent],
+            )?;
+        }
+        Ok(changed)
     }
 
     pub fn update_review_pr_live(
@@ -1070,6 +1098,84 @@ mod tests {
             .collect();
         assert_eq!(left.len(), 2);
         assert!(left.contains(&1) && left.contains(&4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn guarded_transitions_only_move_matching_rows() {
+        let (st, dir) = review_store("guard");
+        st.upsert_review_pr(&pr(1)).unwrap();
+        let k = pr(1).key;
+        assert_eq!(
+            st.set_review_pr_status_if(&k, &["dispatched"], "closed", None)
+                .unwrap(),
+            0
+        );
+        assert_eq!(st.review_pr(&k).unwrap().unwrap().status, "new");
+        assert_eq!(
+            st.set_review_pr_status_if(&k, &["new"], "dispatched", None)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            st.set_review_pr_status_if(&k, &["new"], "dispatched", None)
+                .unwrap(),
+            0
+        );
+        let r = st.review_pr(&k).unwrap().unwrap();
+        assert_eq!((r.status.as_str(), r.agent.as_str()), ("dispatched", ""));
+        assert_eq!(
+            st.set_review_pr_status_if(&k, &["dispatched"], "dispatched", Some("rv"))
+                .unwrap(),
+            1
+        );
+        assert_eq!(st.review_pr(&k).unwrap().unwrap().agent, "rv");
+        assert_eq!(
+            st.set_review_pr_status_if(&k, &["new", "dispatched"], "closed", None)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            st.set_review_pr_status_if("nope", &["new"], "closed", None)
+                .unwrap(),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unmovable_review_items_are_resolved_once() {
+        let (st, dir) = review_store("badmigrate");
+        let none = st
+            .add_item("drovr", "review", "R", "", &[], &serde_json::json!({}))
+            .unwrap();
+        let bad = st
+            .add_item(
+                "drovr",
+                "review",
+                "R",
+                "",
+                &[],
+                &serde_json::json!({"url": "https://example.com/x"}),
+            )
+            .unwrap();
+        let good = st
+            .add_item("drovr", "review", "R", "", &[], &serde_json::json!({"url": "https://github.com/Acme/Api/pull/5/files", "title": "t"}))
+            .unwrap();
+        drop(st);
+        let st = Store::open(&dir.join("t.db")).unwrap();
+        for id in [none, bad] {
+            let i = st.item(id).unwrap().unwrap();
+            assert_eq!(
+                (i.status.as_str(), i.answer.as_str()),
+                ("answered", "Couldn't move to PRs")
+            );
+        }
+        assert_eq!(st.item(good).unwrap().unwrap().answer, "Moved to PRs");
+        let rows = st.review_prs(false).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].url, "https://github.com/Acme/Api/pull/5");
+        assert_eq!(rows[0].key, "https://github.com/acme/api/pull/5");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
