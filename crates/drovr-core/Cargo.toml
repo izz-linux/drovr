@@ -1,6 +1,6 @@
 [package]
 name = "drovr-core"
-version = "0.16.1"
+version = "0.16.2"
 description = "drovr's core: state, the agent engine, harnesses for Claude Code, OpenCode and OpenAI Codex, the coordination MCP server, lookups and reports"
 edition = "2021"
 license = "MIT"

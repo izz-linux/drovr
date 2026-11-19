@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.2](https://github.com/izz-linux/drovr/compare/v0.16.1...v0.16.2) (2026-11-19)
+
+
+### Bug Fixes
+
+* list Settings last in the sidebar, after Pipeline ([#88](https://github.com/izz-linux/drovr/issues/88)) ([17a9b45](https://github.com/izz-linux/drovr/commit/17a9b452855a7e402075736b456c4c9b4fa8aa95))
+
 ## [0.16.1](https://github.com/izz-linux/drovr/compare/v0.16.0...v0.16.1) (2026-11-19)
 
 
