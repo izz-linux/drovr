@@ -172,12 +172,27 @@ fn osascript(script: &str) -> Admin {
     }
 }
 
+/// Why the app's own location would make a link that stops working: run from
+/// the mounted .dmg, or from the random path macOS moves a quarantined app to.
+pub fn unstable_location(src: &Path) -> Option<&'static str> {
+    let s = src.to_string_lossy();
+    if s.contains("/AppTranslocation/") {
+        Some("macOS is running drovr from a temporary copy; move drovr.app to Applications, open it from there, then try again")
+    } else if s.starts_with("/Volumes/") {
+        Some("drovr is running from the disk image; drag it to Applications, open it from there, then try again")
+    } else {
+        None
+    }
+}
+
 pub fn cli_source() -> Result<PathBuf, String> {
     let src = drovr_core::engine::locate_cli();
-    if src.is_file() {
-        Ok(src)
-    } else {
-        Err("drovr's CLI isn't in this app bundle".into())
+    if !src.is_file() {
+        return Err("drovr's CLI isn't in this app bundle".into());
+    }
+    match unstable_location(&src) {
+        Some(why) => Err(why.into()),
+        None => Ok(src),
     }
 }
 
@@ -275,6 +290,18 @@ mod tests {
         let dir = d.0.join("sub");
         fs::create_dir(&dir).unwrap();
         assert_eq!(decide(&dir, &src), Plan::Refuse);
+    }
+
+    #[test]
+    fn temporary_app_locations_are_refused() {
+        for bad in [
+            "/private/var/folders/x/T/AppTranslocation/ABC/d/drovr.app/Contents/MacOS/drovr",
+            "/Volumes/drovr/drovr.app/Contents/MacOS/drovr",
+        ] {
+            assert!(super::unstable_location(Path::new(bad)).is_some(), "{bad}");
+        }
+        let good = Path::new("/Applications/drovr.app/Contents/MacOS/drovr");
+        assert!(super::unstable_location(good).is_none());
     }
 
     #[test]
