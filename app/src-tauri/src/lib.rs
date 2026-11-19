@@ -907,6 +907,9 @@ pub fn run() {
                     eprintln!("drovr: cleanup: {err:#}");
                 }
             }
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drovr_core::pr_review::poll(&e, false)
+            }));
         }
         std::thread::sleep(Duration::from_secs(15));
     });

@@ -25,6 +25,8 @@ usage:
   drovr group <name> <cwd> <goal...>         start a group with an orchestrator
   drovr dispatch <TICKET> [solo|group] [cwd] hand a Jira ticket to a new agent or a new group
   drovr dispatch <TICKET> to <group> [agent] hand it to an existing group (its lead by default)
+  drovr review <pr-url>                      start a read-only reviewer for a GitHub PR
+  drovr review poll                          look now for PRs to review (see [review] in the config)
   drovr prompt <agent> <text...>             send an agent a prompt
   drovr stop <agent> | resume <agent> [text] stop or resume an agent
   drovr rm <agent>                           stop and forget an agent
@@ -89,6 +91,20 @@ fn cleanup_lines(out: &drovr_core::cleanup::Outcome, dry: bool) -> Vec<String> {
         out.inbox_deleted
     ));
     lines
+}
+
+#[derive(Debug, PartialEq)]
+enum ReviewCmd {
+    Poll,
+    Url(String),
+}
+
+fn review_args(args: &[String]) -> Result<ReviewCmd> {
+    match args.get(1).map(String::as_str) {
+        Some("poll") if args.len() == 2 => Ok(ReviewCmd::Poll),
+        Some(url) if args.len() == 2 && url.starts_with("http") => Ok(ReviewCmd::Url(url.into())),
+        _ => bail!("{USAGE}"),
+    }
 }
 
 fn main() {
@@ -194,6 +210,24 @@ fn run() -> Result<()> {
             })?;
             println!("started {} in {}", a.name, a.cwd);
         }
+        "review" => match review_args(&args)? {
+            ReviewCmd::Url(url) => {
+                let a = engine.dispatch_review(&url)?;
+                println!("started {} in {}", a.name, a.cwd);
+            }
+            ReviewCmd::Poll => {
+                let found = drovr_core::pr_review::poll(&engine, true);
+                if found.is_empty() {
+                    println!("nothing new");
+                }
+                for f in found {
+                    println!(
+                        "offered {}/{}#{}: {} ({})",
+                        f.owner, f.repo, f.number, f.title, f.source
+                    );
+                }
+            }
+        },
         "adopt" => {
             let fork = args.iter().any(|a| a == "--fork");
             let rest_args: Vec<String> = args
@@ -439,5 +473,26 @@ mod tests {
                 "archived 1 plan(s) and removed 2 Inbox item(s)"
             ]
         );
+    }
+
+    #[test]
+    fn review_args_forms() {
+        let url = "https://github.com/o/r/pull/1";
+        assert_eq!(
+            review_args(&strings(&["review", "poll"])).unwrap(),
+            ReviewCmd::Poll
+        );
+        assert_eq!(
+            review_args(&strings(&["review", url])).unwrap(),
+            ReviewCmd::Url(url.into())
+        );
+        for bad in [
+            &["review"][..],
+            &["review", "nope"],
+            &["review", "poll", "x"],
+            &["review", url, "x"],
+        ] {
+            assert!(review_args(&strings(bad)).is_err(), "{bad:?}");
+        }
     }
 }

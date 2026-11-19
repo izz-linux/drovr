@@ -81,6 +81,14 @@ tidy_on_close = true               # remove stopped stage agents when the last h
 review = false                     # pair each build agent with a reviewer that can't edit files and proposes diffs to it
 review_skill = ""                  # a SKILL.md the reviewers follow, e.g. "~/.claude/skills/code-review/SKILL.md"
 
+# [review]                      # PRs to review, from Slack links and team review requests; offered in the Inbox once each
+# slack_channels = ["#sre-reviews"]
+# github_teams = ["my-org/sre"]  # org/team
+# poll_secs = 600               # 0 = off; needs a channel or a team
+# auto_dispatch = false         # true: start the reviewer without asking
+# remove_when_closed = true     # remove an idle reviewer and its worktree once its PR merges or closes
+# repos_dir = ""                # local clones live at <repos_dir>/<repo>; empty = defaults.cwd
+
 [retro]                       # a retro you start from a ticket's timeline or Pipeline
 model = ""                    # the retro agent's model; empty = the default
 skills_dir = "~/.claude/skills"   # where approved skill proposals are written
