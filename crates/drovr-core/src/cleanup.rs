@@ -20,29 +20,56 @@ pub struct Outcome {
     /// (name in the plans folder, name under `archive/`).
     pub archived: Vec<(String, String)>,
     pub inbox_deleted: usize,
+    /// Entries that couldn't be archived, as `name: reason`.
+    pub errors: Vec<String>,
+}
+
+/// Whether `root` may be swept: absolute, and neither `/` nor `home`.
+fn safe_root(root: &Path, home: &Path) -> bool {
+    root.is_absolute() && root.components().count() > 1 && !root.components().eq(home.components())
 }
 
 /// Archive old plans and prune resolved Inbox items. With `dry`, report what
 /// would happen and change nothing.
+///
+/// Problems with one entry, an unsafe plans folder, or either half of the
+/// work go in `Outcome::errors` and the rest carries on. It never returns
+/// `Err` today; the `Result` is for callers that want to propagate one later.
 pub fn run(cfg: &Config, store: &Store, now: f64, dry: bool) -> Result<Outcome> {
     let mut out = Outcome::default();
     if cfg.reports.archive_after_days > 0 {
         let cutoff = now - f64::from(cfg.reports.archive_after_days) * DAY;
-        archive(cfg, store, cutoff, dry, &mut out)?;
+        let root = cfg.reports.path();
+        if !safe_root(&root, &crate::config::user_home()) {
+            out.errors.push(format!(
+                "plans folder {} isn't an absolute path below your home folder; not archiving",
+                root.display()
+            ));
+        } else {
+            archive(&root, store, cutoff, dry, &mut out);
+        }
     }
     if cfg.inbox.keep_days > 0 {
         let cutoff = now - f64::from(cfg.inbox.keep_days) * DAY;
-        out.inbox_deleted = store.prune_items(cutoff, dry)?;
+        match store.prune_items(cutoff, dry) {
+            Ok(n) => out.inbox_deleted = n,
+            Err(e) => out.errors.push(format!("inbox: {e}")),
+        }
     }
     Ok(out)
 }
 
-fn archive(cfg: &Config, store: &Store, cutoff: f64, dry: bool, out: &mut Outcome) -> Result<()> {
-    let root = cfg.reports.path();
-    let Ok(read) = std::fs::read_dir(&root) else {
-        return Ok(());
+fn archive(root: &Path, store: &Store, cutoff: f64, dry: bool, out: &mut Outcome) {
+    let Ok(read) = std::fs::read_dir(root) else {
+        return;
     };
-    let live = live_folders(store)?;
+    let live = match live_folders(store) {
+        Ok(l) => l,
+        Err(e) => {
+            out.errors.push(format!("groups: {e}"));
+            return;
+        }
+    };
     let mut entries: Vec<_> = read.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     let archive_dir = root.join(ARCHIVE);
@@ -55,7 +82,7 @@ fn archive(cfg: &Config, store: &Store, cutoff: f64, dry: bool, out: &mut Outcom
             || name.starts_with('.')
             || name == ARCHIVE
             || name == "retros"
-            || live.contains(&name)
+            || live.contains(&name.to_lowercase())
         {
             continue;
         }
@@ -65,31 +92,53 @@ fn archive(cfg: &Config, store: &Store, cutoff: f64, dry: bool, out: &mut Outcom
         }
         let target = free_name(&archive_dir, &name, kind.is_dir());
         if !dry {
-            std::fs::create_dir_all(&archive_dir)
-                .with_context(|| format!("create {}", archive_dir.display()))?;
-            std::fs::rename(&path, archive_dir.join(&target))
-                .with_context(|| format!("archive {}", path.display()))?;
-            let (from, to) = (path.display().to_string(), archive_dir.join(&target));
-            let to = to.display().to_string();
-            if kind.is_dir() {
-                let sep = std::path::MAIN_SEPARATOR;
-                store.move_report_meta(&format!("{from}{sep}"), &format!("{to}{sep}"))?;
-            } else {
-                store.move_report(&from, &to)?;
+            match move_entry(store, &path, &archive_dir, &target, kind.is_dir()) {
+                Err(e) => {
+                    out.errors.push(format!("{name}: {e:#}"));
+                    continue;
+                }
+                Ok(Some(e)) => out.errors.push(format!("{name}: {e:#}")),
+                Ok(None) => {}
             }
         }
         out.archived.push((name, target));
     }
-    Ok(())
 }
 
-/// Folder names that belong to a group that still exists.
+/// Rename `path` to `archive_dir/target`, then follow it with the report rows.
+/// `Err` means it didn't move; `Ok(Some(_))` means it moved but the rows
+/// weren't updated.
+fn move_entry(
+    store: &Store,
+    path: &Path,
+    archive_dir: &Path,
+    target: &str,
+    is_dir: bool,
+) -> Result<Option<anyhow::Error>> {
+    std::fs::create_dir_all(archive_dir)
+        .with_context(|| format!("create {}", archive_dir.display()))?;
+    let to = archive_dir.join(target);
+    std::fs::rename(path, &to).with_context(|| format!("archive {}", path.display()))?;
+    let (from, to) = (path.display().to_string(), to.display().to_string());
+    let rows = if is_dir {
+        let sep = std::path::MAIN_SEPARATOR;
+        store.move_report_meta(&format!("{from}{sep}"), &format!("{to}{sep}"))
+    } else {
+        store.move_report(&from, &to)
+    };
+    Ok(rows
+        .err()
+        .map(|e| e.context("moved, but its reports' records weren't updated")))
+}
+
+/// Lowercased folder names that belong to a group that still exists. Disks
+/// on macOS ignore case, so `Live` and `live` are one folder.
 fn live_folders(store: &Store) -> Result<HashSet<String>> {
     let mut names = HashSet::new();
     for g in store.groups()? {
-        names.insert(g.name.clone());
+        names.insert(g.name.to_lowercase());
         let first = Path::new(&g.plans_dir).components().find_map(|c| match c {
-            Component::Normal(n) => Some(n.to_string_lossy().to_string()),
+            Component::Normal(n) => Some(n.to_string_lossy().to_lowercase()),
             _ => None,
         });
         if let Some(first) = first {
@@ -100,41 +149,44 @@ fn live_folders(store: &Store) -> Result<HashSet<String>> {
 }
 
 /// The newest mtime (Unix seconds) of any file under `path`, or of `path`
-/// itself when it's a file or holds none. Symlinks aren't followed.
+/// itself when it's a file or holds none. Symlinks aren't followed. Anything
+/// that can't be read counts as brand new (`f64::MAX`), so it's never archived.
 fn newest(path: &Path) -> f64 {
-    fn mtime(m: &std::fs::Metadata) -> f64 {
-        m.modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map_or(0.0, |d| d.as_secs_f64())
+    fn mtime(m: &std::fs::Metadata) -> Option<f64> {
+        let t = m.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+        Some(t.as_secs_f64())
     }
-    fn walk(dir: &Path, best: &mut Option<f64>) {
-        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let Ok(m) = std::fs::symlink_metadata(e.path()) else {
-                continue;
-            };
+    fn walk(dir: &Path, best: &mut Option<f64>) -> Option<()> {
+        for e in std::fs::read_dir(dir).ok()? {
+            let path = e.ok()?.path();
+            let m = std::fs::symlink_metadata(&path).ok()?;
             if m.is_dir() {
-                walk(&e.path(), best);
+                walk(&path, best)?;
             } else if m.is_file() {
-                *best = Some(best.map_or(mtime(&m), |b| b.max(mtime(&m))));
+                let t = mtime(&m)?;
+                *best = Some(best.map_or(t, |b| b.max(t)));
             }
         }
+        Some(())
     }
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return f64::MAX;
     };
     if !meta.is_dir() {
-        return mtime(&meta);
+        return mtime(&meta).unwrap_or(f64::MAX);
     }
     let mut best = None;
-    walk(path, &mut best);
-    best.unwrap_or_else(|| mtime(&meta))
+    if walk(path, &mut best).is_none() {
+        return f64::MAX;
+    }
+    best.or_else(|| mtime(&meta)).unwrap_or(f64::MAX)
 }
 
 /// `name` if `dir` has nothing by that name, else `name-2`, `name-3`, ...
 /// with the number before a file's extension.
 fn free_name(dir: &Path, name: &str, is_dir: bool) -> String {
-    if !dir.join(name).exists() {
+    let taken = |n: &str| dir.join(n).symlink_metadata().is_ok();
+    if !taken(name) {
         return name.to_string();
     }
     let p = Path::new(name);
@@ -150,7 +202,7 @@ fn free_name(dir: &Path, name: &str, is_dir: bool) -> String {
     };
     (2..)
         .map(|n| format!("{stem}-{n}{ext}"))
-        .find(|c| !dir.join(c).exists())
+        .find(|c| !taken(c))
         .expect("an unused name")
 }
 
@@ -164,11 +216,12 @@ pub fn due(home: &Path, now: f64) -> bool {
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v["last_run"].as_f64())
-        .is_none_or(|last| now - last >= DAY)
+        .is_none_or(|last| last > now || now - last >= DAY)
 }
 
 pub fn mark_ran(home: &Path, now: f64) -> Result<()> {
     let file = gate_file(home);
+    std::fs::create_dir_all(home).with_context(|| format!("create {}", home.display()))?;
     std::fs::write(&file, serde_json::json!({ "last_run": now }).to_string())
         .with_context(|| format!("write {}", file.display()))
 }
@@ -521,6 +574,155 @@ mod tests {
         assert!(o.archived.is_empty());
         assert!(outside.join("o.html").is_file());
         assert!(e.plans.join("link").exists());
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[test]
+    fn group_names_match_case_insensitively() {
+        let e = env("case");
+        write(&e, "live/l.html", 90.0);
+        e.store.add_group("Live", "g", "", "", "", false).unwrap();
+        let o = run(&e.cfg, &e.store, e.now, false).unwrap();
+        assert!(o.archived.is_empty(), "{:?}", o.archived);
+        assert!(e.plans.join("live/l.html").is_file());
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[test]
+    fn unsafe_roots_are_refused() {
+        let home = Path::new("/Users/someone");
+        assert!(safe_root(Path::new("/Users/someone/plans"), home));
+        assert!(!safe_root(Path::new("/"), home));
+        assert!(!safe_root(home, home));
+        assert!(!safe_root(Path::new("/Users/someone/"), home));
+        assert!(!safe_root(Path::new("plans"), home));
+        assert!(!safe_root(Path::new(""), home));
+    }
+
+    #[test]
+    fn a_relative_plans_dir_is_left_alone_but_the_inbox_still_prunes() {
+        let mut e = env("relative");
+        let rel = format!("drovr-cleanup-rel-{}", std::process::id());
+        let rel_path = PathBuf::from(&rel);
+        let _ = std::fs::remove_dir_all(&rel_path);
+        std::fs::create_dir_all(rel_path.join("old")).unwrap();
+        let f = rel_path.join("old/o.html");
+        std::fs::write(&f, "x").unwrap();
+        age(&f, e.now, 90.0);
+        e.cfg.reports.dir = rel;
+        e.cfg.inbox.keep_days = 10;
+        let id = add(&e);
+        e.store.resolve_item(id, "dismissed", "").unwrap();
+        set_item(&e, id, e.now - 20.0 * DAY, Some(e.now - 20.0 * DAY), 0);
+        let o = run(&e.cfg, &e.store, e.now, false).unwrap();
+        let moved = rel_path.join("archive").exists();
+        let stayed = f.is_file();
+        let _ = std::fs::remove_dir_all(&rel_path);
+        assert!(stayed && !moved);
+        assert!(o.archived.is_empty());
+        assert_eq!(o.errors.len(), 1, "{:?}", o.errors);
+        assert_eq!(o.inbox_deleted, 1);
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[cfg(unix)]
+    fn is_root() -> bool {
+        // SAFETY: geteuid has no preconditions.
+        unsafe { libc::geteuid() == 0 }
+    }
+
+    #[cfg(unix)]
+    fn chmod(p: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_subfolder_counts_as_fresh() {
+        if is_root() {
+            return;
+        }
+        let e = env("unreadable");
+        write(&e, "old/o.html", 90.0);
+        let bad = e.plans.join("old/bad");
+        std::fs::create_dir_all(&bad).unwrap();
+        chmod(&bad, 0o000);
+        let o = run(&e.cfg, &e.store, e.now, false).unwrap();
+        chmod(&bad, 0o755);
+        assert!(o.archived.is_empty(), "{:?}", o.archived);
+        assert!(e.plans.join("old/o.html").is_file());
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_failed_move_does_not_stop_the_rest() {
+        if is_root() {
+            return;
+        }
+        let e = env("partial");
+        write(&e, "a-ok/o.html", 90.0);
+        write(&e, "locked/o.html", 90.0);
+        write(&e, "z-ok/o.html", 90.0);
+        chmod(&e.plans.join("locked"), 0o555);
+        let o = run(&e.cfg, &e.store, e.now, false).unwrap();
+        chmod(&e.plans.join("locked"), 0o755);
+        assert!(e.plans.join("archive/a-ok/o.html").is_file());
+        assert!(e.plans.join("archive/z-ok/o.html").is_file());
+        assert!(e.plans.join("locked/o.html").is_file());
+        assert_eq!(o.archived.len(), 2);
+        assert_eq!(o.errors.len(), 1, "{:?}", o.errors);
+        assert!(o.errors[0].starts_with("locked: "), "{:?}", o.errors);
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[test]
+    fn gate_survives_a_corrupt_future_or_missing_file() {
+        let e = env("gate2");
+        std::fs::write(e.dir.join(FILE), "{not json").unwrap();
+        assert!(due(&e.dir, e.now));
+        mark_ran(&e.dir, e.now + 10.0 * DAY).unwrap();
+        assert!(due(&e.dir, e.now));
+        let fresh = e.dir.join("not/yet/there");
+        mark_ran(&fresh, e.now).unwrap();
+        assert!(!due(&fresh, e.now + 60.0));
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_in_archive_counts_as_taken() {
+        let e = env("dangling");
+        std::fs::create_dir_all(e.plans.join("archive")).unwrap();
+        std::os::unix::fs::symlink("/nonexistent/target", e.plans.join("archive/x")).unwrap();
+        write(&e, "x/g.html", 40.0);
+        let o = run(&e.cfg, &e.store, e.now, false).unwrap();
+        assert_eq!(names(&o), vec![("x", "x-2")]);
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[test]
+    fn a_folder_move_leaves_sibling_prefixes_alone() {
+        let e = env("siblings");
+        let a = write(&e, "a/r.html", 40.0);
+        let ab = write(&e, "ab/r.html", 1.0);
+        for p in [&a, &ab] {
+            e.store
+                .publish_report(&p.display().to_string(), "x", "T", "S")
+                .unwrap();
+        }
+        run(&e.cfg, &e.store, e.now, false).unwrap();
+        let paths: Vec<String> = e
+            .store
+            .report_meta()
+            .unwrap()
+            .into_iter()
+            .map(|m| m.path)
+            .collect();
+        assert!(paths.contains(&e.plans.join("archive/a/r.html").display().to_string()));
+        assert!(paths.contains(&ab.display().to_string()), "{paths:?}");
+        assert_eq!(paths.len(), 2);
         let _ = std::fs::remove_dir_all(&e.dir);
     }
 }
