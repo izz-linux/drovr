@@ -31,8 +31,8 @@
     { id: "bus", label: "Message bus", key: "6" },
     { id: "review", label: "Code review", key: "7" },
     ...(app.defaults?.review_enabled || app.snap.review_prs.length ? [{ id: "prs" as View, label: "PRs", key: "8" }] : []),
-    { id: "settings", label: "Settings", key: "," },
     ...(app.defaults?.workflow ? [{ id: "pipeline" as View, label: "Pipeline", key: "9" }] : []),
+    { id: "settings", label: "Settings", key: "," },
   ]);
 
   // Both ⌘ and Ctrl work; show the one people press on this platform.
