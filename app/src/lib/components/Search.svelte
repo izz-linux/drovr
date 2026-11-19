@@ -20,13 +20,13 @@
 <div class="page">
   <form class="bar" onsubmit={(e) => { e.preventDefault(); runSearch(); }}>
     <div class="tabs">
-      <button type="button" class:on={s.source === "slack"} onclick={() => (s.source = "slack")}>Slack</button>
-      <button type="button" class:on={s.source === "confluence"} onclick={() => (s.source = "confluence")}>Confluence</button>
-      <button type="button" class:on={s.source === "ask"} onclick={() => (s.source = "ask")}>Ask (all MCPs)</button>
+      <button title="Search Slack messages" type="button" class:on={s.source === "slack"} onclick={() => (s.source = "slack")}>Slack</button>
+      <button title="Search Confluence pages" type="button" class:on={s.source === "confluence"} onclick={() => (s.source = "confluence")}>Confluence</button>
+      <button title="Ask a question; an agent answers with all your MCP tools" type="button" class:on={s.source === "ask"} onclick={() => (s.source = "ask")}>Ask (all MCPs)</button>
     </div>
     <input class="grow" bind:value={s.query}
       placeholder={s.source === "ask" ? "e.g. What did #payments decide about refunds last week? Link the Confluence spec." : "Search…"} />
-    <button class="primary" type="submit" disabled={s.loading}>{s.loading ? "Working…" : s.source === "ask" ? "Ask" : "Search"}</button>
+    <button title="Run it" class="primary" type="submit" disabled={s.loading}>{s.loading ? "Working…" : s.source === "ask" ? "Ask" : "Search"}</button>
   </form>
   <div class="row share muted">
     Send results to
@@ -44,8 +44,8 @@
       {#each s.slack as m}
         <div class="card">
           <div class="row"><strong>#{m.channel}</strong><span class="muted">{m.user}</span><span class="grow"></span>
-            {#if m.permalink}<button class="ghost" onclick={() => api.openUrl(m.permalink)}>open</button>{/if}
-            <button class="ghost" onclick={() => share(`From Slack #${m.channel} (${m.user}): ${m.text}\n${m.permalink}`)}>send to agent</button>
+            {#if m.permalink}<button title="Open this message in Slack" class="ghost" onclick={() => api.openUrl(m.permalink)}>open</button>{/if}
+            <button title="Send this message to an agent" class="ghost" onclick={() => share(`From Slack #${m.channel} (${m.user}): ${m.text}\n${m.permalink}`)}>send to agent</button>
           </div>
           <div class="md">{@html md(m.text)}</div>
         </div>
@@ -62,8 +62,8 @@
         <div class="pagebody">
           {#if s.page}
             <div class="row"><h2 class="grow">{s.page.title}</h2>
-              {#if s.page.url}<button onclick={() => api.openUrl(s.page!.url)}>Open</button>{/if}
-              <button onclick={() => share(`Confluence page "${s.page!.title}" ${s.page!.url}\n\n${s.page!.body.slice(0, 6000)}`)}>Send to agent</button>
+              {#if s.page.url}<button title="Open this page in Confluence" onclick={() => api.openUrl(s.page!.url)}>Open</button>{/if}
+              <button title="Send this page to an agent" onclick={() => share(`Confluence page "${s.page!.title}" ${s.page!.url}\n\n${s.page!.body.slice(0, 6000)}`)}>Send to agent</button>
             </div>
             <div class="md">{@html md(s.page.body)}</div>
           {/if}
@@ -71,7 +71,7 @@
       </div>
     {:else if s.answer}
       <div class="card">
-        <div class="row"><span class="grow muted">Answer</span><button class="ghost" onclick={() => share(s.answer)}>send to agent</button></div>
+        <div class="row"><span class="grow muted">Answer</span><button title="Send this answer to an agent" class="ghost" onclick={() => share(s.answer)}>send to agent</button></div>
         <div class="md">{@html md(s.answer)}</div>
       </div>
     {:else}
@@ -84,7 +84,6 @@
   .page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .bar { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); align-items: center; }
   .tabs { display: flex; gap: 2px; }
-  .tabs button.on { border-color: var(--accent); color: var(--accent); }
   .share { padding: 6px 14px; font-size: 12px; border-bottom: 1px solid var(--border); }
   .pad { padding: 8px 14px; }
   .body { flex: 1; padding: 12px 14px; min-height: 0; }

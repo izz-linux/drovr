@@ -117,7 +117,7 @@
   <div class="row top">
     <h2 class="grow">Inbox</h2>
     {#if items.length}<span class="muted keys">↓↑ move · 1–9 answer · A allow · D deny</span>{/if}
-    <label class="row check"><input type="checkbox" bind:checked={showResolved} /> show resolved</label>
+    <label class="row check" title="List what you've already answered, rejected or dismissed"><input type="checkbox" bind:checked={showResolved} /> show resolved</label>
   </div>
 
   {#each items as item (item.id)}
@@ -126,7 +126,7 @@
       aria-current={item.id === current?.id ? "true" : undefined} bind:this={cards[item.id]} onclick={() => (at = items.indexOf(item))}>
       <div class="row">
         <span class="pill">{kinds[item.kind] ?? item.kind}</span>
-        <button class="ghost agent" onclick={() => select(item.agent)}>{item.agent}</button>
+        <button title="Go to this agent's output" class="ghost agent" onclick={() => select(item.agent)}>{item.agent}</button>
         <span class="muted grow">#{item.id} · {ago(item.ts)} ago</span>
         <button class="ghost" title="Dismiss without answering" onclick={() => once(item.id, () => api.dismiss(item.id))}>✕</button>
       </div>
@@ -139,13 +139,13 @@
           <PushPreview command={commands[item.id] ?? item.payload.command} cwd={item.payload.cwd ?? ""} namedCwd={true} />
         {/if}
         <div class="row actions">
-          <button class="primary" disabled={running[item.id]} onclick={() => run(item, "local")}>{running[item.id] ? "Running…" : "Run & return output"}</button>
+          <button title="Run the command in the agent's folder and send the output back to it" class="primary" disabled={running[item.id]} onclick={() => run(item, "local")}>{running[item.id] ? "Running…" : "Run & return output"}</button>
           <button onclick={() => runInTerminal(item)} title="Type it into the agent's terminal in drovr; you press Enter">Run in terminal</button>
-          {#if app.snap.herdr}<button disabled={running[item.id]} onclick={() => run(item, "herdr")}>Run in herdr pane</button>{/if}
-          <button onclick={() => navigator.clipboard.writeText(commands[item.id] ?? item.payload.command).then(() => toast("Copied. Mark as run when you've run it."))}>Copy</button>
+          {#if app.snap.herdr}<button title="Run the command in a herdr pane, where you can watch it" disabled={running[item.id]} onclick={() => run(item, "herdr")}>Run in herdr pane</button>{/if}
+          <button title="Copy the command to run it yourself; then mark it as run" onclick={() => navigator.clipboard.writeText(commands[item.id] ?? item.payload.command).then(() => toast("Copied. Mark as run when you've run it."))}>Copy</button>
           <input class="grow" placeholder="Output or note for Mark as run, or reason to reject (optional)" bind:value={drafts[item.id]} />
           <button title="You ran it yourself; tells the agent, with your note, or else what its terminal printed after Run in terminal" onclick={() => markRan(item)}>Mark as run</button>
-          <button class="danger" onclick={() => once(item.id, () => api.reject(item.id, drafts[item.id] ?? ""))}>Reject</button>
+          <button title="Refuse it. Your note above goes back to the agent." class="danger" onclick={() => once(item.id, () => api.reject(item.id, drafts[item.id] ?? ""))}>Reject</button>
         </div>
       {:else if item.kind === "permission"}
         <h3><code>{item.title}</code></h3>
@@ -154,30 +154,30 @@
           <PushPreview command={item.payload.command} cwd={item.payload.cwd ?? ""} namedCwd={false} />
         {/if}
         <div class="row actions">
-          <button class="primary" onclick={() => allow(item)}>Allow <span class="kbd">A</span></button>
+          <button title="Let the agent use this tool this time (A)" class="primary" onclick={() => allow(item)}>Allow <span class="kbd">A</span></button>
           <input class="grow" placeholder="Tell it why, or what to do instead (optional)" bind:value={drafts[item.id]} />
-          <button class="danger" onclick={() => deny(item)}>Deny <span class="kbd">D</span></button>
+          <button title="Refuse this tool use (D)" class="danger" onclick={() => deny(item)}>Deny <span class="kbd">D</span></button>
         </div>
       {:else if item.kind === "spawn"}
         <h3>{item.title}</h3>
         <div class="md">{@html md(item.body)}</div>
         <div class="row actions">
-          <button class="primary" onclick={() => startWorker(item)}>Start worker <span class="kbd">A</span></button>
+          <button title="Start the worker the lead asked for (A)" class="primary" onclick={() => startWorker(item)}>Start worker <span class="kbd">A</span></button>
           <span class="muted small">on</span>
           <input style="max-width: 200px" placeholder={item.payload.default_model || "the default model"} value={models[item.id] ?? item.payload.model ?? ""} oninput={(e) => (models[item.id] = e.currentTarget.value)} />
-          <button class="danger" onclick={() => declineWorker(item)}>Decline <span class="kbd">D</span></button>
+          <button title="Don't start this worker (D)" class="danger" onclick={() => declineWorker(item)}>Decline <span class="kbd">D</span></button>
         </div>
       {:else if item.kind === "handoff"}
         <h3>{item.title}</h3>
         <details class="handoff" open><summary class="muted small">{item.payload.file}</summary><div class="md">{@html md(item.body)}</div></details>
         <div class="row actions">
-          <button class="primary" disabled={running[item.id]} onclick={() => approveHandoff(item)}>Approve</button>
+          <button title="Accept this stage's work; the next stage starts from it" class="primary" disabled={running[item.id]} onclick={() => approveHandoff(item)}>Approve</button>
           {#if item.payload.next}
             <span class="muted small">{item.payload.next} runs on</span>
             <input style="max-width: 200px" placeholder="the default model" value={models[item.id] ?? item.payload.next_model ?? ""} oninput={(e) => (models[item.id] = e.currentTarget.value)} />
           {/if}
           <input class="grow" placeholder="Notes for sending it back" bind:value={drafts[item.id]} />
-          <button class="danger" onclick={() => once(item.id, () => api.reject(item.id, drafts[item.id] ?? ""), "Sent back with your notes")}>Send back</button>
+          <button title="Send it back to the agent with your notes" class="danger" onclick={() => once(item.id, () => api.reject(item.id, drafts[item.id] ?? ""), "Sent back with your notes")}>Send back</button>
         </div>
       {:else if item.kind === "jira"}
         <h3>{item.title}</h3>
@@ -190,7 +190,7 @@
         {/if}
         <div class="muted small">Nothing is posted until you do. drovr runs your <code>jira.{item.payload.action === "comment" ? "comment_cmd" : "transition_cmd"}</code>.</div>
         <div class="row actions">
-          <button class="primary" disabled={running[item.id]} onclick={() => postJira(item)}>{running[item.id] ? "Posting…" : "Post to Jira"}</button>
+          <button title={item.payload.action === "comment" ? "Post this comment to the Jira ticket" : "Move the ticket in Jira now, with your transition_cmd"} class="primary" disabled={running[item.id]} onclick={() => postJira(item)}>{running[item.id] ? "Posting…" : "Post to Jira"}</button>
           <button onclick={() => once(item.id, () => api.dismiss(item.id))}>Discard</button>
         </div>
       {:else if item.kind === "confluence"}
@@ -209,17 +209,17 @@
           <iframe class="confluence" sandbox="" title={`Preview of ${item.payload.title}`} srcdoc={item.payload.html}></iframe>
         </details>
         <div class="row actions">
-          <button class="primary" disabled={running[item.id]} onclick={() => once(item.id, () => api.answer(item.id, "approve"), "Saved as a draft in Confluence")}>{running[item.id] ? "Saving…" : "Save as draft in Confluence"}</button>
+          <button title="Save this page as a Confluence draft; nothing is published" class="primary" disabled={running[item.id]} onclick={() => once(item.id, () => api.answer(item.id, "approve"), "Saved as a draft in Confluence")}>{running[item.id] ? "Saving…" : "Save as draft in Confluence"}</button>
           <input class="grow" placeholder="Notes for sending it back" bind:value={drafts[item.id]} />
-          <button class="danger" onclick={() => once(item.id, () => api.reject(item.id, drafts[item.id] ?? ""), "Sent back with your notes")}>Send back</button>
+          <button title="Send it back to the agent with your notes" class="danger" onclick={() => once(item.id, () => api.reject(item.id, drafts[item.id] ?? ""), "Sent back with your notes")}>Send back</button>
         </div>
         <div class="muted small">drovr reads the page again before saving: if it changed since this diff, you get the new diff instead. Nothing is published.</div>
       {:else if item.kind === "done"}
         <h3>{item.title}</h3>
         <div class="md">{@html md(item.body)}</div>
         <div class="row actions">
-          <button onclick={() => { app.selected = item.agent; app.view = "review"; }}>Review changes</button>
-          <button onclick={() => once(item.id, () => api.dismiss(item.id))}>Acknowledge</button>
+          <button title="See what the agent changed, with diffs" onclick={() => { app.selected = item.agent; app.view = "review"; }}>Review changes</button>
+          <button title="Mark it read and take it off the Inbox" onclick={() => once(item.id, () => api.dismiss(item.id))}>Acknowledge</button>
         </div>
       {:else}
         <h3>{item.title}</h3>
@@ -234,7 +234,7 @@
         <div class="row actions">
           <input class="grow" placeholder="Or write an answer…" bind:value={drafts[item.id]}
             onkeydown={(e) => e.key === "Enter" && drafts[item.id] && once(item.id, () => api.answer(item.id, drafts[item.id]), "Answer sent")} />
-          <button class="primary" disabled={!drafts[item.id]} onclick={() => once(item.id, () => api.answer(item.id, drafts[item.id]), "Answer sent")}>Answer</button>
+          <button title="Send your answer to the agent" class="primary" disabled={!drafts[item.id]} onclick={() => once(item.id, () => api.answer(item.id, drafts[item.id]), "Answer sent")}>Answer</button>
         </div>
       {/if}
     </article>
