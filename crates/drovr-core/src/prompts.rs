@@ -211,9 +211,42 @@ fn first_line(text: &str) -> String {
     }
 }
 
+/// A standing-instructions file's text: without the YAML frontmatter a
+/// SKILL.md starts with, and trimmed.
+pub fn instruction_text(raw: &str) -> String {
+    let text = raw.trim_start();
+    let mut lines = text.split_inclusive('\n');
+    if let Some(first) = lines.next() {
+        if first.trim_end() == "---" {
+            let mut offset = first.len();
+            for line in lines {
+                offset += line.len();
+                if line.trim_end() == "---" {
+                    return text[offset..].trim().to_string();
+                }
+            }
+        }
+    }
+    text.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instruction_text_strips_frontmatter() {
+        for (raw, want) in [
+            (
+                "---\nname: x\ndescription: y\n---\n\n# Rules\n\na\n\n---\n\nb\n",
+                "# Rules\n\na\n\n---\n\nb",
+            ),
+            ("# Rules\nno front", "# Rules\nno front"),
+            ("  \n text \n", "text"),
+        ] {
+            assert_eq!(instruction_text(raw), want, "{raw:?}");
+        }
+    }
 
     #[test]
     fn reviews_are_explained_to_the_lead_builder_and_reviewer() {

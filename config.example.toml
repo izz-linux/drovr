@@ -11,6 +11,7 @@ worktrees = false             # true = every agent gets its own `git worktree` +
 auto_wake = true              # re-prompt idle agents when a message or answer arrives
 max_budget_usd = 0            # per run; 0 = no cap
 disallowed_tools = []         # e.g. ["Artifact"] to keep reports inside drovr
+# instructions = ["~/.claude/skills/my-rules/SKILL.md"]   # added to every agent's system prompt
 auto_resume = false           # resume headless runs a reboot/crash interrupted, without asking
 your_name = ""                # what agents call you ("Notes from Izz", ask_izz); empty = "the human" and ask_human
 cost_warning_usd = 10         # flag an agent in the app once its runs cost more than this; 0 = off

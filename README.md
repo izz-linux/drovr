@@ -643,6 +643,7 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `defaults.max_budget_usd` | `0` (no cap) | Cost cap for each headless Claude Code run |
 | `defaults.auto_resume` | `false` | Resume headless runs a reboot or crash interrupted, as soon as drovr notices, instead of waiting for you |
 | `defaults.disallowed_tools` | `[]` | Tools agents may never use, e.g. `["Artifact"]` |
+| `defaults.instructions` | `[]` | Files added to every agent's system prompt (lead, workers, stages, reviewers, solo; every harness), e.g. a standing-rules skill. Edits apply on the next run. |
 | `defaults.your_name` | `""` | What agents call you: "Notes from Izz", "Izz answered #3", and the tool they ask you with, `ask_izz`. Their tool descriptions and instructions use the name instead of "the human". Empty, it's "the human" and `ask_human`, so a config you share names nobody. Agents that learned the tool under an earlier name can still call it. |
 | `claude.command`, `claude.extra_args` | `"claude"`, `[]` | How agents are launched |
 | `opencode.command`, `opencode.model`, `opencode.agent`, `opencode.extra_args` | `"opencode"`, `""`, `""`, `[]` | How OpenCode agents are launched (OpenCode 2); the model is `provider/model`, and empty ones are OpenCode's defaults. `extra_args` go to headless runs only |

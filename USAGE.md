@@ -185,6 +185,15 @@ drovr ask "What did #sre decide about the payments API last week?"
 2. Agents pick it up on their next run, wherever they work. Leads and solo agents save to it. Workers send what they'd save to their lead ("For memory: …"), and the lead decides.
 3. Keep `MEMORY.md` under 200 lines; past that, Claude Code stops loading it.
 
+### Give every agent your standing rules
+
+Set `defaults.instructions` to a list of files, and drovr adds their contents to every agent's system prompt, after its own instructions: leads, workers, stage agents, reviewers and solo agents, on every harness. It covers agents started without a brief too, which is where a pointer to a skill gets lost. With `defaults.worktrees` on, agents work under drovr's worktrees folder, so a `CLAUDE.md` or `AGENTS.md` in a folder above your repos never loads, which is why this exists. A skill's frontmatter is left out. drovr reads the files before each run, so an edit applies on the agent's next run. A file drovr can't read is reported by the agent, which tells you, so a typo doesn't silently drop your rules.
+
+```toml
+[defaults]
+instructions = ["~/.claude/skills/my-rules/SKILL.md", "~/rules/commits.md"]
+```
+
 ### Stop, resume and clean up
 
 - **Stop:** **Stop** ends an agent's current run, and **Resume** continues the same conversation.

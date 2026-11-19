@@ -359,6 +359,10 @@ pub struct Defaults {
     /// Tools drovr agents may never use, e.g. ["Artifact"] so reports
     /// stay in drovr instead of being published elsewhere.
     pub disallowed_tools: Vec<String>,
+    /// Files whose contents go into every agent's system prompt, after
+    /// drovr's own instructions (`~` allowed). Edits apply on each agent's
+    /// next run.
+    pub instructions: Vec<String>,
     /// What agents call you ("Notes from Izz", "Izz answered #3"). Empty:
     /// "the human", so a shared config names nobody.
     pub your_name: String,
@@ -641,6 +645,7 @@ impl Default for Defaults {
             auto_wake: true,
             max_budget_usd: 0.0,
             disallowed_tools: vec![],
+            instructions: vec![],
             auto_resume: false,
             your_name: String::new(),
             cost_warning_usd: 10.0,
