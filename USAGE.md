@@ -224,7 +224,9 @@ drovr cleanup --dry-run
 drovr cleanup
 ```
 
-Problems with single entries are printed as `error: …` and don't stop the rest. `reports.dir` must be an absolute folder that isn't `/` or your home folder or above it.
+A setting you change applies at the next daily run; click **Clean up now** to apply it straight away.
+
+Problems with single entries are printed as `error: …` and don't stop the rest; the command then exits 1. `reports.dir` must be an absolute folder that isn't `/` or your home folder or above it.
 
 ### Check in from your phone
 

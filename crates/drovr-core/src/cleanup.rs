@@ -79,6 +79,7 @@ fn archive(root: &Path, store: &Store, cutoff: f64, dry: bool, out: &mut Outcome
     let mut entries: Vec<_> = read.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     let archive_dir = root.join(ARCHIVE);
+    let mut picked = HashSet::new();
     for entry in entries {
         let name = entry.file_name().to_string_lossy().to_string();
         let Ok(kind) = entry.file_type() else {
@@ -96,7 +97,8 @@ fn archive(root: &Path, store: &Store, cutoff: f64, dry: bool, out: &mut Outcome
         if newest(&path) >= cutoff {
             continue;
         }
-        let target = free_name(&archive_dir, &name, kind.is_dir());
+        let target = free_name(&archive_dir, &name, kind.is_dir(), &picked);
+        picked.insert(target.clone());
         if !dry {
             match move_entry(store, &path, &archive_dir, &target, kind.is_dir()) {
                 Err(e) => {
@@ -188,10 +190,11 @@ fn newest(path: &Path) -> f64 {
     best.or_else(|| mtime(&meta)).unwrap_or(f64::MAX)
 }
 
-/// `name` if `dir` has nothing by that name, else `name-2`, `name-3`, ...
+/// `name` if `dir` and `picked` (names already chosen this run, which matters
+/// for a dry run that moves nothing) have nothing by that name, else `name-2`, `name-3`, ...
 /// with the number before a file's extension.
-fn free_name(dir: &Path, name: &str, is_dir: bool) -> String {
-    let taken = |n: &str| dir.join(n).symlink_metadata().is_ok();
+fn free_name(dir: &Path, name: &str, is_dir: bool, picked: &HashSet<String>) -> String {
+    let taken = |n: &str| picked.contains(n) || dir.join(n).symlink_metadata().is_ok();
     if !taken(name) {
         return name.to_string();
     }
@@ -384,6 +387,23 @@ mod tests {
         assert!(e.plans.join("archive/a-2.html").is_file());
         assert!(e.plans.join("archive/x/f.html").is_file());
         assert_eq!(names(&o), vec![("a.html", "a-2.html"), ("x", "x-2")]);
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[test]
+    fn dry_run_names_match_a_real_run() {
+        let e = env("dryname");
+        write(&e, "archive/foo.html", 90.0);
+        write(&e, "foo.html", 40.0);
+        write(&e, "foo-2.html", 40.0);
+        let dry = run(&e.cfg, &e.store, e.now, true).unwrap();
+        let real = run(&e.cfg, &e.store, e.now, false).unwrap();
+        assert_eq!(names(&dry), names(&real));
+        assert_eq!(real.archived.len(), 2);
+        let mut targets: Vec<_> = real.archived.iter().map(|a| a.1.clone()).collect();
+        targets.sort();
+        targets.dedup();
+        assert_eq!(targets.len(), 2);
         let _ = std::fs::remove_dir_all(&e.dir);
     }
 

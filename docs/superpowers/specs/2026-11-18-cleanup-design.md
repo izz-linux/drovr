@@ -28,7 +28,7 @@ The plans folder (`reports.dir`, `~/.claude/plans`) and the Inbox only grow. The
 
 - **Config:** `Reports.archive_after_days: u32` (default 0), and a new `[inbox]` section with `keep_days: u32` (default 0).
 - **Core:** new `crates/drovr-core/src/cleanup.rs`:
-  - `pub struct Outcome { pub archived: Vec<(String, String)>, pub inbox_deleted: usize }` (Serialize): each archived entry is (name, name under `archive/`)
+  - `pub struct Outcome { pub archived: Vec<(String, String)>, pub inbox_deleted: usize, pub errors: Vec<String> }` (Serialize): each archived entry is (name, name under `archive/`); `errors` holds `name: reason` for entries that couldn't be archived
   - `pub fn run(cfg, store, now, dry) -> Result<Outcome>`; with `dry` it only reports what it would do
   - `pub fn due(home, now) -> bool` and `pub fn mark_ran(home, now)`, for the 24-hour gate
   - The age is the max mtime over every file under the entry; for a loose file, its own mtime.

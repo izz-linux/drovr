@@ -55,6 +55,42 @@ fn arg<'a>(args: &'a [String], i: usize, what: &str) -> Result<&'a str> {
     }
 }
 
+/// Whether `drovr cleanup` is a dry run. Anything but `--dry-run` is refused.
+fn cleanup_dry(args: &[String]) -> Result<bool> {
+    let mut dry = false;
+    for a in args.iter().skip(1) {
+        if a == "--dry-run" {
+            dry = true;
+        } else {
+            bail!("unknown option {a}\n\n{USAGE}");
+        }
+    }
+    Ok(dry)
+}
+
+/// What `drovr cleanup` prints on stdout: a line per entry, then a summary.
+fn cleanup_lines(out: &drovr_core::cleanup::Outcome, dry: bool) -> Vec<String> {
+    let mut lines: Vec<String> = out
+        .archived
+        .iter()
+        .map(|(from, to)| {
+            let verb = if dry { "would archive" } else { "archived" };
+            format!("{verb} {from} → archive/{to}")
+        })
+        .collect();
+    let (a, r) = if dry {
+        ("would archive", "remove")
+    } else {
+        ("archived", "removed")
+    };
+    lines.push(format!(
+        "{a} {} plan(s) and {r} {} Inbox item(s)",
+        out.archived.len(),
+        out.inbox_deleted
+    ));
+    lines
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("drovr: {e:#}");
@@ -291,23 +327,20 @@ fn run() -> Result<()> {
             );
         }
         "cleanup" => {
-            let dry = args.iter().any(|a| a == "--dry-run");
+            let dry = cleanup_dry(&args)?;
             let now = drovr_core::store::now();
             let out = drovr_core::cleanup::run(&engine.cfg, &engine.store, now, dry)?;
-            let would = if dry { "would " } else { "" };
-            for (from, to) in &out.archived {
-                println!("{would}archived {from} → archive/{to}");
+            for line in cleanup_lines(&out, dry) {
+                println!("{line}");
             }
             for err in &out.errors {
                 eprintln!("error: {err}");
             }
-            println!(
-                "{would}archived {} plan(s) and removed {} Inbox item(s)",
-                out.archived.len(),
-                out.inbox_deleted
-            );
             if !dry {
                 drovr_core::cleanup::mark_ran(&drovr_core::config::home(), now)?;
+            }
+            if !out.errors.is_empty() {
+                bail!("{} problem(s) during cleanup", out.errors.len());
             }
         }
         "config" => println!(
@@ -365,4 +398,46 @@ fn run() -> Result<()> {
         other => bail!("unknown command {other}\n\n{USAGE}"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use drovr_core::cleanup::Outcome;
+
+    fn strings(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn only_dry_run_is_accepted() {
+        assert!(!cleanup_dry(&strings(&["cleanup"])).unwrap());
+        assert!(cleanup_dry(&strings(&["cleanup", "--dry-run"])).unwrap());
+        let e = cleanup_dry(&strings(&["cleanup", "--dry-runn"])).unwrap_err();
+        assert!(e.to_string().starts_with("unknown option --dry-runn"));
+        assert!(cleanup_dry(&strings(&["cleanup", "--dry-run", "x"])).is_err());
+    }
+
+    #[test]
+    fn output_wording() {
+        let out = Outcome {
+            archived: vec![("a".into(), "a-2".into())],
+            inbox_deleted: 2,
+            errors: vec![],
+        };
+        assert_eq!(
+            cleanup_lines(&out, true),
+            vec![
+                "would archive a → archive/a-2",
+                "would archive 1 plan(s) and remove 2 Inbox item(s)"
+            ]
+        );
+        assert_eq!(
+            cleanup_lines(&out, false),
+            vec![
+                "archived a → archive/a-2",
+                "archived 1 plan(s) and removed 2 Inbox item(s)"
+            ]
+        );
+    }
 }

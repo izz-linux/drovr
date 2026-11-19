@@ -30,15 +30,22 @@
     if (ok) await load();
   }
 
+  let cleaning = $state(false);
   async function cleanUp() {
-    const out = await act(() => api.cleanupNow(), "");
-    if (!out) return;
-    const n = out.archived.length;
-    const bad = out.errors.length;
-    toast(
-      `Archived ${n} plan${n === 1 ? "" : "s"} and removed ${out.inbox_deleted} Inbox item${out.inbox_deleted === 1 ? "" : "s"}.` +
-        (bad ? ` ${bad} problem${bad === 1 ? "" : "s"}: see \`drovr cleanup --dry-run\`.` : ""),
-    );
+    cleaning = true;
+    try {
+      const out = await act(() => api.cleanupNow());
+      if (!out) return;
+      const n = out.archived.length;
+      const m = out.inbox_deleted;
+      const bad = out.errors.length;
+      toast(
+        `Archived ${n} plan${n === 1 ? "" : "s"} and removed ${m} Inbox item${m === 1 ? "" : "s"}.` +
+          (bad ? ` ${bad} problem${bad === 1 ? "" : "s"}: ${out.errors[0]}${bad > 1 ? " (and more)" : ""}` : ""),
+      );
+    } finally {
+      cleaning = false;
+    }
   }
 
   function onKey(e: KeyboardEvent) {
@@ -76,9 +83,9 @@
   </div>
   <div class="cleanup">
     <div class="row">
-      <button onclick={cleanUp}>Clean up now</button>
+      <button onclick={cleanUp} disabled={cleaning || dirty} title={dirty ? "Save first" : ""}>{cleaning ? "Cleaning up…" : "Clean up now"}</button>
     </div>
-    <p class="muted">Archives plans older than <code>reports.archive_after_days</code> and removes resolved Inbox items older than <code>inbox.keep_days</code> (0 = off). Also runs daily.</p>
+    <p class="muted">Archives plans whose newest file is older than <code>reports.archive_after_days</code> and removes resolved Inbox items older than <code>inbox.keep_days</code> (0 = off). Also runs daily.</p>
   </div>
   {#if info}
     <p class="muted">Config: <code>{info.path}</code> · State and run logs: <code>{info.home}</code></p>
