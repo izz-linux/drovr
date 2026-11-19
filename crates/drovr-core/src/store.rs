@@ -746,6 +746,15 @@ impl Store {
         Ok(())
     }
 
+    /// Set the title and author from GitHub; an empty one leaves what's there.
+    pub fn update_review_pr_details(&self, key: &str, title: &str, author: &str) -> Result<()> {
+        self.db.execute(
+            "UPDATE review_prs SET title = COALESCE(NULLIF(?2, ''), title), author = COALESCE(NULLIF(?3, ''), author) WHERE key = ?1",
+            params![key, title, author],
+        )?;
+        Ok(())
+    }
+
     /// Forget dismissed and closed PRs decided before `before`.
     pub fn prune_review_prs(&self, before: f64) -> Result<()> {
         self.db.execute(

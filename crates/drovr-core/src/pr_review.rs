@@ -399,12 +399,24 @@ fn refresh_open(engine: &Engine, login: &str) {
             eprintln!("drovr: couldn't save {}'s state: {e:#}", row.url);
             continue;
         }
+        let title = v["title"].as_str().unwrap_or("");
+        let author = v["author"]["login"].as_str().unwrap_or("");
+        if let Err(e) = engine
+            .store
+            .update_review_pr_details(&row.key, title, author)
+        {
+            eprintln!("drovr: couldn't save {}'s details: {e:#}", row.url);
+        }
         if state != "MERGED" && state != "CLOSED" {
             continue;
         }
         let reviewer = engine.store.agent(&row.agent).ok().flatten();
         if row.status == "dispatched" && engine.cfg.review.remove_when_closed {
             if let Some(a) = reviewer {
+                // A working reviewer finishes first; the next poll removes it.
+                if a.run_state == "working" {
+                    continue;
+                }
                 if let Err(e) = engine.remove(&a.name) {
                     // The row stays open so the next poll tries again.
                     eprintln!("drovr: couldn't remove reviewer {}: {e:#}", a.name);
@@ -554,7 +566,7 @@ fn whoami<'a>(engine: &Engine, slot: &'a mut Option<String>) -> &'a str {
 
 fn pr_live(gh: &str, url: &str) -> Result<Value> {
     gh_json(&format!(
-        "{} pr view {} --json state,isDraft,statusCheckRollup,reviewDecision,latestReviews",
+        "{} pr view {} --json state,isDraft,statusCheckRollup,reviewDecision,latestReviews,title,author",
         quote(gh),
         quote(url)
     ))
@@ -1669,7 +1681,9 @@ mod tests {
         );
         let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
         assert!(
-            log.contains("--json state,isDraft,statusCheckRollup,reviewDecision,latestReviews"),
+            log.contains(
+                "--json state,isDraft,statusCheckRollup,reviewDecision,latestReviews,title,author"
+            ),
             "{log}"
         );
 
@@ -1702,12 +1716,65 @@ mod tests {
     fn a_merged_pr_closes_its_row_and_removes_the_reviewer() {
         let (e, file) = closed_state("mrg", "MERGED", |_| {});
         seed(&e, "api", 7, "dispatched", "rvmrg");
-        reviewer(&e, "rvmrg", "working", &url("api", 7), "/tmp");
+        reviewer(&e, "rvmrg", "idle", &url("api", 7), "/tmp");
         poll_at(&e.engine, true, &file);
         let r = row(&e, "api", 7);
         assert_eq!(r.status, "closed");
         assert_eq!(r.pr_state, "MERGED");
         assert!(e.engine.store.agent("rvmrg").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_working_reviewer_is_kept_until_it_is_idle() {
+        let (e, file) = closed_state("mrgwork", "MERGED", |_| {});
+        seed(&e, "api", 7, "dispatched", "rvmrgwork");
+        reviewer(&e, "rvmrgwork", "working", &url("api", 7), "/tmp");
+        poll_at(&e.engine, true, &file);
+        let r = row(&e, "api", 7);
+        assert_eq!(
+            (r.status.as_str(), r.pr_state.as_str()),
+            ("dispatched", "MERGED")
+        );
+        assert!(e.engine.store.agent("rvmrgwork").unwrap().is_some());
+
+        e.engine
+            .store
+            .set_agent("rvmrgwork", "run_state", "idle")
+            .unwrap();
+        poll_at(&e.engine, true, &file);
+        assert_eq!(row(&e, "api", 7).status, "closed");
+        assert!(e.engine.store.agent("rvmrgwork").unwrap().is_none());
+    }
+
+    #[test]
+    fn refresh_fills_in_the_title_and_author() {
+        let e = env("details", |_| {});
+        let u = url("api", 5);
+        seed(&e, "api", 5, "new", "");
+        e.engine
+            .store
+            .upsert_review_pr(&crate::store::ReviewPr {
+                key: key(&u),
+                url: u.clone(),
+                title: String::new(),
+                author: String::new(),
+                ..Default::default()
+            })
+            .unwrap();
+        write(&e.dir, "view-5.json", &view_json(&u, "OPEN", false, ""));
+        poll_at(&e.engine, true, &e.dir.join("review.json"));
+        let r = row(&e, "api", 5);
+        assert_eq!((r.title.as_str(), r.author.as_str()), ("T", "alice"));
+
+        // An empty answer leaves what's there.
+        write(
+            &e.dir,
+            "view-5.json",
+            r#"{"state":"OPEN","isDraft":false,"title":"","author":{"login":""}}"#,
+        );
+        poll_at(&e.engine, true, &e.dir.join("review.json"));
+        let r = row(&e, "api", 5);
+        assert_eq!((r.title.as_str(), r.author.as_str()), ("T", "alice"));
     }
 
     #[test]
