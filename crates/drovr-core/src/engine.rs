@@ -910,6 +910,63 @@ impl Engine {
         })
     }
 
+    /// Start a reviewer for a PR that's waiting in the PRs view, and mark
+    /// it dispatched. The row stays `new` if the reviewer can't start.
+    pub fn dispatch_pr(&self, key: &str) -> Result<Agent> {
+        let row = self
+            .store
+            .review_pr(key)?
+            .ok_or_else(|| anyhow!("no PR {key} to review"))?;
+        if row.status != "new" {
+            bail!(
+                "{}/{}#{} isn't waiting for a reviewer (it's {})",
+                row.owner,
+                row.repo,
+                row.number,
+                row.status
+            );
+        }
+        let agent = self.dispatch_review(&row.url)?;
+        self.store
+            .set_review_pr_status(key, "dispatched", Some(&agent.name))?;
+        Ok(agent)
+    }
+
+    /// Hide a PR from the PRs view. Its reviewer, if it has one, is removed.
+    pub fn dismiss_pr(&self, key: &str) -> Result<()> {
+        let row = self
+            .store
+            .review_pr(key)?
+            .ok_or_else(|| anyhow!("no PR {key} to dismiss"))?;
+        if !row.agent.is_empty() && self.store.agent(&row.agent)?.is_some() {
+            self.remove(&row.agent)?;
+        }
+        self.store.set_review_pr_status(key, "dismissed", None)
+    }
+
+    /// `dispatch_review` for a link you typed: the PR is tracked as dispatched too.
+    pub fn review_url(&self, url: &str) -> Result<Agent> {
+        let agent = self.dispatch_review(url)?;
+        let key = crate::pr_review::key(url);
+        if self.store.review_pr(&key)?.is_none() {
+            let (owner, repo, number) = crate::pr_review::parse(url).unwrap_or_default();
+            self.store.upsert_review_pr(&crate::store::ReviewPr {
+                key: key.clone(),
+                url: crate::pr_review::canonical(url).unwrap_or_else(|| url.to_string()),
+                owner,
+                repo,
+                number: number as i64,
+                source: "drovr review".into(),
+                status: "new".into(),
+                offered_ts: crate::store::now(),
+                ..Default::default()
+            })?;
+        }
+        self.store
+            .set_review_pr_status(&key, "dispatched", Some(&agent.name))?;
+        Ok(agent)
+    }
+
     /// Start a reviewer for a PR: a solo agent in its own worktree at the
     /// PR's head commit, in the local clone (cloned first if it's missing).
     pub fn dispatch_review(&self, url: &str) -> Result<Agent> {

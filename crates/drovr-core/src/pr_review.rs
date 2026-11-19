@@ -1,18 +1,21 @@
 //! PRs that need your review: links posted in Slack channels and GitHub
-//! review requests to your teams, offered in the Inbox once each.
+//! review requests to your teams, tracked as rows in the PRs view.
 //!
 //! A poll reads the configured Slack channels (through the Slack provider)
 //! and `gh search prs` for each team, looks each new PR up with `gh pr view`,
 //! and offers the open, non-draft ones that aren't yours. Each PR is offered
-//! once ever, keyed by its URL, in `review.json` in drovr's data folder.
+//! once ever, keyed by its URL, in `review.json` in drovr's data folder. An
+//! offer is a `review_prs` row; every poll then refreshes the open rows from
+//! GitHub and closes the ones that merged.
 
 use crate::engine::Engine;
 use crate::ledger::Lock;
 use crate::shell::{self, quote};
 use crate::sources::Sources;
+use crate::store::ReviewPr;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -129,6 +132,13 @@ pub(crate) fn parse(url: &str) -> Option<(String, String, u64)> {
     Some((owner.into(), repo.into(), n.parse().ok()?))
 }
 
+/// The key a PR's row is stored under: its canonical link, lowercased.
+pub fn key(url: &str) -> String {
+    canonical(url)
+        .unwrap_or_else(|| url.to_string())
+        .to_lowercase()
+}
+
 /// A PR's link as drovr keeps it, without anything after the number.
 pub(crate) fn canonical(url: &str) -> Option<String> {
     let (owner, repo, n) = parse(url)?;
@@ -240,7 +250,10 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     for c in candidates {
         // Case doesn't matter in a URL; the first source to name a PR keeps it.
         let key = c.url.to_lowercase();
-        if state.seen.contains_key(&key) || found.iter().any(|f| f.url.to_lowercase() == key) {
+        if state.seen.contains_key(&key)
+            || found.iter().any(|f| f.url.to_lowercase() == key)
+            || engine.store.review_pr(&key).ok().flatten().is_some()
+        {
             continue;
         }
         // Other owners' PRs aren't looked up at all.
@@ -288,6 +301,12 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         }
         if state.seen.contains_key(&canonical.to_lowercase())
             || found.iter().any(|f| f.url.eq_ignore_ascii_case(&canonical))
+            || engine
+                .store
+                .review_pr(&canonical.to_lowercase())
+                .ok()
+                .flatten()
+                .is_some()
         {
             continue;
         }
@@ -330,19 +349,108 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     if let Err(e) = save(&state, file) {
         eprintln!("drovr: couldn't save the PR review state: {e:#}");
     }
+    if let Err(e) = engine.store.prune_review_prs(now - KEEP_SECS) {
+        eprintln!("drovr: couldn't prune old PRs to review: {e:#}");
+    }
+    if engine
+        .store
+        .review_prs(true)
+        .is_ok_and(|rows| !rows.is_empty())
+    {
+        let login = whoami(engine, &mut me).to_string();
+        refresh_open(engine, &login);
+    }
     if cfg.remove_when_closed {
         remove_closed(engine);
     }
     found
 }
 
-/// Remove each reviewer that isn't working whose PR has merged or closed.
+/// Bring each open row up to date from GitHub: draft, CI, review decision
+/// and your own review. A merged or closed PR closes its row, and with
+/// `remove_when_closed` its reviewer goes too.
+fn refresh_open(engine: &Engine, login: &str) {
+    let rows = match engine.store.review_prs(true) {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("drovr: couldn't list the PRs to refresh: {e:#}");
+            return;
+        }
+    };
+    for row in rows {
+        let v = match pr_live(&engine.cfg.watch.gh, &row.url) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("drovr: couldn't refresh {}: {e:#}", row.url);
+                continue;
+            }
+        };
+        let state = v["state"].as_str().unwrap_or("").to_uppercase();
+        let (ci, _, _) = crate::watch::checks(&v["statusCheckRollup"]);
+        let live = engine.store.update_review_pr_live(
+            &row.key,
+            &state,
+            v["isDraft"].as_bool().unwrap_or(false),
+            &ci,
+            v["reviewDecision"].as_str().unwrap_or(""),
+            &my_review(&v["latestReviews"], login),
+        );
+        if let Err(e) = live {
+            eprintln!("drovr: couldn't save {}'s state: {e:#}", row.url);
+            continue;
+        }
+        if state != "MERGED" && state != "CLOSED" {
+            continue;
+        }
+        let reviewer = engine.store.agent(&row.agent).ok().flatten();
+        if row.status == "dispatched" && engine.cfg.review.remove_when_closed {
+            if let Some(a) = reviewer {
+                if let Err(e) = engine.remove(&a.name) {
+                    // The row stays open so the next poll tries again.
+                    eprintln!("drovr: couldn't remove reviewer {}: {e:#}", a.name);
+                    continue;
+                }
+            }
+        }
+        if let Err(e) = engine.store.set_review_pr_status(&row.key, "closed", None) {
+            eprintln!("drovr: couldn't close {}: {e:#}", row.url);
+        }
+    }
+}
+
+/// The state of your latest review in `latestReviews`, or empty.
+fn my_review(reviews: &Value, login: &str) -> String {
+    if login.is_empty() {
+        return String::new();
+    }
+    reviews
+        .as_array()
+        .into_iter()
+        .flatten()
+        .rfind(|r| {
+            r["author"]["login"]
+                .as_str()
+                .is_some_and(|l| l.eq_ignore_ascii_case(login))
+        })
+        .and_then(|r| r["state"].as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Remove each reviewer that isn't working whose PR has merged or closed
+/// and that no row tracks; the rows are refreshed by `refresh_open`.
 fn remove_closed(engine: &Engine) {
     let agents = engine.store.agents(None).unwrap_or_default();
     for a in agents.iter().filter(|a| {
         a.role == "pr-reviewer"
             && matches!(a.run_state.as_str(), "idle" | "done" | "error" | "stopped")
             && !a.ticket.is_empty()
+            && engine
+                .store
+                .review_pr(&key(&a.ticket))
+                .ok()
+                .flatten()
+                .is_none()
     }) {
         let cmd = format!(
             "{} pr view {} --json state",
@@ -364,47 +472,43 @@ fn remove_closed(engine: &Engine) {
     }
 }
 
-/// Put a found PR in the Inbox. True if it was saved.
+/// Record a found PR as waiting on you. True if it was saved.
 fn offer(engine: &Engine, f: &Found) -> bool {
-    let mut body = format!("{}\n\nAuthor: {}\nSource: {}", f.url, f.author, f.source);
-    if !f.permalink.is_empty() {
-        body += &format!(" ({})", f.permalink);
-    }
-    if !f.poster.is_empty() {
-        body += &format!("\nPosted by: {}", f.poster);
-    }
-    let payload = json!({
-        "url": f.url, "owner": f.owner, "repo": f.repo, "number": f.number,
-        "title": f.title, "author": f.author, "source": f.source,
-    });
-    let title = format!("Review {}/{}#{}: {}", f.owner, f.repo, f.number, f.title);
-    let options = ["Dispatch reviewer".to_string(), "Dismiss".to_string()];
     let mut started = None;
     if engine.cfg.review.auto_dispatch {
         match engine.dispatch_review(&f.url) {
             Ok(agent) => started = Some(agent.name),
-            Err(e) => {
-                eprintln!("drovr: couldn't start a reviewer for {}: {e:#}", f.url);
-                body += &format!("\n\nCouldn't start a reviewer: {e:#}");
-            }
+            Err(e) => eprintln!("drovr: couldn't start a reviewer for {}: {e:#}", f.url),
         }
     }
-    match engine
+    let row = ReviewPr {
+        key: key(&f.url),
+        url: f.url.clone(),
+        owner: f.owner.clone(),
+        repo: f.repo.clone(),
+        number: f.number as i64,
+        title: f.title.clone(),
+        author: f.author.clone(),
+        source: f.source.clone(),
+        permalink: f.permalink.clone(),
+        poster: f.poster.clone(),
+        status: "new".into(),
+        offered_ts: crate::store::now(),
+        ..Default::default()
+    };
+    let saved = engine
         .store
-        .add_item("drovr", "review", &title, &body, &options, &payload)
-    {
-        Ok(id) => {
-            if let Some(name) = started {
-                let _ =
-                    engine
-                        .store
-                        .resolve_item(id, "answered", &format!("Reviewer {name} started"));
-            }
-            engine.record_item(id);
-            true
-        }
+        .upsert_review_pr(&row)
+        .and_then(|()| match &started {
+            Some(name) => engine
+                .store
+                .set_review_pr_status(&row.key, "dispatched", Some(name)),
+            None => Ok(()),
+        });
+    match saved {
+        Ok(()) => true,
         Err(e) => {
-            eprintln!("drovr: couldn't offer {}: {e:#}", f.url);
+            eprintln!("drovr: couldn't record {}: {e:#}", f.url);
             // A reviewer already started must not start again next poll.
             started.is_some()
         }
@@ -446,6 +550,14 @@ fn whoami<'a>(engine: &Engine, slot: &'a mut Option<String>) -> &'a str {
             String::new()
         })
     })
+}
+
+fn pr_live(gh: &str, url: &str) -> Result<Value> {
+    gh_json(&format!(
+        "{} pr view {} --json state,isDraft,statusCheckRollup,reviewDecision,latestReviews",
+        quote(gh),
+        quote(url)
+    ))
 }
 
 fn pr_view(gh: &str, url: &str) -> Result<Value> {
@@ -561,6 +673,45 @@ mod tests {
         e.engine.store.items(None, 100).unwrap()
     }
 
+    fn rows(e: &Env) -> Vec<crate::store::ReviewPr> {
+        e.engine.store.review_prs(false).unwrap()
+    }
+
+    fn row(e: &Env, repo: &str, n: u64) -> crate::store::ReviewPr {
+        e.engine
+            .store
+            .review_pr(&key(&url(repo, n as u32)))
+            .unwrap()
+            .unwrap()
+    }
+
+    fn seed(e: &Env, repo: &str, n: u64, status: &str, agent: &str) {
+        let u = url(repo, n as u32);
+        e.engine
+            .store
+            .upsert_review_pr(&crate::store::ReviewPr {
+                key: key(&u),
+                url: u,
+                owner: "acme".into(),
+                repo: repo.into(),
+                number: n as i64,
+                title: "T".into(),
+                author: "alice".into(),
+                source: "#c".into(),
+                status: "new".into(),
+                offered_ts: crate::store::now(),
+                ..Default::default()
+            })
+            .unwrap();
+        if status != "new" {
+            let agent = Some(agent).filter(|a| !a.is_empty());
+            e.engine
+                .store
+                .set_review_pr_status(&key(&url(repo, n as u32)), status, agent)
+                .unwrap();
+        }
+    }
+
     fn team_pr(e: &Env, n: u32, state: &str, draft: bool, author: &str) {
         let url = format!("https://github.com/acme/api/pull/{n}");
         write(
@@ -587,28 +738,26 @@ mod tests {
         let found = poll_at(&e.engine, true, &file);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].source, "team acme/sre");
-        let it = items(&e);
-        assert_eq!(it.len(), 1);
-        assert_eq!(it[0].kind, "review");
-        assert_eq!(it[0].agent, "drovr");
+        assert!(items(&e).is_empty(), "no Inbox item");
+        let r = rows(&e);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].key, "https://github.com/acme/api/pull/5");
+        assert_eq!(r[0].url, "https://github.com/acme/api/pull/5");
         assert_eq!(
-            it[0].title,
-            "Review acme/api#5: T https://github.com/acme/api/pull/5"
+            (r[0].owner.as_str(), r[0].repo.as_str(), r[0].number),
+            ("acme", "api", 5)
         );
-        assert_eq!(it[0].options, ["Dispatch reviewer", "Dismiss"]);
-        assert_eq!(
-            it[0].payload,
-            serde_json::json!({
-                "url": "https://github.com/acme/api/pull/5", "owner": "acme", "repo": "api", "number": 5,
-                "title": "T https://github.com/acme/api/pull/5", "author": "alice", "source": "team acme/sre"
-            })
-        );
-        assert!(it[0].body.contains("https://github.com/acme/api/pull/5"));
-        assert!(it[0].body.contains("alice"));
-        assert!(it[0].body.contains("team acme/sre"));
+        assert_eq!(r[0].title, "T https://github.com/acme/api/pull/5");
+        assert_eq!(r[0].author, "alice");
+        assert_eq!(r[0].source, "team acme/sre");
+        assert_eq!((r[0].status.as_str(), r[0].agent.as_str()), ("new", ""));
+        assert!(r[0].offered_ts > 0.0);
+        // Live state is filled in on the same poll.
+        assert_eq!(r[0].pr_state, "OPEN");
+        assert!(r[0].checked_ts > 0.0);
 
         assert!(poll_at(&e.engine, true, &file).is_empty());
-        assert_eq!(items(&e).len(), 1);
+        assert_eq!(rows(&e).len(), 1);
     }
 
     #[test]
@@ -623,13 +772,16 @@ mod tests {
         );
         let found = poll_at(&e.engine, true, &e.dir.join("review.json"));
         assert_eq!(found.len(), 1);
-        assert_eq!(items(&e).len(), 1);
+        assert_eq!(rows(&e).len(), 1);
+        assert!(items(&e).is_empty());
         // Slack is read first, so its source and poster win.
         assert_eq!(found[0].source, "#sre-reviews");
-        assert_eq!(found[0].poster, "bob");
-        assert_eq!(found[0].permalink, "https://slack/p1");
-        let body = &items(&e)[0].body;
-        assert!(body.contains("https://slack/p1") && body.contains("bob"));
+        let r = &rows(&e)[0];
+        assert_eq!(
+            (r.source.as_str(), r.poster.as_str()),
+            ("#sre-reviews", "bob")
+        );
+        assert_eq!(r.permalink, "https://slack/p1");
     }
 
     #[test]
@@ -641,7 +793,7 @@ mod tests {
         team_pr(&e, 4, "MERGED", false, "alice");
         search_has(&e, &[1, 2, 3, 4]);
         assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
-        assert!(items(&e).is_empty());
+        assert!(rows(&e).is_empty());
     }
 
     #[test]
@@ -695,7 +847,7 @@ mod tests {
             search_has(&e, &[5]);
             assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
             assert!(!e.dir.join("gh.log").exists(), "{name} called gh");
-            assert!(items(&e).is_empty());
+            assert!(rows(&e).is_empty());
         }
     }
 
@@ -749,7 +901,7 @@ mod tests {
         let file = e.dir.join("review.json");
         let found = poll_at(&e.engine, true, &file);
         assert_eq!(found.len(), 1);
-        assert_eq!(items(&e).len(), 1);
+        assert_eq!(rows(&e).len(), 1);
         assert_eq!(found[0].url, "https://github.com/acme/api/pull/5");
         assert_eq!(
             (found[0].owner.as_str(), found[0].repo.as_str()),
@@ -993,19 +1145,19 @@ mod tests {
         let _ = e.engine.remove(&b.name);
     }
 
+    /// An old-style `review` Inbox item, which `answer` still handles.
     fn offer_pr(e: &Env, repo: &str, n: u64) -> i64 {
-        let f = Found {
-            url: url(repo, n as u32),
-            owner: "acme".into(),
-            repo: repo.into(),
-            number: n,
-            title: "T".into(),
-            author: "alice".into(),
-            source: "#c".into(),
-            ..Default::default()
-        };
-        assert!(offer(&e.engine, &f));
-        items(e).iter().find(|i| i.status == "pending").unwrap().id
+        e.engine
+            .store
+            .add_item(
+                "drovr",
+                "review",
+                "Review",
+                "",
+                &["Dispatch reviewer".to_string(), "Dismiss".to_string()],
+                &serde_json::json!({ "url": url(repo, n as u32) }),
+            )
+            .unwrap()
     }
 
     #[test]
@@ -1157,10 +1309,12 @@ mod tests {
         let found = poll_at(&e.engine, true, &e.dir.join("review.json"));
         assert_eq!(found.len(), 1);
         assert!(e.engine.store.agent("review-rvauto-7").unwrap().is_some());
-        let it = items(&e);
-        assert_eq!(it.len(), 1);
-        assert_eq!(it[0].status, "answered");
-        assert_eq!(it[0].answer, "Reviewer review-rvauto-7 started");
+        assert!(items(&e).is_empty());
+        let r = row(&e, "rvauto", 7);
+        assert_eq!(
+            (r.status.as_str(), r.agent.as_str()),
+            ("dispatched", "review-rvauto-7")
+        );
         let _ = e.engine.remove("review-rvauto-7");
     }
 
@@ -1184,10 +1338,9 @@ mod tests {
         );
         let found = poll_at(&e.engine, true, &e.dir.join("review.json"));
         assert_eq!(found.len(), 1);
-        let it = items(&e);
-        assert_eq!(it.len(), 1);
-        assert_eq!(it[0].status, "pending");
-        assert!(it[0].body.contains("fetch"), "{}", it[0].body);
+        assert!(items(&e).is_empty());
+        let r = row(&e, "rvautofail", 99);
+        assert_eq!((r.status.as_str(), r.agent.as_str()), ("new", ""));
         assert!(e.engine.store.agents(None).unwrap().is_empty());
     }
 
@@ -1286,7 +1439,7 @@ mod tests {
         team_pr(&e, 5, "OPEN", false, "alice");
         search_has(&e, &[5]);
         assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
-        assert!(items(&e).is_empty());
+        assert!(rows(&e).is_empty());
     }
 
     #[test]
@@ -1467,7 +1620,7 @@ mod tests {
         // It's given up on for good, even once gh can answer.
         team_pr(&e, 5, "OPEN", false, "alice");
         assert!(poll_at(&e.engine, true, &file).is_empty());
-        assert!(items(&e).is_empty());
+        assert!(rows(&e).is_empty());
     }
 
     #[test]
@@ -1478,5 +1631,266 @@ mod tests {
         assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
         let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
         assert!(!log.contains("pr view"), "{log}");
+    }
+
+    fn view_json(url: &str, state: &str, draft: bool, extra: &str) -> String {
+        format!(
+            r#"{{"url":"{url}","title":"T","state":"{state}","isDraft":{draft},"author":{{"login":"alice"}}{extra}}}"#
+        )
+    }
+
+    #[test]
+    fn refresh_reads_live_state_and_my_review() {
+        let e = env("live", |_| {});
+        let u = url("api", 5);
+        write(
+            &e.dir,
+            "view-5.json",
+            &view_json(
+                &u,
+                "OPEN",
+                false,
+                r#","reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[{"name":"c","status":"COMPLETED","conclusion":"FAILURE"}],"latestReviews":[{"author":{"login":"bob"},"state":"APPROVED"},{"author":{"login":"ME"},"state":"COMMENTED"}]"#,
+            ),
+        );
+        search_has(&e, &[5]);
+        let file = e.dir.join("review.json");
+        assert_eq!(poll_at(&e.engine, true, &file).len(), 1);
+        let r = row(&e, "api", 5);
+        assert_eq!(
+            (
+                r.pr_state.as_str(),
+                r.draft,
+                r.ci.as_str(),
+                r.review_decision.as_str(),
+                r.my_review.as_str()
+            ),
+            ("OPEN", false, "failure", "CHANGES_REQUESTED", "COMMENTED")
+        );
+        let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
+        assert!(
+            log.contains("--json state,isDraft,statusCheckRollup,reviewDecision,latestReviews"),
+            "{log}"
+        );
+
+        // Later polls keep it fresh: now a draft, passing, and not reviewed by me.
+        write(
+            &e.dir,
+            "view-5.json",
+            &view_json(
+                &u,
+                "OPEN",
+                true,
+                r#","reviewDecision":"","statusCheckRollup":[{"name":"c","status":"COMPLETED","conclusion":"SUCCESS"}],"latestReviews":[]"#,
+            ),
+        );
+        poll_at(&e.engine, true, &file);
+        let r = row(&e, "api", 5);
+        assert_eq!(
+            (
+                r.draft,
+                r.ci.as_str(),
+                r.review_decision.as_str(),
+                r.my_review.as_str()
+            ),
+            (true, "success", "", "")
+        );
+        assert_eq!(r.status, "new");
+    }
+
+    #[test]
+    fn a_merged_pr_closes_its_row_and_removes_the_reviewer() {
+        let (e, file) = closed_state("mrg", "MERGED", |_| {});
+        seed(&e, "api", 7, "dispatched", "rvmrg");
+        reviewer(&e, "rvmrg", "working", &url("api", 7), "/tmp");
+        poll_at(&e.engine, true, &file);
+        let r = row(&e, "api", 7);
+        assert_eq!(r.status, "closed");
+        assert_eq!(r.pr_state, "MERGED");
+        assert!(e.engine.store.agent("rvmrg").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_closed_pr_keeps_its_reviewer_when_removal_is_off() {
+        let (e, file) = closed_state("mrgoff", "MERGED", |c| c.review.remove_when_closed = false);
+        seed(&e, "api", 7, "dispatched", "rvmrgoff");
+        reviewer(&e, "rvmrgoff", "idle", &url("api", 7), "/tmp");
+        poll_at(&e.engine, true, &file);
+        assert_eq!(row(&e, "api", 7).status, "closed");
+        assert!(e.engine.store.agent("rvmrgoff").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_new_row_on_a_closed_pr_closes_with_no_agent() {
+        let (e, file) = closed_state("newclosed", "CLOSED", |_| {});
+        seed(&e, "api", 7, "new", "");
+        poll_at(&e.engine, true, &file);
+        let r = row(&e, "api", 7);
+        assert_eq!((r.status.as_str(), r.agent.as_str()), ("closed", ""));
+        assert!(e.engine.store.review_prs(true).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failing_lookup_skips_that_row_only() {
+        let e = env("rowerr", |_| {});
+        // No view-8.json, so gh fails for #8.
+        write(
+            &e.dir,
+            "view-9.json",
+            &view(&url("api", 9), "OPEN", true, "x"),
+        );
+        seed(&e, "api", 8, "new", "");
+        seed(&e, "api", 9, "new", "");
+        poll_at(&e.engine, true, &e.dir.join("review.json"));
+        let bad = row(&e, "api", 8);
+        assert_eq!((bad.status.as_str(), bad.pr_state.as_str()), ("new", ""));
+        let ok = row(&e, "api", 9);
+        assert!(ok.draft);
+        assert_eq!(ok.pr_state, "OPEN");
+    }
+
+    #[test]
+    fn a_tracked_pr_is_not_offered_again_without_the_state_file() {
+        let e = env("tracked", |_| {});
+        team_pr(&e, 5, "OPEN", false, "alice");
+        search_has(&e, &[5]);
+        seed(&e, "api", 5, "dismissed", "");
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        assert_eq!(row(&e, "api", 5).status, "dismissed");
+    }
+
+    #[test]
+    fn polling_prunes_old_decided_rows() {
+        let e = env("prune", |_| {});
+        seed(&e, "api", 1, "dismissed", "");
+        seed(&e, "api", 2, "closed", "");
+        seed(&e, "api", 3, "new", "");
+        let k = |n| key(&url("api", n));
+        for n in [1, 2, 3] {
+            e.engine
+                .store
+                .set_review_pr_status(&k(n), if n == 3 { "new" } else { "dismissed" }, None)
+                .unwrap();
+        }
+        // Backdate #1's decision past 90 days; #2's stays recent.
+        let db = rusqlite::Connection::open(e.dir.join("t.db")).unwrap();
+        db.execute(
+            "UPDATE review_prs SET decided_ts = ?1 WHERE key = ?2",
+            rusqlite::params![crate::store::now() - 91.0 * 86_400.0, k(1)],
+        )
+        .unwrap();
+        write(
+            &e.dir,
+            "view-2.json",
+            &view(&url("api", 2), "OPEN", false, "x"),
+        );
+        write(
+            &e.dir,
+            "view-3.json",
+            &view(&url("api", 3), "OPEN", false, "x"),
+        );
+        poll_at(&e.engine, true, &e.dir.join("review.json"));
+        let left: Vec<i64> = rows(&e).into_iter().map(|r| r.number).collect();
+        assert!(!left.contains(&1), "{left:?}");
+        assert!(left.contains(&2) && left.contains(&3), "{left:?}");
+    }
+
+    #[test]
+    fn dispatch_pr_records_the_agent() {
+        let e = review_env("dpr", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvdpr");
+        seed(&e, "rvdpr", 7, "new", "");
+        let a = e.engine.dispatch_pr(&key(&url("rvdpr", 7))).unwrap();
+        let r = row(&e, "rvdpr", 7);
+        assert_eq!(
+            (r.status.as_str(), r.agent.as_str()),
+            ("dispatched", a.name.as_str())
+        );
+        // Only a new row can be dispatched.
+        assert!(e.engine.dispatch_pr(&key(&url("rvdpr", 7))).is_err());
+        assert!(e
+            .engine
+            .dispatch_pr("https://github.com/acme/none/pull/1")
+            .is_err());
+        let _ = e.engine.remove(&a.name);
+    }
+
+    #[test]
+    fn a_failed_dispatch_pr_leaves_the_row_new() {
+        let e = review_env("dprerr", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvdprerr");
+        seed(&e, "rvdprerr", 99, "new", "");
+        assert!(e.engine.dispatch_pr(&key(&url("rvdprerr", 99))).is_err());
+        let r = row(&e, "rvdprerr", 99);
+        assert_eq!((r.status.as_str(), r.agent.as_str()), ("new", ""));
+    }
+
+    #[test]
+    fn dismissing_removes_the_reviewer_and_hides_the_row() {
+        let e = review_env("dis", |_| {});
+        seed(&e, "api", 7, "dispatched", "rvdis");
+        reviewer(&e, "rvdis", "idle", &url("api", 7), "/tmp");
+        e.engine.dismiss_pr(&key(&url("api", 7))).unwrap();
+        assert_eq!(row(&e, "api", 7).status, "dismissed");
+        assert!(e.engine.store.agent("rvdis").unwrap().is_none());
+
+        // A new row has no reviewer to remove; a missing agent is fine too.
+        seed(&e, "api", 8, "new", "");
+        e.engine.dismiss_pr(&key(&url("api", 8))).unwrap();
+        assert_eq!(row(&e, "api", 8).status, "dismissed");
+        seed(&e, "api", 9, "dispatched", "gone");
+        e.engine.dismiss_pr(&key(&url("api", 9))).unwrap();
+        assert_eq!(row(&e, "api", 9).status, "dismissed");
+        assert!(e
+            .engine
+            .dismiss_pr("https://github.com/acme/none/pull/1")
+            .is_err());
+    }
+
+    #[test]
+    fn review_url_records_a_dispatched_row() {
+        let e = review_env("rurl", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvrurl");
+        let a = e.engine.review_url(&url("rvrurl", 7)).unwrap();
+        let r = row(&e, "rvrurl", 7);
+        assert_eq!(
+            (r.status.as_str(), r.agent.as_str()),
+            ("dispatched", a.name.as_str())
+        );
+        assert_eq!(
+            (r.owner.as_str(), r.repo.as_str(), r.number),
+            ("acme", "rvrurl", 7)
+        );
+        // A PR already tracked keeps what the poll found.
+        let e2 = review_env("rurl2", |_| {});
+        origin(&e2);
+        clone_repo(&e2, "rvrurl2");
+        seed(&e2, "rvrurl2", 7, "new", "");
+        let b = e2.engine.review_url(&url("rvrurl2", 7)).unwrap();
+        let r = row(&e2, "rvrurl2", 7);
+        assert_eq!((r.status.as_str(), r.title.as_str()), ("dispatched", "T"));
+        assert_eq!(r.agent, b.name);
+        let _ = e.engine.remove(&a.name);
+        let _ = e2.engine.remove(&b.name);
+    }
+
+    #[test]
+    fn reviewers_with_a_row_are_left_to_the_refresh() {
+        // remove_closed must not act on a reviewer whose row is tracked:
+        // with removal on and an unreachable gh answer for the row, it stays.
+        let e = review_env("rowkeep", |_| {});
+        seed(&e, "api", 3, "dispatched", "rvrowkeep");
+        reviewer(&e, "rvrowkeep", "idle", &url("api", 3), "/tmp");
+        write(
+            &e.dir,
+            "view-3.json",
+            &view(&url("api", 3), "OPEN", false, "x"),
+        );
+        poll_at(&e.engine, true, &e.dir.join("review.json"));
+        assert!(e.engine.store.agent("rvrowkeep").unwrap().is_some());
+        assert_eq!(row(&e, "api", 3).status, "dispatched");
     }
 }

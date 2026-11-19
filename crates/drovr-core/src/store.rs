@@ -83,6 +83,28 @@ CREATE TABLE IF NOT EXISTS notes (
     ts REAL NOT NULL,
     PRIMARY KEY (group_name, key)
 );
+CREATE TABLE IF NOT EXISTS review_prs (
+    key TEXT PRIMARY KEY,
+    url TEXT NOT NULL DEFAULT '',
+    owner TEXT NOT NULL DEFAULT '',
+    repo TEXT NOT NULL DEFAULT '',
+    number INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    permalink TEXT NOT NULL DEFAULT '',
+    poster TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new',
+    agent TEXT NOT NULL DEFAULT '',
+    offered_ts REAL NOT NULL DEFAULT 0,
+    decided_ts REAL NOT NULL DEFAULT 0,
+    checked_ts REAL NOT NULL DEFAULT 0,
+    pr_state TEXT NOT NULL DEFAULT '',
+    ci TEXT NOT NULL DEFAULT '',
+    review_decision TEXT NOT NULL DEFAULT '',
+    my_review TEXT NOT NULL DEFAULT '',
+    draft INTEGER NOT NULL DEFAULT 0
+);
 "#;
 
 pub fn now() -> f64 {
@@ -197,6 +219,62 @@ pub struct ReportMeta {
     pub seen: bool,
 }
 
+/// A PR waiting on your review, from the poll to its merge.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ReviewPr {
+    /// The lowercased canonical URL.
+    pub key: String,
+    pub url: String,
+    pub owner: String,
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub author: String,
+    /// `#channel`, or `team org/slug`.
+    pub source: String,
+    pub permalink: String,
+    pub poster: String,
+    /// new | dispatched | dismissed | closed
+    pub status: String,
+    pub agent: String,
+    pub offered_ts: f64,
+    pub decided_ts: f64,
+    pub checked_ts: f64,
+    /// GitHub's state: OPEN, MERGED or CLOSED.
+    pub pr_state: String,
+    /// success | failure | pending | none
+    pub ci: String,
+    pub review_decision: String,
+    /// The state of your own latest review, or empty.
+    pub my_review: String,
+    pub draft: bool,
+}
+
+fn review_pr_row(r: &Row) -> rusqlite::Result<ReviewPr> {
+    Ok(ReviewPr {
+        key: r.get("key")?,
+        url: r.get("url")?,
+        owner: r.get("owner")?,
+        repo: r.get("repo")?,
+        number: r.get("number")?,
+        title: r.get("title")?,
+        author: r.get("author")?,
+        source: r.get("source")?,
+        permalink: r.get("permalink")?,
+        poster: r.get("poster")?,
+        status: r.get("status")?,
+        agent: r.get("agent")?,
+        offered_ts: r.get("offered_ts")?,
+        decided_ts: r.get("decided_ts")?,
+        checked_ts: r.get("checked_ts")?,
+        pr_state: r.get("pr_state")?,
+        ci: r.get("ci")?,
+        review_decision: r.get("review_decision")?,
+        my_review: r.get("my_review")?,
+        draft: r.get::<_, i64>("draft")? != 0,
+    })
+}
+
 pub struct Store {
     db: Connection,
 }
@@ -307,7 +385,34 @@ impl Store {
         if !has_title {
             db.execute_batch("ALTER TABLE report_meta ADD COLUMN title TEXT NOT NULL DEFAULT ''")?;
         }
-        Ok(Store { db })
+        let store = Store { db };
+        store.move_review_items()?;
+        Ok(store)
+    }
+
+    /// Databases from before the PRs view: pending `review` Inbox items
+    /// become `new` rows.
+    fn move_review_items(&self) -> Result<()> {
+        for item in self.items(Some("pending"), i64::MAX)? {
+            if item.kind != "review" {
+                continue;
+            }
+            let p = &item.payload;
+            let url = p["url"].as_str().unwrap_or("");
+            if url.is_empty() {
+                continue;
+            }
+            let text = |k: &str| p[k].as_str().unwrap_or("").to_string();
+            let key = crate::pr_review::key(url);
+            let (owner, repo, number) = crate::pr_review::parse(url).unwrap_or_default();
+            self.db.execute(
+                "INSERT OR IGNORE INTO review_prs (key, url, owner, repo, number, title, author, source, status, offered_ts) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'new', ?9)",
+                params![key, url, owner, repo, number as i64, text("title"), text("author"), text("source"), item.ts],
+            )?;
+            self.resolve_item(item.id, "answered", "Moved to PRs")?;
+        }
+        Ok(())
     }
 
     // -- groups ---------------------------------------------------------------
@@ -577,6 +682,79 @@ impl Store {
         Ok(n == 1)
     }
 
+    // -- PRs to review --------------------------------------------------------
+
+    /// Add a PR, or refresh what's known about it. A PR already there keeps
+    /// its status, agent and timestamps.
+    pub fn upsert_review_pr(&self, p: &ReviewPr) -> Result<()> {
+        self.db.execute(
+            "INSERT INTO review_prs (key, url, owner, repo, number, title, author, source, permalink, poster, status, agent, offered_ts) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+             ON CONFLICT(key) DO UPDATE SET url = ?2, owner = ?3, repo = ?4, number = ?5, title = ?6, \
+             author = ?7, source = ?8, permalink = ?9, poster = ?10",
+            params![
+                p.key, p.url, p.owner, p.repo, p.number, p.title, p.author, p.source, p.permalink,
+                p.poster, p.status, p.agent, p.offered_ts
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The rows still waiting (`new` or `dispatched`), or all of them; newest first.
+    pub fn review_prs(&self, open_only: bool) -> Result<Vec<ReviewPr>> {
+        let mut stmt = self.db.prepare(
+            "SELECT * FROM review_prs WHERE (?1 = 0 OR status IN ('new', 'dispatched')) \
+             ORDER BY offered_ts DESC, key",
+        )?;
+        let rows = stmt.query_map([open_only], review_pr_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn review_pr(&self, key: &str) -> Result<Option<ReviewPr>> {
+        Ok(self
+            .db
+            .query_row(
+                "SELECT * FROM review_prs WHERE key = ?1",
+                [key],
+                review_pr_row,
+            )
+            .optional()?)
+    }
+
+    /// Move a PR to a status, noting when; `agent` replaces the reviewer when given.
+    pub fn set_review_pr_status(&self, key: &str, status: &str, agent: Option<&str>) -> Result<()> {
+        self.db.execute(
+            "UPDATE review_prs SET status = ?2, decided_ts = ?3, agent = COALESCE(?4, agent) WHERE key = ?1",
+            params![key, status, now(), agent],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_review_pr_live(
+        &self,
+        key: &str,
+        pr_state: &str,
+        draft: bool,
+        ci: &str,
+        review_decision: &str,
+        my_review: &str,
+    ) -> Result<()> {
+        self.db.execute(
+            "UPDATE review_prs SET pr_state = ?2, draft = ?3, ci = ?4, review_decision = ?5, my_review = ?6, checked_ts = ?7 WHERE key = ?1",
+            params![key, pr_state, draft, ci, review_decision, my_review, now()],
+        )?;
+        Ok(())
+    }
+
+    /// Forget dismissed and closed PRs decided before `before`.
+    pub fn prune_review_prs(&self, before: f64) -> Result<()> {
+        self.db.execute(
+            "DELETE FROM review_prs WHERE status IN ('dismissed', 'closed') AND decided_ts < ?1",
+            [before],
+        )?;
+        Ok(())
+    }
+
     pub fn mark_delivered(&self, id: i64) -> Result<()> {
         self.db
             .execute("UPDATE inbox SET delivered = 1 WHERE id = ?1", [id])?;
@@ -754,6 +932,183 @@ mod tests {
         st.mark_read("api", a).unwrap();
         assert!(st.queued("api").unwrap().is_empty());
         assert!(!st.unqueue("api", a).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn review_store(name: &str) -> (Store, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("drovr-review-prs-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        (Store::open(&dir.join("t.db")).unwrap(), dir)
+    }
+
+    fn pr(n: i64) -> ReviewPr {
+        ReviewPr {
+            key: format!("https://github.com/acme/api/pull/{n}"),
+            url: format!("https://github.com/acme/api/pull/{n}"),
+            owner: "acme".into(),
+            repo: "api".into(),
+            number: n,
+            title: "T".into(),
+            author: "alice".into(),
+            source: "#c".into(),
+            status: "new".into(),
+            offered_ts: now(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn upserting_a_review_pr_keeps_its_status_and_agent() {
+        let (st, dir) = review_store("upsert");
+        st.upsert_review_pr(&pr(1)).unwrap();
+        st.set_review_pr_status(&pr(1).key, "dispatched", Some("rv-1"))
+            .unwrap();
+        let before = st.review_pr(&pr(1).key).unwrap().unwrap();
+        assert_eq!(
+            (before.status.as_str(), before.agent.as_str()),
+            ("dispatched", "rv-1")
+        );
+        assert!(before.decided_ts > 0.0);
+
+        let mut again = pr(1);
+        again.title = "Renamed".into();
+        again.source = "team acme/sre".into();
+        again.offered_ts = 1.0;
+        st.upsert_review_pr(&again).unwrap();
+        let after = st.review_pr(&pr(1).key).unwrap().unwrap();
+        assert_eq!(after.title, "Renamed");
+        assert_eq!(after.source, "team acme/sre");
+        assert_eq!(
+            (after.status.as_str(), after.agent.as_str()),
+            ("dispatched", "rv-1")
+        );
+        assert_eq!(after.offered_ts, before.offered_ts);
+        assert_eq!(after.decided_ts, before.decided_ts);
+        assert!(st.review_pr("nope").unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_open_review_prs_are_listed() {
+        let (st, dir) = review_store("open");
+        for n in 1..=4 {
+            st.upsert_review_pr(&pr(n)).unwrap();
+        }
+        st.set_review_pr_status(&pr(2).key, "dispatched", Some("a"))
+            .unwrap();
+        st.set_review_pr_status(&pr(3).key, "dismissed", None)
+            .unwrap();
+        st.set_review_pr_status(&pr(4).key, "closed", None).unwrap();
+        let keys = |open| {
+            st.review_prs(open)
+                .unwrap()
+                .into_iter()
+                .map(|p| p.number)
+                .collect::<Vec<_>>()
+        };
+        let mut open = keys(true);
+        open.sort();
+        assert_eq!(open, [1, 2]);
+        assert_eq!(keys(false).len(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn live_state_is_written_without_touching_the_status() {
+        let (st, dir) = review_store("live");
+        st.upsert_review_pr(&pr(1)).unwrap();
+        st.update_review_pr_live(&pr(1).key, "OPEN", true, "failure", "APPROVED", "COMMENTED")
+            .unwrap();
+        let p = st.review_pr(&pr(1).key).unwrap().unwrap();
+        assert_eq!(
+            (
+                p.pr_state.as_str(),
+                p.draft,
+                p.ci.as_str(),
+                p.review_decision.as_str(),
+                p.my_review.as_str()
+            ),
+            ("OPEN", true, "failure", "APPROVED", "COMMENTED")
+        );
+        assert!(p.checked_ts > 0.0);
+        assert_eq!(p.status, "new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pruning_drops_only_old_decided_rows() {
+        let (st, dir) = review_store("prune");
+        for n in 1..=4 {
+            st.upsert_review_pr(&pr(n)).unwrap();
+        }
+        st.set_review_pr_status(&pr(2).key, "dismissed", None)
+            .unwrap();
+        st.set_review_pr_status(&pr(3).key, "closed", None).unwrap();
+        st.set_review_pr_status(&pr(4).key, "dispatched", Some("a"))
+            .unwrap();
+        // Nothing is older than a cutoff in the past.
+        st.prune_review_prs(now() - 1000.0).unwrap();
+        assert_eq!(st.review_prs(false).unwrap().len(), 4);
+        // Open rows are never pruned, however old.
+        st.prune_review_prs(now() + 1000.0).unwrap();
+        let left: Vec<i64> = st
+            .review_prs(false)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.number)
+            .collect();
+        assert_eq!(left.len(), 2);
+        assert!(left.contains(&1) && left.contains(&4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pending_review_items_become_new_rows_on_open() {
+        let (st, dir) = review_store("migrate");
+        let payload = serde_json::json!({
+            "url": "https://github.com/Acme/Api/pull/5", "owner": "Acme", "repo": "Api",
+            "number": 5, "title": "Fix", "author": "alice", "source": "#sre"
+        });
+        let opts = ["Dispatch reviewer".to_string(), "Dismiss".to_string()];
+        let pending = st
+            .add_item("drovr", "review", "Review", "b", &opts, &payload)
+            .unwrap();
+        let answered = st
+            .add_item("drovr", "review", "Review", "b", &opts, &payload)
+            .unwrap();
+        st.resolve_item(answered, "answered", "Reviewer x started")
+            .unwrap();
+        let other = st
+            .add_item("a", "decision", "Q", "b", &[], &serde_json::json!({}))
+            .unwrap();
+        drop(st);
+
+        let st = Store::open(&dir.join("t.db")).unwrap();
+        let rows = st.review_prs(false).unwrap();
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.key, "https://github.com/acme/api/pull/5");
+        assert_eq!(r.status, "new");
+        assert_eq!(
+            (r.title.as_str(), r.author.as_str(), r.source.as_str()),
+            ("Fix", "alice", "#sre")
+        );
+        assert_eq!(r.number, 5);
+        let item = st.item(pending).unwrap().unwrap();
+        assert_eq!(
+            (item.status.as_str(), item.answer.as_str()),
+            ("answered", "Moved to PRs")
+        );
+        let item = st.item(answered).unwrap().unwrap();
+        assert_eq!(item.answer, "Reviewer x started");
+        assert_eq!(st.item(other).unwrap().unwrap().status, "pending");
+        drop(st);
+
+        // Opening again changes nothing.
+        let st = Store::open(&dir.join("t.db")).unwrap();
+        assert_eq!(st.review_prs(false).unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

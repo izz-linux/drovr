@@ -4,6 +4,7 @@
 use anyhow::{bail, Result};
 use drovr_core::engine::NewGroup;
 use drovr_core::sources::{ticket_task, Sources};
+use drovr_core::store::ReviewPr;
 use drovr_core::{Engine, NewAgent};
 use serde_json::json;
 
@@ -27,6 +28,8 @@ usage:
   drovr dispatch <TICKET> to <group> [agent] hand it to an existing group (its lead by default)
   drovr review <pr-url>                      start a read-only reviewer for a GitHub PR
   drovr review poll                          look now for PRs to review (see [review] in the config)
+  drovr review list                          the PRs waiting on you (new) or being reviewed
+  drovr review dismiss <pr-url>              hide a PR; its reviewer is removed
   drovr prompt <agent> <text...>             send an agent a prompt
   drovr stop <agent> | resume <agent> [text] stop or resume an agent
   drovr rm <agent>                           stop and forget an agent
@@ -96,15 +99,38 @@ fn cleanup_lines(out: &drovr_core::cleanup::Outcome, dry: bool) -> Vec<String> {
 #[derive(Debug, PartialEq)]
 enum ReviewCmd {
     Poll,
+    List,
+    Dismiss(String),
     Url(String),
 }
 
 fn review_args(args: &[String]) -> Result<ReviewCmd> {
     match args.get(1).map(String::as_str) {
         Some("poll") if args.len() == 2 => Ok(ReviewCmd::Poll),
+        Some("list") if args.len() == 2 => Ok(ReviewCmd::List),
+        Some("dismiss") if args.len() == 3 && args[2].starts_with("http") => {
+            Ok(ReviewCmd::Dismiss(args[2].clone()))
+        }
         Some(url) if args.len() == 2 && url.starts_with("http") => Ok(ReviewCmd::Url(url.into())),
         _ => bail!("{USAGE}"),
     }
+}
+
+/// One line of `drovr review list`.
+fn review_line(p: &ReviewPr) -> String {
+    let state = if p.status == "dispatched" {
+        "reviewing"
+    } else {
+        "new"
+    };
+    let mut line = format!(
+        "{state}  {}/{}#{}  {}  ({})",
+        p.owner, p.repo, p.number, p.title, p.source
+    );
+    if !p.agent.is_empty() {
+        line += &format!("  {}", p.agent);
+    }
+    line
 }
 
 fn main() {
@@ -212,8 +238,21 @@ fn run() -> Result<()> {
         }
         "review" => match review_args(&args)? {
             ReviewCmd::Url(url) => {
-                let a = engine.dispatch_review(&url)?;
+                let a = engine.review_url(&url)?;
                 println!("started {} in {}", a.name, a.cwd);
+            }
+            ReviewCmd::List => {
+                let rows = engine.store.review_prs(true)?;
+                if rows.is_empty() {
+                    println!("No PRs waiting on you.");
+                }
+                for p in &rows {
+                    println!("{}", review_line(p));
+                }
+            }
+            ReviewCmd::Dismiss(url) => {
+                engine.dismiss_pr(&drovr_core::pr_review::key(&url))?;
+                println!("dismissed {url}");
             }
             ReviewCmd::Poll => {
                 let found = drovr_core::pr_review::poll(&engine, true);
@@ -491,13 +530,45 @@ mod tests {
             review_args(&strings(&["review", url])).unwrap(),
             ReviewCmd::Url(url.into())
         );
+        assert_eq!(
+            review_args(&strings(&["review", "list"])).unwrap(),
+            ReviewCmd::List
+        );
+        assert_eq!(
+            review_args(&strings(&["review", "dismiss", url])).unwrap(),
+            ReviewCmd::Dismiss(url.into())
+        );
         for bad in [
             &["review"][..],
             &["review", "nope"],
             &["review", "poll", "x"],
+            &["review", "list", "x"],
+            &["review", "dismiss"],
+            &["review", "dismiss", "nope"],
+            &["review", "dismiss", url, "x"],
             &["review", url, "x"],
         ] {
             assert!(review_args(&strings(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn review_list_lines() {
+        let mut p = ReviewPr {
+            owner: "acme".into(),
+            repo: "api".into(),
+            number: 5,
+            title: "Fix it".into(),
+            source: "#sre".into(),
+            status: "new".into(),
+            ..Default::default()
+        };
+        assert_eq!(review_line(&p), "new  acme/api#5  Fix it  (#sre)");
+        p.status = "dispatched".into();
+        p.agent = "review-api-5".into();
+        assert_eq!(
+            review_line(&p),
+            "reviewing  acme/api#5  Fix it  (#sre)  review-api-5"
+        );
     }
 }
