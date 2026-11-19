@@ -49,6 +49,12 @@ pub fn named(name: &str) -> Result<&'static dyn Harness> {
 /// The tools that change files, which a build agent's reviewer can't use.
 pub const EDIT_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
+/// Whether the agent works next to code it hasn't reviewed (a PR reviewer),
+/// so its CLI shouldn't load project-level config from there.
+pub fn untrusted_workspace(agent: &Agent) -> bool {
+    agent.role == "pr-reviewer"
+}
+
 /// Whether the agent is a build agent's reviewer, which only reads.
 pub fn read_only(agent: &Agent) -> bool {
     agent.stage == crate::config::REVIEW

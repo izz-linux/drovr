@@ -20,6 +20,9 @@ use std::time::Duration;
 /// How long a seen PR is remembered.
 const KEEP_SECS: f64 = 90.0 * 86_400.0;
 
+/// Polls a link may fail to look up before drovr stops trying it.
+const GIVE_UP_AFTER: u32 = 3;
+
 /// A PR worth offering, and where it came from.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Found {
@@ -43,6 +46,9 @@ struct State {
     last_poll: f64,
     /// URL to when it was offered.
     seen: BTreeMap<String, f64>,
+    /// URL to how many polls in a row couldn't look it up. At
+    /// `GIVE_UP_AFTER` it's treated as seen.
+    failed: BTreeMap<String, u32>,
 }
 
 impl Default for State {
@@ -51,6 +57,7 @@ impl Default for State {
             since: crate::store::now() - 86_400.0,
             last_poll: 0.0,
             seen: BTreeMap::new(),
+            failed: BTreeMap::new(),
         }
     }
 }
@@ -236,13 +243,31 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         if state.seen.contains_key(&key) || found.iter().any(|f| f.url.to_lowercase() == key) {
             continue;
         }
-        let view = views.entry(key).or_insert_with(|| {
-            pr_view(&engine.cfg.watch.gh, &c.url)
+        // Other owners' PRs aren't looked up at all.
+        if parse(&c.url).is_some_and(|(owner, _, _)| !cfg.allows(&owner)) {
+            continue;
+        }
+        if !views.contains_key(&key) {
+            let v = pr_view(&engine.cfg.watch.gh, &c.url)
                 .map_err(|e| eprintln!("drovr: couldn't look up {}: {e:#}", c.url))
-                .ok()
-        });
-        let Some(pr) = view.clone() else {
-            all_ok = false;
+                .ok();
+            if v.is_some() {
+                state.failed.remove(&key);
+            } else {
+                let n = state.failed.entry(key.clone()).or_insert(0);
+                *n += 1;
+                if *n >= GIVE_UP_AFTER {
+                    eprintln!("drovr: giving up on {}", c.url);
+                    state.failed.remove(&key);
+                    state.seen.insert(key.clone(), now);
+                }
+            }
+            views.insert(key.clone(), v);
+        }
+        let Some(pr) = views[&key].clone() else {
+            if !state.seen.contains_key(&key) {
+                all_ok = false;
+            }
             continue;
         };
         if pr["state"].as_str() != Some("OPEN") || pr["isDraft"].as_bool().unwrap_or(false) {
@@ -1414,6 +1439,42 @@ mod tests {
             "search.json",
             r#"[{"url":"https://github.com/acme/api/pull/1","title":"T","isDraft":true,"author":{"login":"x"}},{"url":"https://github.com/acme/api/pull/2","title":"T","isDraft":false,"author":{"login":"ME"}}]"#,
         );
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
+        assert!(!log.contains("pr view"), "{log}");
+    }
+
+    #[test]
+    fn a_link_that_never_resolves_is_given_up_on() {
+        let e = env("dead", |c| c.review.github_teams.clear());
+        write(
+            &e.dir,
+            "slack.json",
+            r#"[{"channel":"c","user":"b","ts":"1","text":"https://github.com/acme/api/pull/5","permalink":""}]"#,
+        );
+        let file = e.dir.join("review.json");
+        let since = |file: &Path| {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+            v["since"].as_f64().unwrap()
+        };
+        let old = crate::store::now() - 80_000.0;
+        for _ in 0..2 {
+            assert!(poll_at(&e.engine, true, &file).is_empty());
+            assert!(since(&file) < old);
+        }
+        assert!(poll_at(&e.engine, true, &file).is_empty());
+        assert!(since(&file) > old);
+        // It's given up on for good, even once gh can answer.
+        team_pr(&e, 5, "OPEN", false, "alice");
+        assert!(poll_at(&e.engine, true, &file).is_empty());
+        assert!(items(&e).is_empty());
+    }
+
+    #[test]
+    fn other_owners_cost_no_lookup() {
+        let e = env("noowner", |c| c.review.owners = vec!["other".into()]);
+        team_pr(&e, 5, "OPEN", false, "alice");
+        search_has(&e, &[5]);
         assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
         let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
         assert!(!log.contains("pr view"), "{log}");

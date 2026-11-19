@@ -182,6 +182,9 @@ fn claude_common(run: &Run) -> Vec<String> {
         args.push("--disallowedTools".into());
         args.push(disallowed.join(","));
     }
+    if super::untrusted_workspace(run.agent) {
+        args.extend(["--setting-sources".into(), "user".into()]);
+    }
     if let Some(settings) = crate::memory::settings(cfg, run.agent) {
         args.extend(["--settings".into(), settings]);
     }
@@ -378,6 +381,33 @@ mod tests {
         let s: Value = serde_json::from_str(&args[at + 1]).unwrap();
         assert_eq!(s["autoMemoryDirectory"], "/m/memory");
         assert_eq!(s["permissions"]["deny"], json!(["Edit(//m/memory/**)"]));
+    }
+
+    #[test]
+    fn a_pr_reviewer_keeps_to_user_settings() {
+        let cfg = Config::default();
+        let args = |role: &str| {
+            let a = Agent {
+                role: role.into(),
+                ..agent("s1")
+            };
+            claude_common(&Run {
+                cfg: &cfg,
+                agent: &a,
+                cli: "/opt/drovr".into(),
+                home: "/data/drovr".into(),
+                mcp_config: "/m.json".into(),
+                dir: "/agent".into(),
+                system_prompt: "/s.md".into(),
+                settings_file: "/settings.json".into(),
+                session: Session::New,
+            })
+        };
+        let at = |v: &[String]| v.iter().position(|a| a == "--setting-sources");
+        let reviewer = args("pr-reviewer");
+        assert_eq!(reviewer[at(&reviewer).unwrap() + 1], "user");
+        assert!(at(&args("worker")).is_none());
+        assert!(!args("pr-reviewer").contains(&"--strict-mcp-config".to_string()));
     }
 
     #[test]
