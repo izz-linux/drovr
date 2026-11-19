@@ -112,7 +112,7 @@ pub fn pr_urls(text: &str) -> Vec<String> {
 }
 
 /// A PR url's owner, repo and number.
-fn parse(url: &str) -> Option<(String, String, u64)> {
+pub(crate) fn parse(url: &str) -> Option<(String, String, u64)> {
     let mut seg = url.strip_prefix("https://github.com/")?.split('/');
     let (owner, repo, _, n) = (seg.next()?, seg.next()?, seg.next()?, seg.next()?);
     Some((owner.into(), repo.into(), n.parse().ok()?))
@@ -268,7 +268,37 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     if let Err(e) = save(&state, file) {
         eprintln!("drovr: couldn't save the PR review state: {e:#}");
     }
+    if cfg.remove_when_closed {
+        remove_closed(engine);
+    }
     found
+}
+
+/// Remove each idle reviewer whose PR has merged or closed.
+fn remove_closed(engine: &Engine) {
+    let agents = engine.store.agents(None).unwrap_or_default();
+    for a in agents
+        .iter()
+        .filter(|a| a.role == "pr-reviewer" && a.run_state == "idle" && !a.ticket.is_empty())
+    {
+        let cmd = format!(
+            "{} pr view {} --json state",
+            quote(&engine.cfg.watch.gh),
+            quote(&a.ticket)
+        );
+        let state = match gh_json(&cmd) {
+            Ok(v) => v["state"].as_str().unwrap_or("").to_uppercase(),
+            Err(e) => {
+                eprintln!("drovr: couldn't check {}: {e:#}", a.ticket);
+                continue;
+            }
+        };
+        if state == "MERGED" || state == "CLOSED" {
+            if let Err(e) = engine.remove(&a.name) {
+                eprintln!("drovr: couldn't remove reviewer {}: {e:#}", a.name);
+            }
+        }
+    }
 }
 
 /// Put a found PR in the Inbox. True if it was saved.
@@ -286,11 +316,27 @@ fn offer(engine: &Engine, f: &Found) -> bool {
     });
     let title = format!("Review {}/{}#{}: {}", f.owner, f.repo, f.number, f.title);
     let options = ["Dispatch reviewer".to_string(), "Dismiss".to_string()];
+    let mut started = None;
+    if engine.cfg.review.auto_dispatch {
+        match engine.dispatch_review(&f.url) {
+            Ok(agent) => started = Some(agent.name),
+            Err(e) => {
+                eprintln!("drovr: couldn't start a reviewer for {}: {e:#}", f.url);
+                body += &format!("\n\nCouldn't start a reviewer: {e:#}");
+            }
+        }
+    }
     match engine
         .store
         .add_item("drovr", "review", &title, &body, &options, &payload)
     {
         Ok(id) => {
+            if let Some(name) = started {
+                let _ =
+                    engine
+                        .store
+                        .resolve_item(id, "answered", &format!("Reviewer {name} started"));
+            }
             engine.record_item(id);
             true
         }
@@ -415,7 +461,7 @@ mod tests {
             &dir,
             "gh",
             &format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/gh.log\ncase \"$1\" in\n search) cat {d}/search.json;;\n api) echo me;;\n pr) cat {d}/view-$(basename \"$3\").json;;\nesac\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/gh.log\ncase \"$1\" in\n search) cat {d}/search.json;;\n api) echo me;;\n pr) cat {d}/view-$(basename \"$3\").json;;\n repo) git clone -q \"$(cat {d}/origin)\" \"$4\";;\nesac\n"
             ),
         );
         let mut cfg = Config::default();
@@ -700,5 +746,345 @@ mod tests {
         assert!(fresh.seen.is_empty());
         assert!((fresh.since - (now - 86_400.0)).abs() < 5.0);
         assert_eq!(fresh.last_poll, 0.0);
+    }
+
+    fn git(dir: &Path, args: &str) -> String {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("git -c user.name=t -c user.email=t@t {args}"))
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A bare origin whose `refs/pull/7/head` is one commit past `main`.
+    /// Returns the PR's commit.
+    fn origin(e: &Env) -> String {
+        let bare = e.dir.join("origin.git");
+        let work = e.dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&e.dir, "init -q --bare -b main origin.git");
+        git(&work, "init -q -b main");
+        git(&work, "commit -q --allow-empty -m one");
+        git(&work, &format!("push -q {} main", bare.display()));
+        std::fs::write(work.join("f.txt"), "pr").unwrap();
+        git(&work, "add f.txt");
+        git(&work, "commit -q -m two");
+        git(
+            &work,
+            &format!("push -q {} HEAD:refs/pull/7/head", bare.display()),
+        );
+        write(&e.dir, "origin", &bare.display().to_string());
+        git(&work, "rev-parse HEAD")
+    }
+
+    fn clone_repo(e: &Env, repo: &str) {
+        let repos = e.dir.join("repos");
+        std::fs::create_dir_all(&repos).unwrap();
+        git(
+            &e.dir,
+            &format!("clone -q origin.git {}", repos.join(repo).display()),
+        );
+    }
+
+    fn review_env(name: &str, tweak: impl FnOnce(&mut Config)) -> Env {
+        let repos = std::env::temp_dir()
+            .join(format!("drovr-pr-review-{name}-{}", std::process::id()))
+            .join("repos");
+        env(name, |c| {
+            c.claude.command = "true".into();
+            c.defaults.auto_wake = false;
+            c.review.repos_dir = repos.display().to_string();
+            c.stages.models.insert("review".into(), "rev-model".into());
+            c.stages.review_skill = "/s/SKILL.md".into();
+            tweak(c);
+        })
+    }
+
+    fn url(repo: &str, n: u32) -> String {
+        format!("https://github.com/acme/{repo}/pull/{n}")
+    }
+
+    fn worktree(name: &str) -> PathBuf {
+        crate::config::home().join("worktrees").join(name)
+    }
+
+    fn reviewer(e: &Env, name: &str, run_state: &str, ticket: &str, cwd: &str) {
+        e.engine
+            .store
+            .add_agent(&crate::store::Agent {
+                name: name.into(),
+                role: "pr-reviewer".into(),
+                run_state: run_state.into(),
+                ticket: ticket.into(),
+                cwd: cwd.into(),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn dispatch_starts_a_reviewer_at_the_prs_head() {
+        let e = review_env("disp", |_| {});
+        let sha = origin(&e);
+        clone_repo(&e, "rvdisp");
+        let a = e.engine.dispatch_review(&url("rvdisp", 7)).unwrap();
+        assert_eq!(a.name, "review-rvdisp-7");
+        assert_eq!(a.role, "pr-reviewer");
+        assert_eq!(a.ticket, url("rvdisp", 7));
+        assert_eq!(a.model, "rev-model");
+        assert_eq!(a.cwd, worktree("review-rvdisp-7").display().to_string());
+        assert_eq!(git(Path::new(&a.cwd), "rev-parse HEAD"), sha);
+        for want in [
+            url("rvdisp", 7).as_str(),
+            "/s/SKILL.md",
+            "read-only",
+            "Review acme/rvdisp#7",
+        ] {
+            assert!(a.task.contains(want), "{want} not in {}", a.task);
+        }
+        let _ = e.engine.remove(&a.name);
+    }
+
+    #[test]
+    fn dispatch_clones_a_missing_repo() {
+        let e = review_env("clone", |_| {});
+        origin(&e);
+        assert!(!e.dir.join("repos/rvclone").exists());
+        let a = e.engine.dispatch_review(&url("rvclone", 7)).unwrap();
+        assert!(e.dir.join("repos/rvclone/.git").exists());
+        assert_eq!(a.name, "review-rvclone-7");
+        let _ = e.engine.remove(&a.name);
+    }
+
+    #[test]
+    fn a_failed_fetch_leaves_nothing_behind() {
+        let e = review_env("nofetch", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvnofetch");
+        assert!(e.engine.dispatch_review(&url("rvnofetch", 99)).is_err());
+        assert!(e
+            .engine
+            .store
+            .agent("review-rvnofetch-99")
+            .unwrap()
+            .is_none());
+        assert!(!worktree("review-rvnofetch-99").exists());
+    }
+
+    #[test]
+    fn a_second_reviewer_for_the_same_pr_gets_its_own_name() {
+        let e = review_env("twice", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvtwice");
+        let a = e.engine.dispatch_review(&url("rvtwice", 7)).unwrap();
+        let b = e.engine.dispatch_review(&url("rvtwice", 7)).unwrap();
+        assert_eq!(a.name, "review-rvtwice-7");
+        assert_eq!(b.name, "review-rvtwice-7-2");
+        let _ = e.engine.remove(&a.name);
+        let _ = e.engine.remove(&b.name);
+    }
+
+    fn offer_pr(e: &Env, repo: &str, n: u64) -> i64 {
+        let f = Found {
+            url: url(repo, n as u32),
+            owner: "acme".into(),
+            repo: repo.into(),
+            number: n,
+            title: "T".into(),
+            author: "alice".into(),
+            source: "#c".into(),
+            ..Default::default()
+        };
+        assert!(offer(&e.engine, &f));
+        items(e).iter().find(|i| i.status == "pending").unwrap().id
+    }
+
+    #[test]
+    fn answering_dispatch_starts_the_reviewer() {
+        let e = review_env("ans", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvans");
+        let id = offer_pr(&e, "rvans", 7);
+        e.engine.answer(id, "Dispatch reviewer").unwrap();
+        let item = e.engine.store.item(id).unwrap().unwrap();
+        assert_eq!(item.status, "answered");
+        assert_eq!(item.answer, "Reviewer review-rvans-7 started");
+        assert!(e.engine.store.agent("review-rvans-7").unwrap().is_some());
+        let _ = e.engine.remove("review-rvans-7");
+    }
+
+    #[test]
+    fn answering_dismiss_starts_nothing() {
+        let e = review_env("dismiss", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvdismiss");
+        let id = offer_pr(&e, "rvdismiss", 7);
+        e.engine.answer(id, "Dismiss").unwrap();
+        let item = e.engine.store.item(id).unwrap().unwrap();
+        assert_eq!(item.status, "dismissed");
+        assert!(e.engine.store.agents(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_dispatch_leaves_the_item_pending() {
+        let e = review_env("anserr", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvanserr");
+        let id = offer_pr(&e, "rvanserr", 99);
+        assert!(e.engine.answer(id, "Dispatch reviewer").is_err());
+        assert_eq!(e.engine.store.item(id).unwrap().unwrap().status, "pending");
+        assert!(e.engine.store.agents(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn removing_a_reviewer_takes_its_worktree_and_branch() {
+        let e = review_env("rm", |_| {});
+        origin(&e);
+        clone_repo(&e, "rvrm");
+        let a = e.engine.dispatch_review(&url("rvrm", 7)).unwrap();
+        std::fs::write(Path::new(&a.cwd).join("scratch.txt"), "x").unwrap();
+        let note = e.engine.remove(&a.name).unwrap();
+        assert_eq!(note, "Its worktree and branch were removed.");
+        assert!(!Path::new(&a.cwd).exists());
+        let clone = e.dir.join("repos/rvrm");
+        assert_eq!(git(&clone, "branch --list drovr/review-rvrm-7"), "");
+        assert!(!git(&clone, "worktree list").contains("review-rvrm-7"));
+    }
+
+    #[test]
+    fn removing_a_solo_agent_still_keeps_a_dirty_worktree() {
+        let e = review_env("solo", |c| c.defaults.worktrees = true);
+        origin(&e);
+        clone_repo(&e, "rvsolo");
+        let repo = e.dir.join("repos/rvsolo");
+        let a = e
+            .engine
+            .start_agent(crate::engine::NewAgent {
+                name: "rvsolo-agent".into(),
+                cwd: repo.display().to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(a.cwd, worktree("rvsolo-agent").display().to_string());
+        std::fs::write(Path::new(&a.cwd).join("scratch.txt"), "x").unwrap();
+        let note = e.engine.remove(&a.name).unwrap();
+        assert!(note.contains("uncommitted changes"), "{note}");
+        assert!(Path::new(&a.cwd).exists());
+        assert!(
+            git(&repo, "branch --list drovr/rvsolo-agent").contains("drovr/rvsolo-agent"),
+            "branch kept"
+        );
+    }
+
+    #[test]
+    fn a_role_lookalike_outside_its_worktree_is_not_force_removed() {
+        let e = review_env("look", |_| {});
+        let elsewhere = e.dir.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        reviewer(&e, "rvlook-a", "idle", "", &elsewhere.display().to_string());
+        assert_eq!(e.engine.remove("rvlook-a").unwrap(), "");
+        assert!(elsewhere.exists());
+    }
+
+    fn closed_state(name: &str, state: &str, tweak: impl FnOnce(&mut Config)) -> (Env, PathBuf) {
+        let e = review_env(name, tweak);
+        write(
+            &e.dir,
+            "view-7.json",
+            &view(&url("api", 7), state, false, "x"),
+        );
+        let file = e.dir.join("review.json");
+        (e, file)
+    }
+
+    #[test]
+    fn an_idle_reviewer_on_a_merged_pr_is_removed() {
+        for state in ["MERGED", "CLOSED"] {
+            let (e, file) = closed_state(&format!("gone{state}"), state, |_| {});
+            // Stored in another case than gh prints it.
+            reviewer(&e, "rvgone", "idle", &url("api", 7).to_uppercase(), "/tmp");
+            poll_at(&e.engine, true, &file);
+            assert!(e.engine.store.agent("rvgone").unwrap().is_none(), "{state}");
+        }
+    }
+
+    #[test]
+    fn working_reviewers_and_open_prs_are_kept() {
+        let (e, file) = closed_state("keepw", "MERGED", |_| {});
+        reviewer(&e, "rvkeepw", "working", &url("api", 7), "/tmp");
+        poll_at(&e.engine, true, &file);
+        assert!(e.engine.store.agent("rvkeepw").unwrap().is_some());
+
+        let (e, file) = closed_state("keepo", "OPEN", |_| {});
+        reviewer(&e, "rvkeepo", "idle", &url("api", 7), "/tmp");
+        poll_at(&e.engine, true, &file);
+        assert!(e.engine.store.agent("rvkeepo").unwrap().is_some());
+
+        let (e, file) = closed_state("keepoff", "MERGED", |c| c.review.remove_when_closed = false);
+        reviewer(&e, "rvkeepoff", "idle", &url("api", 7), "/tmp");
+        poll_at(&e.engine, true, &file);
+        assert!(e.engine.store.agent("rvkeepoff").unwrap().is_some());
+    }
+
+    #[test]
+    fn auto_dispatch_starts_a_reviewer_and_records_it() {
+        let e = review_env("auto", |c| c.review.auto_dispatch = true);
+        origin(&e);
+        clone_repo(&e, "rvauto");
+        write(
+            &e.dir,
+            "view-7.json",
+            &view(&url("rvauto", 7), "OPEN", false, "alice"),
+        );
+        write(
+            &e.dir,
+            "search.json",
+            &format!(
+                r#"[{{"url":"{}","title":"T","isDraft":false,"author":{{"login":"alice"}}}}]"#,
+                url("rvauto", 7)
+            ),
+        );
+        let found = poll_at(&e.engine, true, &e.dir.join("review.json"));
+        assert_eq!(found.len(), 1);
+        assert!(e.engine.store.agent("review-rvauto-7").unwrap().is_some());
+        let it = items(&e);
+        assert_eq!(it.len(), 1);
+        assert_eq!(it[0].status, "answered");
+        assert_eq!(it[0].answer, "Reviewer review-rvauto-7 started");
+        let _ = e.engine.remove("review-rvauto-7");
+    }
+
+    #[test]
+    fn a_failed_auto_dispatch_falls_back_to_a_pending_item() {
+        let e = review_env("autofail", |c| c.review.auto_dispatch = true);
+        origin(&e);
+        clone_repo(&e, "rvautofail");
+        write(
+            &e.dir,
+            "view-99.json",
+            &view(&url("rvautofail", 99), "OPEN", false, "alice"),
+        );
+        write(
+            &e.dir,
+            "search.json",
+            &format!(
+                r#"[{{"url":"{}","title":"T","isDraft":false,"author":{{"login":"alice"}}}}]"#,
+                url("rvautofail", 99)
+            ),
+        );
+        let found = poll_at(&e.engine, true, &e.dir.join("review.json"));
+        assert_eq!(found.len(), 1);
+        let it = items(&e);
+        assert_eq!(it.len(), 1);
+        assert_eq!(it[0].status, "pending");
+        assert!(it[0].body.contains("fetch"), "{}", it[0].body);
+        assert!(e.engine.store.agents(None).unwrap().is_empty());
     }
 }

@@ -390,6 +390,29 @@ fn remove_worktree(dir: &Path, name: &str) -> String {
     }
 }
 
+/// Remove a PR reviewer's worktree and its branch, uncommitted files and all:
+/// it never holds work worth keeping.
+fn remove_pr_worktree(dir: &Path, name: &str) -> String {
+    let Some(main) = git_common_dir(dir).and_then(|c| c.parent().map(Path::to_path_buf)) else {
+        let _ = std::fs::remove_dir_all(dir);
+        return String::new();
+    };
+    let _ = git_in(
+        &main,
+        &format!(
+            "worktree remove --force {}",
+            quote(&dir.display().to_string())
+        ),
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = git_in(
+        &main,
+        &format!("branch -D {}", quote(&format!("drovr/{name}"))),
+    );
+    let _ = git_in(&main, "worktree prune");
+    "Its worktree and branch were removed.".into()
+}
+
 /// A worker's name: `<group>-<name>`, cut to fit the 40-character limit.
 fn worker_name(group: &str, name: &str) -> String {
     let base = slug(name);
@@ -711,6 +734,7 @@ impl Engine {
             && resumed.is_none()
             && spec.stage != "retro"
             && spec.stage != crate::config::REVIEW
+            && spec.role != "pr-reviewer"
         {
             cwd = self.make_worktree(&cwd, &spec.name)?;
         }
@@ -837,6 +861,101 @@ impl Engine {
             stage: crate::config::REVIEW.into(),
             ..NewAgent::default()
         })
+    }
+
+    /// Start a reviewer for a PR: a solo agent in its own worktree at the
+    /// PR's head commit, in the local clone (cloned first if it's missing).
+    pub fn dispatch_review(&self, url: &str) -> Result<Agent> {
+        let (owner, repo, number) = crate::pr_review::parse(url).ok_or_else(|| {
+            anyhow!("{url} isn't a GitHub PR link like https://github.com/o/r/pull/1")
+        })?;
+        let repos = match self.cfg.review.repos_dir.trim() {
+            "" => PathBuf::from(self.cfg.default_cwd()),
+            dir => PathBuf::from(expand_tilde(dir)),
+        };
+        let clone = repos.join(&repo);
+        if !clone.is_dir() {
+            std::fs::create_dir_all(&repos)?;
+            let cmd = format!(
+                "{} repo clone {} {}",
+                quote(&self.cfg.watch.gh),
+                quote(&format!("{owner}/{repo}")),
+                quote(&clone.display().to_string())
+            );
+            shell::sh(&cmd, None, None, Duration::from_secs(300))?.into_stdout("gh repo clone")?;
+        }
+        let base: String = format!("review-{}-{number}", slug(&repo))
+            .chars()
+            .take(36)
+            .collect();
+        let base = base.trim_end_matches(['-', '_']).to_string();
+        let name = (1..)
+            .map(|i| {
+                if i == 1 {
+                    base.clone()
+                } else {
+                    format!("{base}-{i}")
+                }
+            })
+            .find(|n| {
+                !self.store.agent(n).ok().flatten().is_some()
+                    && !home().join("worktrees").join(n).exists()
+            })
+            .unwrap_or(base);
+        let cwd = self.make_pr_worktree(&clone, &name, number)?;
+        let started = self.start_agent(NewAgent {
+            name: name.clone(),
+            role: "pr-reviewer".into(),
+            cwd: cwd.clone(),
+            ticket: url.to_string(),
+            task: prompts::pr_review_task(url, &self.cfg.stages.review_skill),
+            model: self.cfg.stages.model(crate::config::REVIEW).to_string(),
+            ..NewAgent::default()
+        });
+        if started.is_err() {
+            let _ = git_in(&clone, &format!("worktree remove --force {}", quote(&cwd)));
+            let _ = git_in(
+                &clone,
+                &format!("branch -D {}", quote(&format!("drovr/{name}"))),
+            );
+            let _ = git_in(&clone, "worktree prune");
+        }
+        started
+    }
+
+    /// A worktree for PR `number`'s head commit, in `<home>/worktrees/<name>`
+    /// on branch `drovr/<name>`.
+    fn make_pr_worktree(&self, clone: &Path, name: &str, number: u64) -> Result<String> {
+        let dir = home().join("worktrees").join(name);
+        let shown = dir.display().to_string();
+        if dir.exists() {
+            bail!("{shown} already exists; remove it or pick another name");
+        }
+        git_in(
+            clone,
+            &format!(
+                "fetch --quiet origin {}",
+                quote(&format!("pull/{number}/head"))
+            ),
+        )?
+        .into_stdout("git fetch the PR")?;
+        let _ = git_in(clone, "worktree prune");
+        let branch = format!("drovr/{name}");
+        let added = git_in(
+            clone,
+            &format!(
+                "worktree add -B {} {} FETCH_HEAD",
+                quote(&branch),
+                quote(&shown)
+            ),
+        )
+        .and_then(|o| o.into_stdout("git worktree add"));
+        if let Err(e) = added {
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = git_in(clone, "worktree prune");
+            return Err(e);
+        }
+        Ok(shown)
     }
 
     /// Stop a build agent's reviewer, if it has one that's still going.
@@ -1396,6 +1515,9 @@ impl Engine {
         let _ = std::fs::remove_dir_all(home().join("agents").join(name));
         let worktree = home().join("worktrees").join(name);
         match agent {
+            Some(a) if a.role == "pr-reviewer" && Path::new(&a.cwd) == worktree => {
+                Ok(remove_pr_worktree(&worktree, name))
+            }
             Some(a) if Path::new(&a.cwd) == worktree => Ok(remove_worktree(&worktree, name)),
             _ => Ok(String::new()),
         }
@@ -1901,6 +2023,21 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
                         json!({ "reason": item.payload["trigger"], "ticket": item.payload["ticket"], "by": "you" }),
                     );
                     self.prompt(agent, text)?;
+                }
+            }
+            // A PR to review: "Dispatch reviewer" starts one, anything else
+            // dismisses it. If the reviewer can't start, the item stays.
+            "review" => {
+                if answer == "Dispatch reviewer" {
+                    let url = item.payload["url"].as_str().unwrap_or("");
+                    let agent = self.dispatch_review(url)?;
+                    self.store.resolve_item(
+                        id,
+                        "answered",
+                        &format!("Reviewer {} started", agent.name),
+                    )?;
+                } else {
+                    self.store.resolve_item(id, "dismissed", answer)?;
                 }
             }
             // A Jira update you approved, as you edited it: the comment's

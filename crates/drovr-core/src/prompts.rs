@@ -190,6 +190,28 @@ Between reviews, end your turn: drovr wakes you when `{pair}` writes. Don't call
     }
 }
 
+/// A PR reviewer's task: review it from its worktree, and touch nothing on
+/// GitHub until the human asks.
+pub fn pr_review_task(url: &str, skill: &str) -> String {
+    let (owner, repo, number) = crate::pr_review::parse(url).unwrap_or_default();
+    let how = match skill.trim() {
+        "" => "Do a thorough code review: what the change does to the system, not only the lines. Check its callers, its tests, its failure modes, security, and the repo's own conventions.".to_string(),
+        skill => format!("Follow the review skill at `{skill}` (read it first, along with any references it names)."),
+    };
+    format!(
+        r#"Review the pull request {url}. Your working directory is a worktree already at the PR's head commit.
+
+**You are read-only on GitHub until the human asks.** Don't push, comment, approve, request changes or edit the PR, and don't change its labels, reviewers or description. Read, run and report only.
+
+{how}
+
+When you have findings, publish them with `publish_report`, titled `Review {owner}/{repo}#{number}`. Then `send_message` to `human` with your verdict and the top findings in a few lines.
+
+Then end your turn and wait. If the human asks you to post the review, post exactly what they approve with `gh pr review` or `gh pr comment`, and nothing more.
+"#
+    )
+}
+
 /// What each of the default stages is for.
 fn stage_guide(stage: &str) -> &'static str {
     match stage {
