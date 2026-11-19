@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/izz-linux/drovr/compare/v0.16.0...v0.16.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* re-offer a dismissed PR when it's posted in a watched channel ([#86](https://github.com/izz-linux/drovr/issues/86)) ([0fce43f](https://github.com/izz-linux/drovr/commit/0fce43f974941d0bf4235c5f0904ce4067eabc5f))
+
 ## [0.16.0](https://github.com/izz-linux/drovr/compare/v0.15.1...v0.16.0) (2026-11-19)
 
 
