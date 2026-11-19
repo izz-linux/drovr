@@ -352,17 +352,19 @@ fn poll_github(engine: &Engine, state: &mut State) {
             }
         }
     }
-    // Open PRs the search no longer returns (past its 100 results or its
-    // 30 days) are still followed, and looked at each time: without the
-    // search there's nothing to say they changed.
+    // PRs the search no longer returns (past its 100 results or its 30
+    // days) are still followed while their ticket is: open ones are looked
+    // at each time, since without the search there's nothing to say they
+    // changed. Merged and closed ones are kept as they are, so they aren't
+    // linked again, and their history isn't lost, when the search finds
+    // them again.
     let mut unsearched = BTreeSet::new();
     for (url, old) in &state.prs {
-        if !found.contains_key(url)
-            && old.state == "OPEN"
-            && old.tickets.iter().any(|k| keys.contains(k))
-        {
+        if !found.contains_key(url) && old.tickets.iter().any(|k| keys.contains(k)) {
             found.insert(url.clone(), old.clone());
-            unsearched.insert(url.clone());
+            if old.state == "OPEN" {
+                unsearched.insert(url.clone());
+            }
         }
     }
     let mut now = BTreeMap::new();
@@ -709,6 +711,123 @@ mod tests {
         assert!(ledger::timeline(&engine.cfg, "SRE-3229")
             .iter()
             .any(|e| e["kind"] == "pr_merged" && e["number"] == 8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn fake_watch(
+        tag: &str,
+    ) -> (
+        Engine,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        impl Fn(&str, &str),
+    ) {
+        let dir = std::env::temp_dir().join(format!("drovr-watch-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.display();
+        let write = {
+            let dir = dir.clone();
+            move |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap()
+        };
+        write(
+            "sprint.json",
+            r#"{"issues":[{"key":"SRE-3229","summary":"Kinds","status":{"name":"To do","statusCategory":{"key":"indeterminate"}},"updated":"u1"}]}"#,
+        );
+        write(
+            "issue.json",
+            r#"{"data":[{"key":"SRE-3229","comment":{"total":0,"comments":[]}}]}"#,
+        );
+        write("search.json", "[]");
+        write("view.json", "{}");
+        write("gh", &format!("#!/bin/sh\ncase \"$1\" in search) cat {d}/search.json;; pr) cat {d}/view.json;; esac\n"));
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut cfg = Config::default();
+        cfg.workflow.enabled = true;
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        cfg.jira.provider = "command".into();
+        cfg.jira.search_cmd = format!("cat {d}/sprint.json #{{query}}");
+        cfg.jira.get_cmd = format!("cat {d}/issue.json #{{key}}");
+        cfg.watch.github_repos = vec!["o/*".into()];
+        cfg.watch.gh = dir.join("gh").display().to_string();
+        let engine = Engine::with(Store::open(&dir.join("t.db")).unwrap(), cfg, "drovr".into());
+        engine
+            .store
+            .add_group("wif", "", "SRE-3229", "/tmp", "", false)
+            .unwrap();
+        let file = dir.join("watch.json");
+        (engine, dir, file, write)
+    }
+
+    const PR7: &str = "https://github.com/o/r/pull/7";
+
+    fn search_pr7(state: &str, updated: &str) -> String {
+        format!(
+            r#"[{{"number":7,"title":"feat(SRE-3229): kinds","url":"{PR7}","repository":{{"nameWithOwner":"o/r"}},"state":"{state}","isDraft":false,"updatedAt":"{updated}"}}]"#
+        )
+    }
+
+    #[test]
+    fn a_merged_pr_the_search_misses_keeps_its_history() {
+        let (engine, dir, file, write) = fake_watch("merged-kept");
+        let count = |kind: &str| {
+            ledger::timeline(&engine.cfg, "SRE-3229")
+                .iter()
+                .filter(|e| e["kind"] == kind)
+                .count()
+        };
+        poll_at(&engine, true, &file);
+
+        write("search.json", &search_pr7("open", "p1"));
+        write(
+            "view.json",
+            r#"{"state":"OPEN","mergeable":"MERGEABLE","reviewDecision":"","headRefOid":"a1","statusCheckRollup":[]}"#,
+        );
+        poll_at(&engine, true, &file);
+        assert_eq!(count("pr_linked"), 1);
+
+        write("search.json", &search_pr7("merged", "p2"));
+        write(
+            "view.json",
+            r#"{"state":"MERGED","headRefOid":"a1","statusCheckRollup":[],"updatedAt":"p2"}"#,
+        );
+        let s = poll_at(&engine, true, &file);
+        assert_eq!(count("pr_merged"), 1);
+        let fired = s.prs[PR7].fired.clone();
+        assert!(fired.iter().any(|f| f.starts_with("merged@")), "{fired:?}");
+
+        write("search.json", "[]");
+        let s = poll_at(&engine, true, &file);
+        assert_eq!(s.prs[PR7].state, "MERGED");
+        assert_eq!(s.prs[PR7].fired, fired);
+
+        write("search.json", &search_pr7("merged", "p2"));
+        let s = poll_at(&engine, true, &file);
+        assert_eq!(s.prs[PR7].fired, fired);
+        assert_eq!(count("pr_linked"), 1);
+        assert_eq!(count("pr_merged"), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pr_whose_ticket_left_the_jql_is_dropped() {
+        let (engine, dir, file, write) = fake_watch("ticket-left");
+        write("search.json", &search_pr7("closed", "p1"));
+        write(
+            "view.json",
+            r#"{"state":"CLOSED","headRefOid":"a1","statusCheckRollup":[]}"#,
+        );
+        let s = poll_at(&engine, true, &file);
+        assert_eq!(s.prs[PR7].state, "CLOSED");
+
+        write(
+            "sprint.json",
+            r#"{"issues":[{"key":"SRE-1","summary":"Other","status":{"name":"To do","statusCategory":{"key":"indeterminate"}},"updated":"u1"}]}"#,
+        );
+        write("search.json", "[]");
+        let s = poll_at(&engine, true, &file);
+        assert!(!s.prs.contains_key(PR7), "{:?}", s.prs.keys());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
