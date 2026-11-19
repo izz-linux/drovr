@@ -75,7 +75,7 @@ fn archive(cfg: &Config, store: &Store, cutoff: f64, dry: bool, out: &mut Outcom
                 let sep = std::path::MAIN_SEPARATOR;
                 store.move_report_meta(&format!("{from}{sep}"), &format!("{to}{sep}"))?;
             } else {
-                store.move_report_meta(&from, &to)?;
+                store.move_report(&from, &to)?;
             }
         }
         out.archived.push((name, target));
@@ -355,6 +355,30 @@ mod tests {
     }
 
     #[test]
+    fn a_file_move_leaves_similarly_named_rows_alone() {
+        let e = env("exact");
+        let a = write(&e, "a.html", 40.0);
+        let bak = write(&e, "a.html.bak", 1.0);
+        for p in [&a, &bak] {
+            e.store
+                .publish_report(&p.display().to_string(), "a", "T", "S")
+                .unwrap();
+        }
+        run(&e.cfg, &e.store, e.now, false).unwrap();
+        let paths: Vec<String> = e
+            .store
+            .report_meta()
+            .unwrap()
+            .into_iter()
+            .map(|m| m.path)
+            .collect();
+        assert!(paths.contains(&e.plans.join("archive/a.html").display().to_string()));
+        assert!(paths.contains(&bak.display().to_string()), "{paths:?}");
+        assert_eq!(paths.len(), 2);
+        let _ = std::fs::remove_dir_all(&e.dir);
+    }
+
+    #[test]
     fn dry_run_changes_nothing() {
         let mut e = env("dry");
         e.cfg.inbox.keep_days = 10;
@@ -399,22 +423,48 @@ mod tests {
         e.cfg.reports.archive_after_days = 0;
         e.cfg.inbox.keep_days = 10;
         let old = e.now - 20.0 * DAY;
+        e.store
+            .add_agent(&crate::store::Agent {
+                name: "live".into(),
+                ..Default::default()
+            })
+            .unwrap();
         let dismissed = add(&e);
         e.store.resolve_item(dismissed, "dismissed", "").unwrap();
         set_item(&e, dismissed, old, Some(old), 0);
-        let delivered = add(&e);
+        let delivered = e
+            .store
+            .add_item("live", "decision", "t", "", &[], &serde_json::json!({}))
+            .unwrap();
         e.store.resolve_item(delivered, "answered", "y").unwrap();
         set_item(&e, delivered, old, Some(old), 1);
         let pending = add(&e);
         set_item(&e, pending, old, None, 0);
-        let undelivered = add(&e);
+        let undelivered = e
+            .store
+            .add_item("live", "decision", "t", "", &[], &serde_json::json!({}))
+            .unwrap();
         e.store.resolve_item(undelivered, "answered", "y").unwrap();
         set_item(&e, undelivered, old, Some(old), 0);
         let recent = add(&e);
         e.store.resolve_item(recent, "dismissed", "").unwrap();
         set_item(&e, recent, old, Some(e.now - 1.0 * DAY), 0);
+        let other_kind = e
+            .store
+            .add_item("live", "permission", "t", "", &[], &serde_json::json!({}))
+            .unwrap();
+        e.store.resolve_item(other_kind, "answered", "y").unwrap();
+        set_item(&e, other_kind, old, Some(old), 0);
+        let gone = e
+            .store
+            .add_item("gone", "decision", "t", "", &[], &serde_json::json!({}))
+            .unwrap();
+        e.store.resolve_item(gone, "answered", "y").unwrap();
+        set_item(&e, gone, old, Some(old), 0);
         let o = run(&e.cfg, &e.store, e.now, false).unwrap();
-        assert_eq!(o.inbox_deleted, 2);
+        assert_eq!(o.inbox_deleted, 4);
+        assert!(e.store.item(other_kind).unwrap().is_none());
+        assert!(e.store.item(gone).unwrap().is_none());
         assert!(e.store.item(dismissed).unwrap().is_none());
         assert!(e.store.item(delivered).unwrap().is_none());
         for id in [pending, undelivered, recent] {

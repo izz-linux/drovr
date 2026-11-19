@@ -594,10 +594,12 @@ impl Store {
     }
 
     /// Delete resolved items last touched before `before` (a Unix time), or
-    /// just count them when `dry`. Answers an agent hasn't received yet stay.
+    /// just count them when `dry`. Answers a live agent can still collect stay.
     pub fn prune_items(&self, before: f64, dry: bool) -> Result<usize> {
         const WHERE: &str = "status != 'pending' AND COALESCE(answered_ts, ts) < ?1 \
-             AND NOT (status IN ('answered', 'rejected') AND delivered = 0)";
+             AND NOT (status IN ('answered', 'rejected') AND delivered = 0 \
+             AND kind IN ('decision', 'command', 'jira', 'confluence') \
+             AND agent IN (SELECT name FROM agents))";
         if dry {
             let n: i64 = self.db.query_row(
                 &format!("SELECT COUNT(*) FROM inbox WHERE {WHERE}"),
