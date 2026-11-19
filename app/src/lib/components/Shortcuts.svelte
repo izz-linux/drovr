@@ -10,7 +10,7 @@
       title: "Anywhere",
       keys: [
         [`${mod}1 … ${mod}7`, "Agents, Inbox, Reports, Jira, Slack · Confluence, Message bus, Code review"],
-        [`${mod}8`, "PRs"],
+        ...(app.defaults?.review_enabled || app.snap.review_prs.length ? ([[`${mod}8`, "PRs"]] as [string, string][]) : []),
         ...(app.defaults?.workflow ? ([[`${mod}9`, "Pipeline"]] as [string, string][]) : []),
         [`${mod},`, "Settings"],
         [`${mod}N`, "New agent"],

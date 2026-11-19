@@ -21,6 +21,7 @@
     running[id] = false;
   }
 
+  // `review` is legacy: PRs live in the PRs view now; it labels items from before that.
   const kinds: Record<string, string> = {
     decision: "Decision", command: "Command", permission: "Permission", spawn: "Spawn", done: "Finished",
     watch: "Watcher", jira: "Jira draft", handoff: "Handoff", confluence: "Confluence", review: "PR review",

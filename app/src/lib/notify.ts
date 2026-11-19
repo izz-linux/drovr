@@ -53,7 +53,9 @@ export async function prsChanged(rows: ReviewPr[], notify: boolean) {
   newPrCount = waiting.length;
   setBadge();
   const fresh = knownPrs ? waiting.filter((r) => !knownPrs!.has(r.key)) : [];
-  knownPrs = new Set(waiting.map((r) => r.key));
+  // Every open PR, so one whose dispatch failed and went back to New
+  // doesn't notify again.
+  knownPrs = new Set(rows.map((r) => r.key));
   if (!fresh.length || !notify || document.hasFocus()) return;
   await send(
     fresh.length === 1 ? "PR to review" : `${fresh.length} PRs to review`,

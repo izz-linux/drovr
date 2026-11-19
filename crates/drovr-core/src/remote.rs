@@ -738,6 +738,7 @@ fn kind_label(kind: &str) -> &str {
         "jira" => "Jira draft",
         "handoff" => "Handoff",
         "confluence" => "Confluence",
+        // Legacy: PRs live in the PRs view now; this labels items from before that.
         "review" => "PR review",
         other => other,
     }
