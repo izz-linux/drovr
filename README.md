@@ -105,14 +105,16 @@ cargo install --path crates/drovr-cli
 | Slack · Confluence | 5 | Search, read, send results to an agent, or ask a free-form question |
 | Message bus | 6 | Agents' messages to each other, and each group's shared notes, with a filter |
 | Code review | 7 | Changed files and diffs in each repo and worktree an agent worked in |
-| Settings | 8 | Theme, the phone page's sign-in link, and your config file |
+| PRs | 8 | PRs waiting on your review, from offer to merge (once `[review]` watches a channel or team) |
 | Pipeline | 9 | Your sprint, its PRs and the agents on each ticket, and the retros (only with `workflow.enabled`) |
+
+Settings is ⌘/Ctrl+, (**drovr → Settings…**): theme, the phone page's sign-in link, and your config file.
 
 A ticket's **Timeline** opens over any view, from an agent's header, a group, or Pipeline.
 
 **Shortcuts** (⌘/Ctrl+/ lists them all in the app; [USAGE.md](USAGE.md#keyboard-shortcuts) has the table):
 
-- **Anywhere:** ⌘/Ctrl+1 … 9 switch views. ⌘/Ctrl+N starts a new agent and ⌘/Ctrl+G a new group. ⌘/Ctrl+F (Edit → Find…) finds text in the selected agent's output, or focuses the filter on the Message bus. ⌃` shows or hides the terminal. Esc closes a dialog.
+- **Anywhere:** ⌘/Ctrl+1 … 9 switch views and ⌘/Ctrl+, opens Settings. ⌘/Ctrl+N starts a new agent and ⌘/Ctrl+G a new group. ⌘/Ctrl+F (Edit → Find…) finds text in the selected agent's output, or focuses the filter on the Message bus. ⌃` shows or hides the terminal. Esc closes a dialog.
 - **In an agent's prompt box:** Enter sends and Shift+Enter adds a new line.
 - **In the Inbox:** ↓↑ or J K move, 1–9 pick an option, A allows or starts, D denies or declines (see [Inbox](#inbox)).
 - **In Settings:** ⌘/Ctrl+S saves.
@@ -490,7 +492,7 @@ For any agent, this lists every git repo and worktree it worked in, so it works 
 
 ### Review PRs from Slack and GitHub
 
-drovr can watch Slack channels for GitHub PR links and your GitHub teams for review requests, and offer each PR in the Inbox as a **PR review** item. Set `review.slack_channels` (such as `"#sre-reviews"`) and `review.github_teams` (`"org/team"`), and drovr looks every `review.poll_secs` while the app runs. **Dispatch reviewer** starts a reviewer and **Dismiss** drops the item; with `review.auto_dispatch` it starts without asking.
+drovr can watch Slack channels for GitHub PR links and your GitHub teams for review requests, and list each PR in **PRs** (⌘8), from when it's found until it merges or closes. Set `review.slack_channels` (such as `"#sre-reviews"`) and `review.github_teams` (`"org/team"`), and drovr looks every `review.poll_secs` while the app runs. New PRs wait under **New**, where **Dispatch reviewer** starts a reviewer and **Dismiss** hides the PR; with `review.auto_dispatch` it starts without asking. A reviewed PR moves under **Reviewing**, with **Open reviewer**, **Report** and **Dismiss**, which removes the reviewer. Each row shows CI, GitHub's review decision and your own latest review, refreshed on every poll (**Refresh** polls now). New PRs raise a notification while drovr is in the background, show as a count on the PRs item, and add to the Dock badge; they don't go to the Inbox. The phone page doesn't show PRs yet.
 
 - **Where it works:** each reviewer gets its own folder, `<home>/worktrees/<name>`, and the PR's head is checked out in `./pr` inside it. The reviewer runs in the folder, not in `pr`, so the PR's own agent config (`.claude/settings.json` hooks, `.mcp.json`, `opencode.json`, `.opencode/`, Codex config) is never loaded: the PR's own agent config can't run code when the reviewer starts. It reads the PR with `git -C pr …` and `gh pr diff`. The clone is `<review.repos_dir>/<repo>` (`defaults.cwd` when `repos_dir` is empty), and drovr clones it with `gh` if it's missing. It fetches from whichever remote points at the PR's repo, so a clone with `origin` as your fork and `upstream` as the base works. If no remote matches, the reviewer fails with an error that says so.
 - **Read-only:** the reviewer doesn't change anything on GitHub until you tell it to post. That's enforced by its instructions, so to make it a hard stop, keep `gh pr review` and `gh pr comment` out of `permissions.auto_allow`. It doesn't run the PR's code, scripts or tests unless you ask.

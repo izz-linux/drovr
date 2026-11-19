@@ -9,8 +9,10 @@
     {
       title: "Anywhere",
       keys: [
-        [`${mod}1 … ${mod}8`, "Agents, Inbox, Reports, Jira, Slack · Confluence, Message bus, Code review, Settings"],
+        [`${mod}1 … ${mod}7`, "Agents, Inbox, Reports, Jira, Slack · Confluence, Message bus, Code review"],
+        [`${mod}8`, "PRs"],
         ...(app.defaults?.workflow ? ([[`${mod}9`, "Pipeline"]] as [string, string][]) : []),
+        [`${mod},`, "Settings"],
         [`${mod}N`, "New agent"],
         [`${mod}G`, "New group"],
         [`${mod}F`, "Find in the agent's output, or filter the Message bus"],

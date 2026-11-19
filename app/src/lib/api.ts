@@ -23,6 +23,8 @@ export type Defaults = {
   notify: boolean; cost_warning_usd: number; copy_on_select: boolean;
   /** workflow.enabled: the ticket record and timeline are on. */
   workflow: boolean;
+  /** [review] has a Slack channel or a GitHub team: the PRs view shows. */
+  review_enabled: boolean;
   /** jira.ticket_skill: how agents write a ticket for their own task. */
   ticket_skill: string;
 };
@@ -31,7 +33,24 @@ export type Item = {
   id: number; ts: number; agent: string; kind: string; title: string; body: string;
   options: string[]; payload: any; status: string; answer: string; delivered: boolean;
 };
-export type Snapshot = { agents: Agent[]; groups: Group[]; inbox: Item[]; recent: Item[]; unseen_reports: number; herdr: boolean; codex: boolean; opencode: boolean };
+/** A PR waiting on your review. `status` is new or dispatched here (the snapshot lists open rows only). */
+export type ReviewPr = {
+  key: string; url: string; owner: string; repo: string; number: number; title: string; author: string;
+  /** `#channel`, or `team org/slug`. */
+  source: string; permalink: string; poster: string;
+  status: "new" | "dispatched" | "dismissed" | "closed";
+  /** Empty while status is dispatched means the reviewer is still starting. */
+  agent: string;
+  offered_ts: number; decided_ts: number; checked_ts: number;
+  pr_state: string;
+  /** success | failure | pending | none */
+  ci: string;
+  review_decision: string;
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED or empty. */
+  my_review: string;
+  draft: boolean;
+};
+export type Snapshot = { agents: Agent[]; groups: Group[]; inbox: Item[]; recent: Item[]; review_prs: ReviewPr[]; unseen_reports: number; herdr: boolean; codex: boolean; opencode: boolean };
 export type ReportFile = { path: string; folder: string; title: string; modified: number; agent: string; summary: string; seen: boolean };
 export type Line = { kind: string; text: string };
 export type Message = { id: number; ts: number; sender: string; recipient: string; group_name: string; body: string };
@@ -138,6 +157,10 @@ export const api = {
   termClose: (key: string) => invoke<void>("term_close", { key }),
   markRan: (id: number, note: string) => invoke<void>("inbox_mark_ran", { id, note }),
   dismiss: (id: number) => invoke<void>("inbox_dismiss", { id }),
+  prDispatch: (key: string) => invoke<void>("pr_dispatch", { key }),
+  prDismiss: (key: string) => invoke<void>("pr_dismiss", { key }),
+  /** A forced poll: look for new PRs and refresh the open ones now. */
+  prRefresh: () => invoke<void>("pr_refresh"),
   runCommand: (id: number, target: string, command: string) => invoke<string>("run_command", { id, target, command }),
   bus: (group: string) => invoke<{ messages: Message[]; notes: Note[] }>("bus", { group }),
   send: (to: string, group: string, body: string) => invoke<void>("send_message", { to, group, body }),

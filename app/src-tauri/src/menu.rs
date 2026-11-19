@@ -20,6 +20,9 @@ const TERMINAL_SHORTCUT: &str = "Ctrl+`";
 /// Lists drovr's keyboard shortcuts.
 const SHORTCUTS_SHORTCUT: &str = "CmdOrCtrl+/";
 
+/// drovr > Settings… opens the Settings view.
+const SETTINGS_SHORTCUT: &str = "CmdOrCtrl+,";
+
 /// Help > drovr on GitHub opens this in the browser. Its id has no "menu-"
 /// prefix, so it's handled here rather than forwarded to the UI.
 const REPO_URL: &str = "https://github.com/izz-linux/drovr";
@@ -99,6 +102,13 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
             "Install Command Line Tool…",
             true,
             None::<&str>,
+        )?)
+        .item(&MenuItem::with_id(
+            handle,
+            "menu-settings",
+            "Settings…",
+            true,
+            Some(SETTINGS_SHORTCUT),
         )?)
         .separator()
         .item(&PredefinedMenuItem::hide(
@@ -261,6 +271,7 @@ mod tests {
         for s in [
             super::TERMINAL_SHORTCUT,
             super::SHORTCUTS_SHORTCUT,
+            super::SETTINGS_SHORTCUT,
             "CmdOrCtrl+F",
         ] {
             assert!(
@@ -270,6 +281,14 @@ mod tests {
                 "{s}"
             );
         }
+    }
+
+    #[test]
+    fn settings_has_its_own_menu_item() {
+        assert_eq!(super::SETTINGS_SHORTCUT, "CmdOrCtrl+,");
+        // The id is forwarded to the UI as `menu:menu-settings`.
+        let src = include_str!("menu.rs");
+        assert!(src.contains("\"menu-settings\","));
     }
 
     #[test]

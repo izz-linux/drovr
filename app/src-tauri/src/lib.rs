@@ -62,6 +62,8 @@ struct Snapshot {
     groups: Vec<Group>,
     inbox: Vec<Item>,
     recent: Vec<Item>,
+    /// PRs waiting on your review (new or dispatched).
+    review_prs: Vec<drovr_core::store::ReviewPr>,
     unseen_reports: i64,
     herdr: bool,
     /// Whether the Codex CLI is installed, for agents with harness "codex".
@@ -97,6 +99,7 @@ async fn snapshot() -> Res<Snapshot> {
             groups: e.store.groups()?,
             inbox: e.store.items(Some("pending"), 500)?,
             recent,
+            review_prs: e.store.review_prs(true)?,
             unseen_reports: drovr_core::reports::unseen(&e.store)?,
             herdr: installed(&e.cfg.herdr.command),
             codex: installed(&e.cfg.codex.command),
@@ -180,6 +183,8 @@ struct Defaults {
     copy_on_select: bool,
     /// The ticket workflow (record, timeline) is on.
     workflow: bool,
+    /// `[review]` has a Slack channel or a GitHub team: the PRs view shows.
+    review_enabled: bool,
     /// The skill agents follow to write a ticket for their task (jira.ticket_skill).
     ticket_skill: String,
 }
@@ -203,6 +208,8 @@ async fn defaults() -> Res<Defaults> {
             cost_warning_usd: d.cost_warning_usd,
             copy_on_select: d.copy_on_select,
             workflow: e.cfg.workflow.enabled,
+            review_enabled: !e.cfg.review.slack_channels.is_empty()
+                || !e.cfg.review.github_teams.is_empty(),
             ticket_skill: e.cfg.jira.ticket_skill.clone(),
         })
     })
@@ -450,6 +457,27 @@ async fn inbox_mark_ran(id: i64, note: String) -> Res<()> {
 #[tauri::command]
 async fn inbox_dismiss(id: i64) -> Res<()> {
     blocking(move |e| e.dismiss(id)).await
+}
+
+// -- PRs ----------------------------------------------------------------------
+
+#[tauri::command]
+async fn pr_dispatch(key: String) -> Res<()> {
+    blocking(move |e| e.dispatch_pr(&key).map(|_| ())).await
+}
+
+#[tauri::command]
+async fn pr_dismiss(key: String) -> Res<()> {
+    blocking(move |e| e.dismiss_pr(&key)).await
+}
+
+#[tauri::command]
+async fn pr_refresh() -> Res<()> {
+    blocking(|e| {
+        drovr_core::pr_review::poll(e, true);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -981,6 +1009,9 @@ pub fn run() {
             inbox_reject,
             inbox_mark_ran,
             inbox_dismiss,
+            pr_dispatch,
+            pr_dismiss,
+            pr_refresh,
             run_command,
             bus,
             send_message,

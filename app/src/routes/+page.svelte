@@ -18,8 +18,10 @@
   import Shortcuts from "#lib/components/Shortcuts.svelte";
   import Timeline from "#lib/components/Timeline.svelte";
   import Pipeline from "#lib/components/Pipeline.svelte";
+  import Prs from "#lib/components/Prs.svelte";
 
-  // Pipeline is part of the ticket workflow (workflow.enabled).
+  // Pipeline is part of the ticket workflow (workflow.enabled). PRs shows once
+  // [review] has a channel or team, or rows exist.
   const nav: { id: View; label: string; key: string }[] = $derived([
     { id: "agents", label: "Agents", key: "1" },
     { id: "inbox", label: "Inbox", key: "2" },
@@ -28,7 +30,8 @@
     { id: "search", label: "Slack · Confluence", key: "5" },
     { id: "bus", label: "Message bus", key: "6" },
     { id: "review", label: "Code review", key: "7" },
-    { id: "settings", label: "Settings", key: "8" },
+    ...(app.defaults?.review_enabled || app.snap.review_prs.length ? [{ id: "prs" as View, label: "PRs", key: "8" }] : []),
+    { id: "settings", label: "Settings", key: "," },
     ...(app.defaults?.workflow ? [{ id: "pipeline" as View, label: "Pipeline", key: "9" }] : []),
   ]);
 
@@ -36,6 +39,7 @@
   const mod = /Mac/i.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
 
   const working = $derived(app.snap.agents.filter((a) => a.state === "working").length);
+  const newPrs = $derived(app.snap.review_prs.filter((r) => r.status === "new").length);
   const blocked = $derived(app.snap.agents.filter((a) => a.state === "blocked").length);
 
   onMount(() => {
@@ -45,6 +49,7 @@
       if (app.view !== "agents") { app.view = "agents"; app.termOpen = true; }
       else app.termOpen = !app.termOpen;
     });
+    const offSettings = listen("menu:menu-settings", () => (app.view = "settings"));
     const offCli = listen("menu:menu-install-cli", () => { act(() => api.installCli()).then((m) => m && toast(m)); });
     refresh();
     api.defaults().then((d) => { app.you = d.your_name; app.defaults = d; }).catch(() => {});
@@ -61,7 +66,7 @@
       if (e.key === "/") { app.shortcutsOpen = true; e.preventDefault(); }
     };
     window.addEventListener("keydown", onKey);
-    return () => { stopTheme(); offFind.then((f) => f()); offTerm.then((f) => f()); offKeys.then((f) => f()); offCli.then((f) => f()); clearInterval(t); window.removeEventListener("keydown", onKey); };
+    return () => { stopTheme(); offFind.then((f) => f()); offTerm.then((f) => f()); offKeys.then((f) => f()); offCli.then((f) => f()); offSettings.then((f) => f()); clearInterval(t); window.removeEventListener("keydown", onKey); };
   });
 </script>
 
@@ -73,6 +78,7 @@
         <button class="nav" class:active={app.view === n.id} aria-current={app.view === n.id ? "page" : undefined} onclick={() => (app.view = n.id)} title={`${mod}${n.key}`}>
           <span>{n.label}</span>
           {#if n.id === "inbox" && app.snap.inbox.length}<span class="badge">{app.snap.inbox.length}</span>{/if}
+          {#if n.id === "prs" && newPrs}<span class="badge new">{newPrs}</span>{/if}
           {#if n.id === "reports" && app.snap.unseen_reports}<span class="badge new">{app.snap.unseen_reports}</span>{/if}
           {#if n.id === "agents" && app.snap.agents.length}<span class="count">{app.snap.agents.length}</span>{/if}
         </button>
@@ -100,6 +106,7 @@
     {:else if app.view === "bus"}<Bus />
     {:else if app.view === "review"}<Review />
     {:else if app.view === "pipeline"}<Pipeline />
+    {:else if app.view === "prs"}<Prs />
     {:else}<Settings />{/if}
   </main>
 </div>

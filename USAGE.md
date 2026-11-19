@@ -10,8 +10,10 @@ How to get things done with drovr, in the app and from the command line. For wha
 
 | Keys | Does |
 | --- | --- |
-| ⌘1 … ⌘8 | Agents, Inbox, Reports, Jira, Slack · Confluence, Message bus, Code review, Settings |
+| ⌘1 … ⌘7 | Agents, Inbox, Reports, Jira, Slack · Confluence, Message bus, Code review |
+| ⌘8 | PRs (once `[review]` has a Slack channel or a GitHub team, or PRs are listed) |
 | ⌘9 | Pipeline (with `workflow.enabled`) |
+| ⌘, | Settings (**drovr → Settings…**) |
 | ⌘N | New agent |
 | ⌘G | New group |
 | Enter | Send the prompt (in an agent's prompt box) |
@@ -179,12 +181,15 @@ drovr attach pay-api-lead          # prints: cd … && claude --resume …
    PR reviewers follow `stages.review_skill` and run on `stages.models.review` (harness `defaults.harness`). To only review PRs in some GitHub orgs, set `owners = ["my-org"]`.
 
    Slack is read through your Slack provider, and `gh` must be signed in. With `provider = "agent"`, each poll is a short `claude -p` run, so it costs a little each time; raise `poll_secs` (600 by default) to poll less. `drovr review poll` looks right away.
-2. **Check the Inbox.** Each new PR shows up once as a **PR review** item with its title, where it came from and a link. Closed PRs and your own aren't offered. A draft requested from your team is offered once it's ready; one linked in Slack is skipped. Slack is read back one day on the first poll, and never more than 7. **Dispatch reviewer** starts the reviewer and **Dismiss** drops the item. With `review.auto_dispatch = true` it starts without asking: the item always appears, already answered ("Reviewer <name> started"), under resolved, and it's a pending item with the error only if the reviewer couldn't start.
+2. **Open PRs (⌘8).** Each PR waiting on you is listed once, in **New** until you decide and in **Reviewing** once it has a reviewer. A row shows `owner/repo#n`, the title, the author, where it came from (`#channel`, or `team org/slug`), its age, CI (✓ ✗ ●), GitHub's review decision and your own latest review (waiting on you, you approved, you requested changes, you commented). Closed PRs and your own aren't offered. A draft requested from your team is offered once it's ready; one linked in Slack is skipped. Slack is read back one day on the first poll, and never more than 7. PRs no longer go to the Inbox: new ones raise a notification while drovr is in the background ("PR to review", or "N PRs to review"), the PRs item in the sidebar shows how many are new, and the Dock badge is the Inbox count plus that number. Each poll (`review.poll_secs`) refreshes every listed PR's state, CI and reviews; **Refresh** polls right away.
+   - **New:** **Dispatch reviewer** starts the reviewer, **Dismiss** hides the PR, **Open on GitHub** opens it. If the reviewer can't start (a clone or fetch failed), a message says why and the PR stays in New.
+   - **Reviewing:** it shows "Starting…" while the reviewer starts, then the reviewer's state (working, idle, reported, error). **Open reviewer** goes to the agent in Agents, where you can tell it to post. **Report** opens its "Review owner/repo#n" report once there is one. **Dismiss** removes the reviewer, its worktree and branch, and hides the PR.
+   - **Lifecycle:** a PR leaves the list when you dismiss it, or when GitHub shows it merged or closed (the reviewer is removed too, per `review.remove_when_closed`). A dismissed PR isn't offered again. With `review.auto_dispatch = true` a PR starts in Reviewing, and in New only if the reviewer couldn't start. `drovr review <url>` lists the PR in Reviewing too.
 3. **Let it work.** The reviewer gets its own folder, and the PR's head is checked out in `./pr` inside it, from the clone in `<repos_dir>/<repo>` (cloned with `gh` if it's missing). It runs outside `pr`, so the PR's own agent config (hooks, MCP servers, OpenCode and Codex config) is never loaded. It reads the PR, doesn't run its code, scripts or tests unless you ask, publishes a report titled "Review owner/repo#n" and messages you a summary. It stays running, so you can ask follow-ups.
 4. **Tell it to post.** It changes nothing on GitHub until you say so, for example "post this as a review with those two comments". That's a rule in its instructions, so for a hard stop keep `gh pr review` and `gh pr comment` out of `permissions.auto_allow`: each post then asks in the Inbox.
 5. **Clean up.** **✕**, then **Remove?**, deletes its worktree and branch even if it has uncommitted files. With `review.remove_when_closed = true` (the default), a reviewer that isn't working is removed once its PR merges or closes.
 
-To review one PR by hand, run `drovr review <pr-url>`.
+To review one PR by hand, run `drovr review <pr-url>`. The phone page doesn't show PRs yet.
 
 ### Look things up in Jira, Confluence and Slack
 
@@ -312,7 +317,7 @@ Set `defaults.harness = "codex"` to make Codex the preselected choice. Codex age
 
 ### Turn the ticket workflow on or off
 
-Everything in the next few sections is behind one switch. In **Settings** (⌘8), set it and save (⌘S); it applies straight away, and agents pick it up on their next run:
+Everything in the next few sections is behind one switch. In **Settings** (⌘,), set it and save (⌘S); it applies straight away, and agents pick it up on their next run:
 
 ```toml
 [workflow]
@@ -392,7 +397,9 @@ Agent and group names are lowercase letters, digits, `-` and `_`, starting with 
 | `drovr sessions` | List recent Claude Code sessions (`--harness opencode`: OpenCode's) |
 | `drovr adopt <session-id> <name> [--fork] [task…]` | Start an agent from an existing Claude Code session, or an OpenCode one (`ses_…`) |
 | `drovr review <pr-url>` | Start a read-only reviewer for a GitHub PR in its own worktree; prints `started <name> in <cwd>` |
-| `drovr review poll` | Look now for PRs to review (see `[review]`) and offer the new ones in the Inbox; prints `offered <owner>/<repo>#<n>: <title> (<source>)` for each, or `nothing new`; with nothing to watch it says `review polling is off: set review.slack_channels or review.github_teams` |
+| `drovr review poll` | Look now for PRs to review (see `[review]`) and list the new ones in PRs; prints `offered <owner>/<repo>#<n>: <title> (<source>)` for each, or `nothing new`; with nothing to watch it says `review polling is off: set review.slack_channels or review.github_teams` |
+| `drovr review list` | List the PRs waiting on you, one per line: `new` or `reviewing`, `owner/repo#n`, the title, `(source)` and the reviewer's name; `No PRs waiting on you.` when there are none |
+| `drovr review dismiss <pr-url>` | Hide a PR from PRs; its reviewer, worktree and branch are removed; prints `dismissed <url>` |
 | `drovr prompt <agent> <text…>` | Send an agent a prompt (queued if it's busy) |
 | `drovr stop <agent>` | Stop an agent's current run |
 | `drovr resume <agent> [text…]` | Resume a stopped, failed or interrupted agent |

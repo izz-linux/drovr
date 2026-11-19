@@ -24,6 +24,18 @@
       files = r.files;
       // Coming here for an unread report (the sidebar count, ⌘3) opens the
       // newest one. Only on arrival, so a refresh never pulls you off a page.
+      // Sent here for a report by title (the PRs view): open its newest copy.
+      if (app.openReport) {
+        const want = app.openReport.trim().toLowerCase();
+        app.openReport = "";
+        loaded = true;
+        const hit = files.filter((f) => f.title.trim().toLowerCase() === want).sort((a, b) => b.modified - a.modified)[0];
+        if (hit) {
+          revealed[hit.folder] = true;
+          open(hit);
+          return;
+        }
+      }
       if (!loaded) {
         loaded = true;
         const next = files.find((f) => !f.seen);

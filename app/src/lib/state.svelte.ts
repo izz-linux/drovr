@@ -1,5 +1,5 @@
 import { api, type Defaults, type Page, type SlackMessage, type Snapshot, type Ticket } from "./api";
-import { inboxChanged } from "./notify";
+import { inboxChanged, prsChanged } from "./notify";
 
 /** The Jira view's search and open ticket, kept while you visit other views. */
 export const jira = $state({
@@ -25,11 +25,11 @@ export const search = $state({
   target: "",
 });
 
-export type View = "agents" | "inbox" | "reports" | "jira" | "search" | "bus" | "review" | "settings" | "pipeline";
+export type View = "agents" | "inbox" | "reports" | "jira" | "search" | "bus" | "review" | "settings" | "pipeline" | "prs";
 
 export const app = $state({
   view: "agents" as View,
-  snap: { agents: [], groups: [], inbox: [], recent: [], unseen_reports: 0, herdr: false, codex: false, opencode: false } as Snapshot,
+  snap: { agents: [], groups: [], inbox: [], recent: [], review_prs: [], unseen_reports: 0, herdr: false, codex: false, opencode: false } as Snapshot,
   selected: "" as string,
   error: "" as string,
   toast: "" as string,
@@ -51,6 +51,8 @@ export const app = $state({
   newAgentGroup: "",
   /** The keyboard shortcut list (View → Keyboard Shortcuts, ⌘/). */
   shortcutsOpen: false,
+  /** A report title Reports opens on arrival (from the PRs view); cleared once opened. */
+  openReport: "",
   /** The ticket whose record (timeline) is open; empty when closed. */
   timeline: "",
   /** Config the window uses (cost warning, notifications), loaded at start. */
@@ -61,7 +63,9 @@ export async function refresh() {
   try {
     app.snap = await api.snapshot();
     app.error = "";
-    inboxChanged(app.snap.inbox, app.defaults?.notify ?? true);
+    const notify = app.defaults?.notify ?? true;
+    inboxChanged(app.snap.inbox, notify);
+    prsChanged(app.snap.review_prs, notify);
   } catch (e) {
     app.error = String(e);
   }
