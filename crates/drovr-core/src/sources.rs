@@ -387,9 +387,9 @@ impl<'a> Sources<'a> {
         if !matches!(self.cfg.slack.provider.as_str(), "rest" | "command") {
             let list = channels.join(", ");
             let v = self.ask_agent(&format!(
-                "Use your Slack MCP tools to find messages posted in these Slack channels since {day}: {list}\nReturn only messages that contain GitHub pull request links (https://github.com/<owner>/<repo>/pull/<n>), as a JSON array of objects shaped like {SLACK_SHAPE}."
+                "Use your Slack MCP tools to find messages posted in these Slack channels (by name) since {day}: {list}\nReturn only messages that contain GitHub pull request links (https://github.com/<owner>/<repo>/pull/<n>). Give each message's full text verbatim, with every link in it, and its channel by name, as a JSON array of objects shaped like {SLACK_SHAPE}. If there are none, reply with []."
             ))?;
-            return Ok(serde_json::from_value(v).unwrap_or_default());
+            return parse_slack_reply(v);
         }
         let mut out = vec![];
         for channel in channels {
@@ -546,6 +546,22 @@ impl<'a> Sources<'a> {
         }
         Ok(v)
     }
+}
+
+/// Slack messages from an agent's reply: a bare array, or `{"messages": [...]}`.
+fn parse_slack_reply(v: Value) -> Result<Vec<SlackMessage>> {
+    let list = match v {
+        Value::Array(_) => v,
+        Value::Object(mut o) if o.get("messages").is_some_and(Value::is_array) => {
+            o.remove("messages").unwrap_or_default()
+        }
+        other => bail!(
+            "the agent's Slack reply wasn't a list of messages: {}",
+            other.to_string().chars().take(200).collect::<String>()
+        ),
+    };
+    serde_json::from_value(list)
+        .map_err(|e| anyhow!("the agent's Slack messages were malformed: {e}"))
 }
 
 /// The MCP config that gives a lookup drovr's permission prompt.
@@ -823,6 +839,20 @@ pub fn ticket_task(t: &Ticket, extra: &str, you: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_an_agents_slack_reply() {
+        let msg = json!({"channel":"c","user":"u","ts":"1","text":"t https://github.com/a/b/pull/1","permalink":"p"});
+        assert_eq!(parse_slack_reply(json!([msg.clone()])).unwrap().len(), 1);
+        assert_eq!(
+            parse_slack_reply(json!({"messages":[msg]})).unwrap()[0].text,
+            "t https://github.com/a/b/pull/1"
+        );
+        assert!(parse_slack_reply(json!([])).unwrap().is_empty());
+        assert!(parse_slack_reply(json!({"ok": true})).is_err());
+        assert!(parse_slack_reply(json!("nope")).is_err());
+        assert!(parse_slack_reply(json!([1, 2])).is_err());
+    }
+
     use super::*;
 
     #[test]

@@ -151,7 +151,9 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     let mut candidates: Vec<Candidate> = vec![];
     let mut slack_ok = true;
     if !cfg.slack_channels.is_empty() {
-        match Sources::new(&engine.cfg).slack_pr_messages(&cfg.slack_channels, state.since) {
+        match Sources::new(&engine.cfg)
+            .slack_pr_messages(&cfg.slack_channels, state.since.max(now - 7.0 * 86_400.0))
+        {
             Ok(messages) => {
                 for m in messages {
                     let channel = m.channel.trim_start_matches('#');
@@ -191,23 +193,37 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     }
 
     let mut me: Option<String> = None;
+    let mut views: BTreeMap<String, Option<Value>> = BTreeMap::new();
     let mut found: Vec<Found> = vec![];
+    let mut offered: Vec<Found> = vec![];
     for c in candidates {
-        // The first source to name a PR keeps it.
-        if state.seen.contains_key(&c.url) || found.iter().any(|f| f.url == c.url) {
+        // Case doesn't matter in a URL; the first source to name a PR keeps it.
+        let key = c.url.to_lowercase();
+        if state.seen.contains_key(&key) || found.iter().any(|f| f.url.to_lowercase() == key) {
             continue;
         }
-        let Some((owner, repo, number)) = parse(&c.url) else {
+        let view = views.entry(key).or_insert_with(|| {
+            pr_view(&engine.cfg.watch.gh, &c.url)
+                .map_err(|e| eprintln!("drovr: couldn't look up {}: {e:#}", c.url))
+                .ok()
+        });
+        let Some(pr) = view.clone() else {
             continue;
         };
-        let pr = match pr_view(&engine.cfg.watch.gh, &c.url) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("drovr: couldn't look up {}: {e:#}", c.url);
-                continue;
-            }
-        };
         if pr["state"].as_str() != Some("OPEN") || pr["isDraft"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let canonical = pr["url"]
+            .as_str()
+            .filter(|u| !u.is_empty())
+            .unwrap_or(&c.url);
+        let Some((owner, repo, number)) = parse(canonical).or_else(|| parse(&c.url)) else {
+            continue;
+        };
+        let canonical = canonical.to_string();
+        if state.seen.contains_key(&canonical.to_lowercase())
+            || found.iter().any(|f| f.url.eq_ignore_ascii_case(&canonical))
+        {
             continue;
         }
         let author = pr["author"]["login"].as_str().unwrap_or("").to_string();
@@ -225,7 +241,7 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
             .filter(|t| !t.is_empty())
             .unwrap_or(&c.title);
         found.push(Found {
-            url: c.url,
+            url: canonical,
             owner,
             repo,
             number,
@@ -237,10 +253,13 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         });
     }
 
-    for f in &found {
-        offer(engine, f);
-        state.seen.insert(f.url.clone(), now);
+    for f in found {
+        if offer(engine, &f) {
+            state.seen.insert(f.url.to_lowercase(), now);
+            offered.push(f);
+        }
     }
+    let found = offered;
     state.last_poll = now;
     // A failed Slack read is tried again from the same point.
     if slack_ok {
@@ -252,8 +271,8 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     found
 }
 
-/// Put a found PR in the Inbox.
-fn offer(engine: &Engine, f: &Found) {
+/// Put a found PR in the Inbox. True if it was saved.
+fn offer(engine: &Engine, f: &Found) -> bool {
     let mut body = format!("{}\n\nAuthor: {}\nSource: {}", f.url, f.author, f.source);
     if !f.permalink.is_empty() {
         body += &format!(" ({})", f.permalink);
@@ -271,8 +290,14 @@ fn offer(engine: &Engine, f: &Found) {
         .store
         .add_item("drovr", "review", &title, &body, &options, &payload)
     {
-        Ok(id) => engine.record_item(id),
-        Err(e) => eprintln!("drovr: couldn't offer {}: {e:#}", f.url),
+        Ok(id) => {
+            engine.record_item(id);
+            true
+        }
+        Err(e) => {
+            eprintln!("drovr: couldn't offer {}: {e:#}", f.url);
+            false
+        }
     }
 }
 
@@ -581,6 +606,78 @@ mod tests {
             ),
         );
         assert_eq!(poll_at(&e.engine, false, &file).len(), 1);
+    }
+
+    #[test]
+    fn dedupes_urls_case_insensitively() {
+        let e = env("case", |_| {});
+        team_pr(&e, 5, "OPEN", false, "alice");
+        search_has(&e, &[5]);
+        write(
+            &e.dir,
+            "slack.json",
+            r#"[{"channel":"sre-reviews","user":"bob","ts":"1","text":"https://github.com/Acme/API/pull/5","permalink":""}]"#,
+        );
+        let file = e.dir.join("review.json");
+        let found = poll_at(&e.engine, true, &file);
+        assert_eq!(found.len(), 1);
+        assert_eq!(items(&e).len(), 1);
+        assert_eq!(found[0].url, "https://github.com/acme/api/pull/5");
+        assert_eq!(
+            (found[0].owner.as_str(), found[0].repo.as_str()),
+            ("acme", "api")
+        );
+        assert!(poll_at(&e.engine, true, &file).is_empty());
+    }
+
+    #[test]
+    fn slack_lookback_is_bounded() {
+        let e = env("lookback", |c| {
+            let d = std::env::temp_dir()
+                .join(format!("drovr-pr-review-lookback-{}", std::process::id()));
+            c.slack.search_cmd = format!(
+                "echo {{query}} >> {d}/slack.log; cat {d}/slack.json",
+                d = d.display()
+            );
+        });
+        let now = crate::store::now();
+        let file = e.dir.join("review.json");
+        write(
+            &e.dir,
+            "review.json",
+            &format!(
+                r#"{{"since":{},"last_poll":0,"seen":{{}}}}"#,
+                now - 30.0 * 86_400.0
+            ),
+        );
+        poll_at(&e.engine, true, &file);
+        let log = std::fs::read_to_string(e.dir.join("slack.log")).unwrap();
+        let day = log
+            .split("after:")
+            .nth(1)
+            .unwrap()
+            .get(..10)
+            .unwrap()
+            .to_string();
+        let oldest = crate::ledger::iso(now - 8.0 * 86_400.0)[..10].to_string();
+        assert!(day >= oldest, "{day} is older than {oldest}");
+    }
+
+    #[test]
+    fn looks_up_each_pr_once_per_poll() {
+        let e = env("cache", |_| {});
+        team_pr(&e, 5, "OPEN", true, "alice");
+        search_has(&e, &[5]);
+        write(
+            &e.dir,
+            "slack.json",
+            r#"[{"channel":"c","user":"b","ts":"1","text":"https://github.com/acme/api/pull/5 https://github.com/Acme/Api/pull/5","permalink":""}]"#,
+        );
+        assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
+        let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
+        assert_eq!(log.lines().filter(|l| l.starts_with("pr view")).count(), 1);
+        let state = std::fs::read_to_string(e.dir.join("review.json")).unwrap();
+        assert!(!state.contains("pull/5"), "a draft must not be marked seen");
     }
 
     #[test]
