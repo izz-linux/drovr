@@ -869,7 +869,7 @@ fn login_path_info() -> login_path::Info {
 
 /// Don't start work that spawns `gh`, `claude` or `opencode` before PATH is settled.
 fn path_ready() {
-    login_path::wait_ready(Duration::from_secs(35));
+    login_path::wait_ready(login_path::MAX_WAIT);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

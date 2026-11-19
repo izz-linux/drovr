@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { api, type CliStatus, type LoginPathInfo, type RemoteInfo } from "#lib/api.ts";
   import { app, act, toast } from "#lib/state.svelte.ts";
   import { theme, setTheme } from "#lib/theme.svelte.ts";
@@ -14,18 +14,28 @@
   let cli = $state<CliStatus | null>(null);
   let installing = $state(false);
   let pathInfo = $state<LoginPathInfo | null>(null);
+  const noAnswer = (p: LoginPathInfo) => p.error?.includes("no answer") ?? false;
+  const why = (p: LoginPathInfo, what: string) => (noAnswer(p) ? `${what} didn't answer` : `${what} failed`);
   const hint = (p: LoginPathInfo) =>
-    p.error?.includes("no answer") ? " Something in your .zshrc may be waiting for input; run `zsh -l -i -c 'echo done'` to see it." : "";
+    noAnswer(p) ? ` Something in your shell's startup file may be waiting for input; run \`${p.shell} -l -i -c 'echo done'\` to see it.` : "";
   function pathLine(p: LoginPathInfo): string {
     const secs = (p.ms / 1000).toFixed(1);
     switch (p.source) {
+      case "pending": return "PATH: asking your shell…";
       case "interactive": return `PATH: from your shell (${secs}s)`;
-      case "login": return `PATH: from your login profile; your interactive shell didn't answer in 20s${hint(p)}`;
-      case "saved": return `PATH: saved from an earlier start; your shell didn't answer${hint(p)}`;
-      case "system": return `PATH: macOS's default; your shell didn't answer and nothing was saved. Set full paths (watch.gh, opencode.command) or see USAGE.${hint(p)}`;
+      case "login": return `PATH: from your login profile; ${why(p, "your interactive shell")}${noAnswer(p) ? " in 20s" : ""}${hint(p)}`;
+      case "saved": return `PATH: saved from an earlier start; ${why(p, "your shell")}${hint(p)}`;
+      case "system": return `PATH: macOS's default; ${why(p, "your shell")} and nothing was saved. Set full paths (watch.gh, opencode.command) or see USAGE.${hint(p)}`;
       case "kept": return "PATH: kept as launched (DROVR_KEEP_PATH)";
       default: return "";
     }
+  }
+  let pathTimer: ReturnType<typeof setTimeout> | undefined;
+  function loadPath() {
+    api.loginPathInfo().then((p) => {
+      pathInfo = p;
+      if (p.source === "pending") pathTimer = setTimeout(loadPath, 2000);
+    }).catch(() => {});
   }
   const loadCli = () => api.cliStatus().then((c) => (cli = c)).catch(() => {});
   async function installCli() {
@@ -41,7 +51,7 @@
 
   async function load() {
     loadCli();
-    api.loginPathInfo().then((p) => (pathInfo = p)).catch(() => {});
+    loadPath();
     api.remoteInfo().then((r) => (remote = r)).catch(() => {});
     try {
       info = await api.configInfo();
@@ -49,6 +59,7 @@
     } catch (e) { toast(String(e)); }
   }
   onMount(load);
+  onDestroy(() => clearTimeout(pathTimer));
 
   const dirty = $derived(!!info && text !== (info.text || ""));
 

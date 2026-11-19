@@ -14,6 +14,10 @@ const MARKER: &str = "__DROVR_PATH__";
 const SAVED_FILE: &str = "login-path";
 pub const INTERACTIVE_SECS: u64 = 20;
 pub const LOGIN_SECS: u64 = 10;
+/// The longest the probes can take: each timeout plus its kill grace, and slack.
+pub const MAX_WAIT: Duration = Duration::from_secs(
+    INTERACTIVE_SECS + LOGIN_SECS + 2 * drovr_core::shell::KILL_GRACE.as_secs() + 5,
+);
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Info {
@@ -21,6 +25,7 @@ pub struct Info {
     pub ms: u64,
     pub error: Option<String>,
     pub path: String,
+    pub shell: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -205,7 +210,32 @@ pub fn info() -> Info {
         ms: 0,
         error: None,
         path: std::env::var("PATH").unwrap_or_default(),
+        shell: default_shell(),
     })
+}
+
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into())
+}
+
+/// The saved PATH (if any), then the launch PATH's entries, then the common
+/// folders that exist: a terminal-launched run keeps its PATH.
+pub fn early_path(
+    saved: Option<&str>,
+    current: &str,
+    common: &[PathBuf],
+    is_dir: impl Fn(&Path) -> bool,
+) -> String {
+    let joined = match saved {
+        Some(s) => format!("{s}:{current}"),
+        None => current.to_string(),
+    };
+    merge_common(&joined, common, is_dir)
+}
+
+/// With a saved PATH there's nothing to wait for: the app starts at once.
+pub fn ready_at_start(saved: Option<&str>) -> bool {
+    saved.is_some()
 }
 
 fn user_home() -> PathBuf {
@@ -218,17 +248,19 @@ fn with_common(path: &str) -> String {
     merge_common(path, &common_dirs(&user_home()), |p| p.is_dir())
 }
 
-/// Step one, on the main thread before anything else runs: the saved PATH
-/// (or the current one) plus the common folders. Instant. Then the shell
-/// probes run on a background thread, which settles PATH and releases
-/// `wait_ready`.
+/// Step one, on the main thread before anything else runs: the saved PATH,
+/// the launch PATH and the common folders. Instant. The shell probes then
+/// run on a background thread, which settles PATH and releases `wait_ready`.
 ///
-/// `set_var` is only called here, before any thread that reads PATH exists,
-/// and once more from the probe thread. The second call is acceptable
-/// because the engine's background threads block in `wait_ready` until it
-/// returns, and nothing else spawned by then reads PATH concurrently: the
-/// window isn't open yet (Tauri's builder runs after this) and the UI's
-/// commands go through `wait_ready` as well.
+/// With a saved PATH, the app is ready at once and nothing waits. On a
+/// first-ever launch (nothing saved) the engine threads and `blocking()` wait,
+/// up to `MAX_WAIT`, so nothing spawns `gh`/`claude`/`opencode` on the bare PATH.
+///
+/// `set_var` runs once here, before the threads that read PATH start. The
+/// probe thread calls it again only when the final PATH differs from the
+/// early one, which is the rare case (a first launch, or your shell's PATH
+/// changed). Then it can race a concurrent `getenv`, which is why the normal
+/// case never touches `environ` after startup.
 pub fn start() {
     if !cfg!(target_os = "macos") {
         let _ = INFO.set(Info {
@@ -236,6 +268,7 @@ pub fn start() {
             ms: 0,
             error: None,
             path: std::env::var("PATH").unwrap_or_default(),
+            shell: default_shell(),
         });
         mark_ready();
         return;
@@ -249,17 +282,26 @@ pub fn start() {
             ms: 0,
             error: None,
             path,
+            shell: default_shell(),
         });
         mark_ready();
         return;
     }
     let home = drovr_core::config::home();
     let saved = read_saved(&home);
-    let early = with_common(saved.as_deref().unwrap_or(&current));
+    let early = early_path(
+        saved.as_deref(),
+        &current,
+        &common_dirs(&user_home()),
+        |p| p.is_dir(),
+    );
     std::env::set_var("PATH", &early);
+    if ready_at_start(saved.as_deref()) {
+        mark_ready();
+    }
     std::thread::spawn(move || {
         let began = Instant::now();
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let shell = default_shell();
         let r = resolve(
             || probe(&shell, &["-l", "-i"], Duration::from_secs(INTERACTIVE_SECS)),
             || probe(&shell, &["-l"], Duration::from_secs(LOGIN_SECS)),
@@ -274,7 +316,9 @@ pub fn start() {
                 }
             }
         }
-        std::env::set_var("PATH", &path);
+        if path != early {
+            std::env::set_var("PATH", &path);
+        }
         match &r.error {
             Some(e) => eprintln!("drovr: PATH from {} ({ms} ms): {e}", r.source),
             None => eprintln!("drovr: PATH from {} ({ms} ms)", r.source),
@@ -284,6 +328,7 @@ pub fn start() {
             ms,
             error: r.error,
             path,
+            shell,
         });
         mark_ready();
     });
@@ -412,6 +457,32 @@ mod tests {
         ));
         assert!(run_detached(c, Duration::from_millis(300)).is_err());
         assert!(marker.exists());
+    }
+
+    #[test]
+    fn term_ignoring_probe_is_killed_after_the_grace() {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg("trap '' TERM; sleep 30");
+        let began = Instant::now();
+        assert!(run_detached(c, Duration::from_millis(200)).is_err());
+        let limit =
+            Duration::from_millis(200) + drovr_core::shell::KILL_GRACE + Duration::from_secs(1);
+        assert!(began.elapsed() < limit);
+    }
+
+    #[test]
+    fn early_path_puts_saved_first_then_launch_path_then_common() {
+        let common = vec![PathBuf::from("/c"), PathBuf::from("/gone")];
+        let got = early_path(Some("/s:/a"), "/a:/l", &common, |p| p != Path::new("/gone"));
+        assert_eq!(got, "/s:/a:/l:/c");
+        assert_eq!(early_path(None, "/l", &common, |_| true), "/l:/c:/gone");
+    }
+
+    #[test]
+    fn only_a_saved_path_makes_startup_instant() {
+        assert!(ready_at_start(Some("/s")));
+        assert!(!ready_at_start(None));
+        assert!(MAX_WAIT >= Duration::from_secs(INTERACTIVE_SECS + LOGIN_SECS));
     }
 
     #[test]
