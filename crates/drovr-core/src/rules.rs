@@ -1,7 +1,7 @@
 //! What the watcher does about a change it saw (`watch.rules`): `wake` the
 //! agent that owns the work with what it needs to act (the failing log,
 //! the review), `ask` you in the Inbox first, or `ignore` it. Each trigger
-//! fires once per PR head, so a failure that stays failed doesn't wake an
+//! fires once per PR head (`new_review` once per review), so a failure that stays failed doesn't wake an
 //! agent again until it pushes.
 
 use crate::engine::{truncate, Engine};
