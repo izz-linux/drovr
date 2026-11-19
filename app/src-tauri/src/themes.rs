@@ -28,7 +28,6 @@ pub const COLOR_KEYS: [&str; 13] = [
 pub struct Lettering {
     pub color: String,
     pub foil: String,
-    pub font: String,
 }
 
 #[derive(Deserialize)]
@@ -153,35 +152,6 @@ mod tests {
         assert_eq!(ids[ids.len() - 4..], ["gilded", "deco", "oxblood", "ink"]);
         let builtin_ids: Vec<String> = builtin().iter().map(|t| t.id.clone()).collect();
         assert_eq!(ids[1..], builtin_ids[..]);
-    }
-
-    #[test]
-    fn lettering_fonts_are_bundled() {
-        let css = include_str!("../../src/app.css");
-        let fonts: Vec<String> =
-            std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../static/fonts"))
-                .expect("app/static/fonts exists")
-                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-                .collect();
-        for t in builtin() {
-            let Some(l) = t.lettering else { continue };
-            let face = format!("font-family: \"{}\"", l.font);
-            assert!(
-                css.contains(&face),
-                "{}: no @font-face for {}",
-                t.id,
-                l.font
-            );
-            let stem = l.font.to_lowercase().replace(' ', "-");
-            assert!(
-                fonts
-                    .iter()
-                    .any(|f| f.starts_with(&stem) && f.ends_with(".woff2")),
-                "{}: no .woff2 for {}",
-                t.id,
-                l.font
-            );
-        }
     }
 
     #[test]

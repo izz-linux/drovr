@@ -120,8 +120,7 @@
     },
     "lettering": {
       "color": "#e6c768",
-      "foil": "linear-gradient(180deg, #f8e7a6 0%, #e2bf5a 45%, #a8802a 70%, #e9cd78 100%)",
-      "font": "Cinzel"
+      "foil": "linear-gradient(180deg, #f8e7a6 0%, #e2bf5a 45%, #a8802a 70%, #e9cd78 100%)"
     }
   },
   {
@@ -145,8 +144,7 @@
     },
     "lettering": {
       "color": "#d9b45e",
-      "foil": "linear-gradient(180deg, #f3dc9c 0%, #c9a24b 55%, #8e6a26 100%)",
-      "font": "Poiret One"
+      "foil": "linear-gradient(180deg, #f3dc9c 0%, #c9a24b 55%, #8e6a26 100%)"
     }
   },
   {
@@ -170,8 +168,7 @@
     },
     "lettering": {
       "color": "#ecd29a",
-      "foil": "linear-gradient(180deg, #fff1cf 0%, #e3c38a 50%, #b08a4f 100%)",
-      "font": "Cormorant Garamond"
+      "foil": "linear-gradient(180deg, #fff1cf 0%, #e3c38a 50%, #b08a4f 100%)"
     }
   },
   {
@@ -195,8 +192,7 @@
     },
     "lettering": {
       "color": "#d8b24e",
-      "foil": "linear-gradient(180deg, #f1d985 0%, #cfa646 50%, #9a7428 100%)",
-      "font": "Marcellus"
+      "foil": "linear-gradient(180deg, #f1d985 0%, #cfa646 50%, #9a7428 100%)"
     }
   }
 ]

@@ -5,7 +5,7 @@ export type Theme = {
   name: string;
   scheme: "light" | "dark";
   colors: Record<string, string>;
-  lettering?: { color: string; foil: string; font: string };
+  lettering?: { color: string; foil: string };
 };
 
 // Defined once in themes.json, which src-tauri/src/themes.rs also reads for View > Theme.

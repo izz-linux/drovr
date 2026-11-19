@@ -428,6 +428,9 @@
   .sep { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; border-top: 1px dashed var(--border); margin: 14px 0 6px; padding-top: 6px; }
   .prompt { border-left: 3px solid var(--purple); padding: 4px 10px; background: var(--panel); border-radius: 4px; margin: 6px 0; }
   .text { margin: 6px 0; }
+  /* Gold themes: drovr's message bar and tool lines in the accent gold. */
+  :global([data-foil]) .prompt { border-left-color: var(--accent); }
+  :global([data-foil]) .tool { color: var(--accent); }
   .tool { font-family: var(--mono); font-size: 12px; color: var(--cyan); margin: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .result { font-size: 12px; color: var(--muted); margin: 0 0 4px 16px; }
   .result summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }

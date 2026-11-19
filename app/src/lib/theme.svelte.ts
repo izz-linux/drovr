@@ -14,10 +14,9 @@ function show() {
   if (t.lettering) {
     root.style.setProperty("--title", t.lettering.color);
     root.style.setProperty("--title-fill", t.lettering.foil);
-    root.style.setProperty("--display", `"${t.lettering.font}", Georgia, serif`);
     root.dataset.foil = "";
   } else {
-    for (const p of ["--title", "--title-fill", "--display"]) root.style.removeProperty(p);
+    for (const p of ["--title", "--title-fill"]) root.style.removeProperty(p);
     delete root.dataset.foil;
   }
   root.style.colorScheme = t.scheme;

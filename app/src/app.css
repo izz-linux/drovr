@@ -25,37 +25,11 @@
 :root {
   --title: var(--text);
   --title-fill: none;
-  --display: inherit;
-}
-
-@font-face {
-  font-family: "Cinzel";
-  src: url("/fonts/cinzel-700.woff2") format("woff2");
-  font-weight: 700;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Poiret One";
-  src: url("/fonts/poiret-one-400.woff2") format("woff2");
-  font-weight: 400;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Cormorant Garamond";
-  src: url("/fonts/cormorant-garamond-700.woff2") format("woff2");
-  font-weight: 700;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Marcellus";
-  src: url("/fonts/marcellus-400.woff2") format("woff2");
-  font-weight: 400;
-  font-display: swap;
 }
 
 /* Only themes with lettering set data-foil, so the other themes keep their own
    colors here; !important beats the scoped color rules (.sep, .agent.lead .name). */
-[data-foil] .lettered { color: var(--title) !important; font-family: var(--display); font-synthesis: none; }
+[data-foil] .lettered { color: var(--title) !important; }
 @supports (background-clip: text) {
   [data-foil] .lettered { background: var(--title-fill); -webkit-background-clip: text; background-clip: text; color: transparent !important; }
   [data-foil] .lettered::selection { color: var(--text) !important; -webkit-text-fill-color: var(--text); }

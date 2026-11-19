@@ -529,9 +529,9 @@ tls_key = "~/certs/example.com/privkey.pem"
 
 ### Themes
 
-Match System, Light, Dark, Darcula, Solarized Dark, Nord, Gilded, Deco Navy, Oxblood and Ink & Gold. The first five are the same set and colors as local-wiki. Gilded, Deco Navy, Oxblood and Ink & Gold add gold lettering in their own typeface (Cinzel, Poiret One, Cormorant Garamond and Marcellus, bundled with the app) on the sidebar wordmark, agent titles, lead agents in the list and run labels. Choose one from **View → Theme** or in Settings. Your choice is saved, and Match System follows macOS light/dark.
+Match System, Light, Dark, Darcula, Solarized Dark, Nord, Gilded, Deco Navy, Oxblood and Ink & Gold. The first five are the same set and colors as local-wiki. Gilded, Deco Navy, Oxblood and Ink & Gold add gold lettering on the sidebar wordmark, agent titles, lead agents in the list and run labels, and show drovr's messages and agents' tool calls in gold. Choose one from **View → Theme** or in Settings. Your choice is saved, and Match System follows macOS light/dark.
 
-Themes are defined once, in `app/src/lib/themes.json`. Each has an `id`, a `name`, a `scheme` (`light` or `dark`) and its 13 `colors`, and may have `lettering` with a `color`, a `foil` gradient and a `font`. The UI and View → Theme both read that file. A lettering font has to be bundled as a `.woff2` in `app/static/fonts/` (with its OFL text) and declared with an `@font-face` in `app/src/app.css`.
+Themes are defined once, in `app/src/lib/themes.json`. Each has an `id`, a `name`, a `scheme` (`light` or `dark`) and its 13 `colors`, and may have `lettering` with a `color` and a `foil` gradient. The UI and View → Theme both read that file.
 
 ## How it works
 
