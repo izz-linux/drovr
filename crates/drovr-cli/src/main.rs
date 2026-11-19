@@ -7,7 +7,7 @@ use drovr_core::sources::{ticket_task, Sources};
 use drovr_core::{Engine, NewAgent};
 use serde_json::json;
 
-const USAGE: &str = "drovr — orchestrate Claude Code (and OpenCode) agents
+const USAGE: &str = "drovr — orchestrate, monitor and share context across Claude Code, OpenCode and Codex agents
 
 usage:
   drovr ls                                   list agents and their state
