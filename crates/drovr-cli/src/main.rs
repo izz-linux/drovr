@@ -35,6 +35,7 @@ usage:
   drovr attach <agent>                       print the command to open its session interactively
   drovr msgs [group]                         the message bus
   drovr ask <question...>                    ask an agent with your MCPs (Slack, Jira, …)
+  drovr term <agent>                         continue an agent's session in your terminal (terminal.external)
   drovr cleanup [--dry-run]                  archive old plans and prune resolved Inbox items
                                              (reports.archive_after_days, inbox.keep_days)
   drovr config                               where drovr reads its config and keeps its data
@@ -364,6 +365,15 @@ fn run() -> Result<()> {
                 "{}",
                 Sources::with_progress(&engine.cfg, &progress).ask(&rest(&args, 1), None)?
             );
+        }
+        "term" => {
+            let name = arg(&args, 1, "agent")?;
+            match engine.open_in_terminal(name)? {
+                drovr_core::engine::Opened::Pane(pane) => {
+                    println!("{name} is still running in herdr pane {pane}; showed it there")
+                }
+                drovr_core::engine::Opened::Terminal(script) => println!("{script}"),
+            }
         }
         "cleanup" => {
             let dry = cleanup_dry(&args)?;
