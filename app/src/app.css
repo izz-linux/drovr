@@ -1,12 +1,11 @@
-/* Themes match local-wiki (src/App.css there). The id list is in src/lib/themes.ts
-   and src-tauri/src/lib.rs; a Rust test checks they agree. Dark shows until
-   the saved theme loads. */
+/* Themes live in src/lib/themes.json, and show() in theme.svelte.ts writes the
+   chosen one onto <html>. The first five match local-wiki (src/App.css there).
+   This file holds only Dark's values, for the first paint before that runs. */
 :root {
   --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
 }
 
-:root,
-[data-theme="dark"] {
+:root {
   --bg: #1e1e1e;
   --panel: #181818;
   --panel-2: #262626;
@@ -23,73 +22,42 @@
   color-scheme: dark;
 }
 
-[data-theme="light"] {
-  --bg: #ffffff;
-  --panel: #f7f7f5;
-  --panel-2: #efefed;
-  --border: rgba(0, 0, 0, 0.1);
-  --text: #37352f;
-  --muted: #91918e;
-  --accent: #2383e2;
-  --on-accent: #ffffff;
-  --green: #0f7b6c;
-  --yellow: #7a5a00;
-  --red: #c4382f;
-  --purple: #6940a5;
-  --cyan: #2eaadc;
-  color-scheme: light;
+:root {
+  --title: var(--text);
+  --title-fill: none;
+  --display: inherit;
 }
 
-
-[data-theme="darcula"] {
-  --bg: #2b2b2b;
-  --panel: #3c3f41;
-  --panel-2: #45494a;
-  --border: rgba(0, 0, 0, 0.35);
-  --text: #a9b7c6;
-  --muted: #808080;
-  --accent: #4e8cc2;
-  --on-accent: #ffffff;
-  --green: #6a8759;
-  --yellow: #e8c46a;
-  --red: #ff6b68;
-  --purple: #9876aa;
-  --cyan: #6897bb;
-  color-scheme: dark;
+@font-face {
+  font-family: "Cinzel";
+  src: url("/fonts/cinzel-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Poiret One";
+  src: url("/fonts/poiret-one-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  src: url("/fonts/cormorant-garamond-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Marcellus";
+  src: url("/fonts/marcellus-400.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
 }
 
-[data-theme="solarized-dark"] {
-  --bg: #002b36;
-  --panel: #073642;
-  --panel-2: #0b3f4c;
-  --border: rgba(0, 0, 0, 0.35);
-  --text: #93a1a1;
-  --muted: #657b83;
-  --accent: #268bd2;
-  --on-accent: #fdf6e3;
-  --green: #859900;
-  --yellow: #d9a400;
-  --red: #dc322f;
-  --purple: #6c71c4;
-  --cyan: #2aa198;
-  color-scheme: dark;
-}
-
-[data-theme="nord"] {
-  --bg: #2e3440;
-  --panel: #3b4252;
-  --panel-2: #434c5e;
-  --border: rgba(0, 0, 0, 0.3);
-  --text: #d8dee9;
-  --muted: #81a1c1;
-  --accent: #88c0d0;
-  --on-accent: #2e3440;
-  --green: #a3be8c;
-  --yellow: #ebcb8b;
-  --red: #bf616a;
-  --purple: #b48ead;
-  --cyan: #8fbcbb;
-  color-scheme: dark;
+/* Only themes with lettering set data-foil, so the other themes keep their own
+   colors here; !important beats the scoped color rules (.sep, .agent.lead .name). */
+[data-foil] .lettered { color: var(--title) !important; font-family: var(--display); font-synthesis: none; }
+@supports (background-clip: text) {
+  [data-foil] .lettered { background: var(--title-fill); -webkit-background-clip: text; background-clip: text; color: transparent !important; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);

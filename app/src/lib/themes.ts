@@ -1,18 +1,21 @@
-// The same themes as local-wiki. The palettes are in app.css.
-export type ThemeId = "light" | "dark" | "darcula" | "solarized-dark" | "nord";
+import themes from "./themes.json";
 
-export const THEMES: readonly { id: ThemeId; name: string }[] = [
-  { id: "light", name: "Light" },
-  { id: "dark", name: "Dark" },
-  { id: "darcula", name: "Darcula" },
-  { id: "solarized-dark", name: "Solarized Dark" },
-  { id: "nord", name: "Nord" },
-];
+export type Theme = {
+  id: string;
+  name: string;
+  scheme: "light" | "dark";
+  colors: Record<string, string>;
+  lettering?: { color: string; foil: string; font: string };
+};
+
+// Defined once in themes.json, which src-tauri/src/themes.rs also reads for View > Theme.
+export const THEMES: readonly Theme[] = themes as Theme[];
+
+export type ThemeId = string;
 
 /** What's chosen: a theme, or "system" for Light or Dark following macOS. */
 export type ThemeSetting = ThemeId | "system";
 
-// Also listed in src-tauri/src/lib.rs for View > Theme; a Rust test checks they match.
 export const THEME_SETTINGS: readonly { id: ThemeSetting; name: string }[] = [
   { id: "system", name: "Match System" },
   ...THEMES,
@@ -28,4 +31,9 @@ export function isThemeSetting(v: unknown): v is ThemeSetting {
 export function resolveTheme(setting: ThemeSetting, systemDark: boolean): ThemeId {
   if (setting !== "system") return setting;
   return systemDark ? "dark" : "light";
+}
+
+/** A theme by id, or Dark if it's unknown. */
+export function themeById(id: string): Theme {
+  return THEMES.find((t) => t.id === id) ?? THEMES.find((t) => t.id === "dark")!;
 }

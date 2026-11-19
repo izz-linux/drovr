@@ -155,6 +155,35 @@ mod tests {
     }
 
     #[test]
+    fn lettering_fonts_are_bundled() {
+        let css = include_str!("../../src/app.css");
+        let fonts: Vec<String> =
+            std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../static/fonts"))
+                .expect("app/static/fonts exists")
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+        for t in builtin() {
+            let Some(l) = t.lettering else { continue };
+            let face = format!("font-family: \"{}\"", l.font);
+            assert!(
+                css.contains(&face),
+                "{}: no @font-face for {}",
+                t.id,
+                l.font
+            );
+            let stem = l.font.to_lowercase().replace(' ', "-");
+            assert!(
+                fonts
+                    .iter()
+                    .any(|f| f.starts_with(&stem) && f.ends_with(".woff2")),
+                "{}: no .woff2 for {}",
+                t.id,
+                l.font
+            );
+        }
+    }
+
+    #[test]
     fn existing_themes_have_no_lettering() {
         for t in builtin() {
             let gold = ["gilded", "deco", "oxblood", "ink"].contains(&t.id.as_str());

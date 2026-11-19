@@ -291,7 +291,7 @@
         {#each isCollapsed(g.group) ? [] : g.agents as a}
           <button class="agent" class:sel={a.name === app.selected} class:lead={a.role === "orchestrator"} onclick={() => (app.selected = a.name)}>
             <div class="row">
-              <span class="name grow">{a.role === "orchestrator" ? "★ " : ""}{a.name}</span>
+              <span class="name grow" class:lettered={a.role === "orchestrator"}>{a.role === "orchestrator" ? "★ " : ""}{a.name}</span>
               {#if a.stage}<span class="pill stage" title="Its stage in the ticket workflow">{a.stage}</span>{/if}
               {#if overBudget(a)}<span class="pill cost" title={`Over your cost warning of $${costCap} (defaults.cost_warning_usd)`}>${a.cost_usd.toFixed(2)}</span>{/if}
               <span class="pill s-{a.state}">{a.state}</span>
@@ -309,7 +309,7 @@
     {#if current}
       <header>
         <div class="row">
-          <h2 class="grow">{current.name}</h2>
+          <h2 class="grow lettered">{current.name}</h2>
           <span class="pill s-{current.state}">{current.state}</span>
           {#if current.state === "working"}
             <button class="danger" onclick={() => act(() => api.stop(current.name), "Stopped")}>Stop</button>
@@ -353,7 +353,7 @@
       <div class="log scroll" bind:this={logEl} onscroll={() => logEl && (follow = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40)}>
         {#each lines as l, i}
           <div class="line" data-i={i} class:hit={hits.includes(i)} class:at={i === hitLine}>
-          {#if l.kind === "run"}<div class="sep">{l.text}</div>
+          {#if l.kind === "run"}<div class="sep lettered">{l.text}</div>
           {:else if l.kind === "prompt"}<div class="prompt"><div class="md">{@html md(l.text)}</div></div>
           {:else if l.kind === "text"}<div class="text md">{@html md(l.text)}</div>
           {:else if l.kind === "tool"}<div class="tool"><span>⏵</span> {l.text}</div>

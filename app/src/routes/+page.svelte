@@ -66,7 +66,7 @@
 
 <div class="shell">
   <aside>
-    <div class="brand"><img src="/drovr.svg" alt="" width="22" height="22" />drovr</div>
+    <div class="brand"><img src="/drovr.svg" alt="" width="22" height="22" /><span class="lettered">drovr</span></div>
     <nav>
       {#each nav as n}
         <button class="nav" class:active={app.view === n.id} aria-current={app.view === n.id ? "page" : undefined} onclick={() => (app.view = n.id)} title={`${mod}${n.key}`}>

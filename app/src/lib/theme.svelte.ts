@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { DEFAULT_THEME, THEME_SETTINGS, isThemeSetting, resolveTheme, type ThemeSetting } from "./themes";
+import { DEFAULT_THEME, THEME_SETTINGS, isThemeSetting, resolveTheme, themeById, type ThemeSetting } from "./themes";
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
@@ -8,7 +8,21 @@ export const theme = $state({ setting: DEFAULT_THEME as ThemeSetting });
 
 function show() {
   const dark = window.matchMedia?.(DARK_QUERY).matches ?? false;
-  document.documentElement.dataset.theme = resolveTheme(theme.setting, dark);
+  const t = themeById(resolveTheme(theme.setting, dark));
+  const root = document.documentElement;
+  for (const [key, value] of Object.entries(t.colors)) root.style.setProperty(`--${key}`, value);
+  if (t.lettering) {
+    root.style.setProperty("--title", t.lettering.color);
+    root.style.setProperty("--title-fill", t.lettering.foil);
+    root.style.setProperty("--display", `"${t.lettering.font}", Georgia, serif`);
+    root.dataset.foil = "";
+  } else {
+    for (const p of ["--title", "--title-fill", "--display"]) root.style.removeProperty(p);
+    delete root.dataset.foil;
+  }
+  root.style.colorScheme = t.scheme;
+  // Last: the terminal reads the variables when data-theme changes.
+  root.dataset.theme = t.id;
 }
 
 export async function setTheme(next: ThemeSetting) {

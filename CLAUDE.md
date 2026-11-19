@@ -37,7 +37,7 @@ cargo clippy --workspace --all-targets -- -D warnings   # lint, as CI does (same
 
 ## Conventions
 
-- **Theme lists:** themes are listed in both `app/src/lib/themes.ts` and `app/src-tauri/src/menu.rs` (for View → Theme). A test checks they match, so change both together. Palettes are in `app/src/app.css` and match local-wiki's.
+- **Themes:** themes are defined once, in `app/src/lib/themes.json`. The UI and View → Theme both read it, and the tests in `app/src-tauri/src/themes.rs` validate it. The first five match local-wiki's. A lettering font must be bundled in `app/static/fonts/` with an `@font-face` in `app/src/app.css`.
 - **Harnesses:** anything that depends on one agent CLI (its flags, its JSON output, its costs, its saved sessions) goes behind the `Harness` trait in `crates/drovr-core/src/harness/`, never in the engine. A new CLI is a new file there that implements the trait, plus an entry in `all()`.
 - **Reports:** reports are `.html` files under `~/.claude/plans/`. A group's go in `plans/<group>/`, and a solo agent's in the root.
 - **herdr:** it's driven only through the command templates in `[herdr]` in the config. macOS rejects typed input lines over about 1 KB, so long prompts and commands go through a file.
