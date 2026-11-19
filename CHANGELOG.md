@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.0](https://github.com/izz-linux/drovr/compare/v0.15.1...v0.16.0) (2026-11-19)
+
+
+### Features
+
+* add a PRs view for PRs waiting on your review ([#85](https://github.com/izz-linux/drovr/issues/85)) ([e85e1b7](https://github.com/izz-linux/drovr/commit/e85e1b7a26c073597d43c979483bdcb71efee79a))
+
+
+### Bug Fixes
+
+* keep a working PATH when the login shell is slow after a reboot ([#83](https://github.com/izz-linux/drovr/issues/83)) ([d01134d](https://github.com/izz-linux/drovr/commit/d01134d5e34b6f23f58edf58af1f03a66ac1551c))
+
 ## [0.15.1](https://github.com/izz-linux/drovr/compare/v0.15.0...v0.15.1) (2026-11-19)
 
 
