@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, ago, ticketsIn, type Agent, type SprintTicket, type WatchState, type WatchedPr } from "#lib/api.ts";
+  import { api, ago, holdText, ticketsIn, type Agent, type SprintTicket, type WatchState, type WatchedPr } from "#lib/api.ts";
   import { app, toast, select } from "#lib/state.svelte.ts";
   import Retros from "./Retros.svelte";
 
@@ -99,6 +99,7 @@
     <h2 class="grow">Your sprint <span class="muted small">{open.length} open · {done.length} done</span></h2>
     <span class="muted small" class:err={ws?.jira.error} title={ws?.jira.error || ""}>Jira {ws?.jira.error ? "⚠" : ""} read {since(ws?.jira.at ?? 0)}</span>
     <span class="muted small" class:err={ws?.github.error} title={ws?.github.error || ""}>GitHub {ws?.github.error ? "⚠" : ""} read {since(ws?.github.at ?? 0)}</span>
+    {#if holdText(ws?.github.hold)}<span class="muted small">{holdText(ws?.github.hold)}</span>{/if}
     <button onclick={refreshNow} disabled={busy}>{busy ? "Reading…" : "Refresh now"}</button>
   </header>
   {#if ws?.jira.error}<div class="banner err">Jira: {ws.jira.error}</div>{/if}

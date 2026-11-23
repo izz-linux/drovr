@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, ago, type ReportFile, type ReviewPr } from "#lib/api.ts";
+  import { api, ago, holdText, type Hold, type ReportFile, type ReviewPr } from "#lib/api.ts";
   import { app, act, select, toast } from "#lib/state.svelte.ts";
 
   // PRs waiting on your review, from the poll to the merge. New ones wait for
@@ -7,13 +7,18 @@
   let busy = $state<Record<string, boolean>>({});
   let refreshing = $state(false);
   let reports = $state<ReportFile[]>([]);
+  let hold = $state<Hold | null>(null);
 
   async function loadReports() {
     try { reports = (await api.reports()).files; } catch {}
   }
+  async function loadHold() {
+    try { hold = await api.prHold(); } catch {}
+  }
+  const load = () => { loadReports(); loadHold(); };
   $effect(() => {
-    loadReports();
-    const t = setInterval(loadReports, 5000);
+    load();
+    const t = setInterval(load, 5000);
     return () => clearInterval(t);
   });
 
@@ -69,6 +74,7 @@
     if (refreshing) return;
     refreshing = true;
     try { await api.prRefresh(); } catch (e) { toast(String(e)); }
+    await loadHold();
     await act(async () => {});
     refreshing = false;
   }
@@ -111,6 +117,7 @@
 <div class="page scroll">
   <div class="row top">
     <h2 class="grow">PRs</h2>
+    {#if holdText(hold)}<span class="muted small">{holdText(hold)}</span>{/if}
     <button onclick={refreshNow} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh"}</button>
   </div>
 

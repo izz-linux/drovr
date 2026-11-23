@@ -974,7 +974,7 @@ impl Engine {
                 owner,
                 repo,
                 number: number as i64,
-                source: "drovr review".into(),
+                source: crate::pr_review::BY_HAND.into(),
                 status: "new".into(),
                 offered_ts: crate::store::now(),
                 ..Default::default()

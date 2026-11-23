@@ -13,6 +13,7 @@ pub mod memory;
 pub mod pr_review;
 pub mod prompts;
 pub mod push;
+pub mod quota;
 pub mod remote;
 pub mod reports;
 pub mod retro;

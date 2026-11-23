@@ -69,8 +69,10 @@ export type WatchedPr = {
   url: string; repo: string; number: number; title: string; tickets: string[]; state: string; draft: boolean;
   ci: string; failing: string[]; failing_urls: string[]; review: string; mergeable: string; head: string; updated: string;
 };
+/** Polling that's waiting on GitHub's API quota: until when (0: it isn't), and whether the last poll was skipped. */
+export type Hold = { until: number; paused: boolean };
 export type WatchState = {
-  jira: { at: number; error: string }; github: { at: number; error: string };
+  jira: { at: number; error: string }; github: { at: number; error: string; hold: Hold };
   tickets: Record<string, SprintTicket>; prs: Record<string, WatchedPr>;
 };
 /** One thing a retro proposes, with its evidence and what you decided. */
@@ -161,6 +163,7 @@ export const api = {
   prDismiss: (key: string) => invoke<void>("pr_dismiss", { key }),
   /** A forced poll: look for new PRs and refresh the open ones now. */
   prRefresh: () => invoke<void>("pr_refresh"),
+  prHold: () => invoke<Hold>("pr_hold"),
   runCommand: (id: number, target: string, command: string) => invoke<string>("run_command", { id, target, command }),
   bus: (group: string) => invoke<{ messages: Message[]; notes: Note[] }>("bus", { group }),
   send: (to: string, group: string, body: string) => invoke<void>("send_message", { to, group, body }),
@@ -208,6 +211,12 @@ export const api = {
    *  protocol still reads as an absolute path. */
   fileSrc: (path: string) => convertFileSrc("") + path.split("/").map(encodeURIComponent).join("/").replace(/^\//, "%2F"),
 };
+
+/** "GitHub quota low, next check 11:09", or nothing when polling isn't held. */
+export function holdText(h: Hold | null | undefined): string {
+  if (!h || h.until * 1000 <= Date.now()) return "";
+  return `GitHub quota low, next check ${new Date(h.until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
 
 /** Ticket keys in `text`, uppercased and in order (the same rule drovr's record uses). */
 export function ticketsIn(text: string): string[] {

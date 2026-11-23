@@ -480,6 +480,12 @@ async fn pr_refresh() -> Res<()> {
     .await
 }
 
+/// Whether PR polling is waiting on GitHub's API quota.
+#[tauri::command]
+async fn pr_hold() -> Res<drovr_core::quota::Hold> {
+    Ok(drovr_core::pr_review::hold())
+}
+
 #[tauri::command]
 async fn run_command(id: i64, target: String, command: String) -> Res<String> {
     blocking(move |e| e.run_command(id, &target, Some(&command))).await
@@ -1012,6 +1018,7 @@ pub fn run() {
             pr_dispatch,
             pr_dismiss,
             pr_refresh,
+            pr_hold,
             run_command,
             bus,
             send_message,

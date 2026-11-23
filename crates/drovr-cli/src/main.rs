@@ -261,6 +261,8 @@ fn run() -> Result<()> {
                     println!(
                         "review polling is off: set review.slack_channels or review.github_teams"
                     );
+                } else if drovr_core::pr_review::hold().paused {
+                    println!("GitHub API quota used up: not polled");
                 } else if found.is_empty() {
                     println!("nothing new");
                 }

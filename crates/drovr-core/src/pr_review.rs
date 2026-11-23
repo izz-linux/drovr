@@ -10,6 +10,7 @@
 
 use crate::engine::Engine;
 use crate::ledger::Lock;
+use crate::quota::{self, Hold};
 use crate::shell::{self, quote};
 use crate::sources::Sources;
 use crate::store::ReviewPr;
@@ -22,6 +23,9 @@ use std::time::Duration;
 
 /// How long a seen PR is remembered.
 const KEEP_SECS: f64 = 90.0 * 86_400.0;
+
+/// The source of a PR you started with `drovr review <url>`.
+pub(crate) const BY_HAND: &str = "drovr review";
 
 /// Polls a link may fail to look up before drovr stops trying it.
 const GIVE_UP_AFTER: u32 = 3;
@@ -49,6 +53,8 @@ struct State {
     /// Slack is read for messages since this (unix seconds).
     since: f64,
     last_poll: f64,
+    /// Waiting on GitHub's API quota.
+    hold: Hold,
     /// URL to when it was offered.
     seen: BTreeMap<String, f64>,
     /// URL to how many polls in a row couldn't look it up. At
@@ -61,6 +67,7 @@ impl Default for State {
         State {
             since: crate::store::now() - 86_400.0,
             last_poll: 0.0,
+            hold: Hold::default(),
             seen: BTreeMap::new(),
             failed: BTreeMap::new(),
         }
@@ -154,6 +161,27 @@ pub fn poll(engine: &Engine, force: bool) -> Vec<Found> {
     poll_at(engine, force, &path())
 }
 
+/// What polling is waiting on, if GitHub's API quota is low.
+pub fn hold() -> Hold {
+    load_from(&path()).hold
+}
+
+/// Whether a poll has anything to ask GitHub.
+fn uses_gh(engine: &Engine) -> bool {
+    let cfg = &engine.cfg.review;
+    !cfg.slack_channels.is_empty()
+        || !cfg.github_teams.is_empty()
+        || engine
+            .store
+            .review_prs(true)
+            .is_ok_and(|rows| !rows.is_empty())
+        || (cfg.remove_when_closed
+            && engine
+                .store
+                .agents(None)
+                .is_ok_and(|agents| agents.iter().any(|a| a.role == "pr-reviewer")))
+}
+
 /// A PR seen in a source, before it's looked up.
 struct Candidate {
     url: String,
@@ -208,7 +236,24 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
     };
     let mut state = load_from(file);
     let now = crate::store::now();
-    if !force && now - state.last_poll < cfg.poll_secs as f64 {
+    if !force && (now - state.last_poll < cfg.poll_secs as f64 || now < state.hold.until) {
+        return vec![];
+    }
+    let (go, hold) = if uses_gh(engine) {
+        quota::gate(
+            &engine.cfg.watch.gh,
+            state.last_poll,
+            cfg.poll_secs as f64,
+            force,
+        )
+    } else {
+        (true, Hold::default())
+    };
+    state.hold = hold;
+    if !go {
+        if let Err(e) = save(&state, file) {
+            eprintln!("drovr: couldn't save the PR review state: {e:#}");
+        }
         return vec![];
     }
 
@@ -285,6 +330,11 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         if parse(&c.url).is_some_and(|(owner, _, _)| !cfg.allows(&owner)) {
             continue;
         }
+        // Without your login your own PRs can't be told apart: try next poll.
+        if whoami(engine, &mut me).is_empty() {
+            all_ok = false;
+            continue;
+        }
         if !views.contains_key(&key) {
             let v = pr_view(&engine.cfg.watch.gh, &c.url)
                 .map_err(|e| eprintln!("drovr: couldn't look up {}: {e:#}", c.url))
@@ -332,7 +382,7 @@ fn poll_at(engine: &Engine, force: bool, file: &Path) -> Vec<Found> {
         }
         let author = pr["author"]["login"].as_str().unwrap_or("").to_string();
         let me = whoami(engine, &mut me);
-        if !me.is_empty() && author.eq_ignore_ascii_case(me) {
+        if author.eq_ignore_ascii_case(me) {
             continue;
         }
         let title = pr["title"]
@@ -429,6 +479,16 @@ fn refresh_open(engine: &Engine, login: &str) {
             eprintln!("drovr: couldn't save {}'s details: {e:#}", row.url);
         }
         if state != "MERGED" && state != "CLOSED" {
+            let own = !login.is_empty() && author.eq_ignore_ascii_case(login);
+            if own && row.source != BY_HAND {
+                if let Err(e) =
+                    engine
+                        .store
+                        .set_review_pr_status_if(&row.key, &["new"], "closed", None)
+                {
+                    eprintln!("drovr: couldn't close {}: {e:#}", row.url);
+                }
+            }
             continue;
         }
         settle_closed(engine, &row.key);
@@ -625,10 +685,18 @@ fn pr_view(gh: &str, url: &str) -> Result<Value> {
     ))
 }
 
+/// Through GraphQL, like the PR lookups: the REST quota can run out on its own.
 fn gh_user(gh: &str) -> Result<String> {
-    let cmd = format!("{} api user --jq .login", quote(gh));
+    let cmd = format!(
+        "{} api graphql -f query={} --jq .data.viewer.login",
+        quote(gh),
+        quote("{viewer{login}}")
+    );
     let out = shell::sh(&cmd, None, None, Duration::from_secs(60))?.into_stdout(&cmd)?;
-    Ok(out.trim().to_string())
+    match out.trim() {
+        "" | "null" => Err(anyhow!("`{cmd}` didn't print a login")),
+        login => Ok(login.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -708,11 +776,13 @@ mod tests {
         let d = dir.display();
         write(&dir, "search.json", "[]");
         write(&dir, "slack.json", "[]");
+        write(&dir, "login", "me\n");
+        write(&dir, "rate.json", "{}");
         executable(
             &dir,
             "gh",
             &format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/gh.log\ncase \"$1\" in\n search) cat {d}/search.json;;\n api) echo me;;\n pr) cat {d}/view-$(basename \"$3\").json;;\n repo) git clone -q \"$(cat {d}/origin)\" \"$4\" && git -C \"$4\" remote set-url origin \"https://github.com/$3.git\" && git -C \"$4\" config \"url.$(cat {d}/origin).insteadOf\" \"https://github.com/$3.git\";;\nesac\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/gh.log\ncase \"$1\" in\n search) cat {d}/search.json;;\n api) case \"$2\" in graphql) cat {d}/login;; rate_limit) cat {d}/rate.json;; *) exit 1;; esac;;\n pr) cat {d}/view-$(basename \"$3\").json;;\n repo) git clone -q \"$(cat {d}/origin)\" \"$4\" && git -C \"$4\" remote set-url origin \"https://github.com/$3.git\" && git -C \"$4\" config \"url.$(cat {d}/origin).insteadOf\" \"https://github.com/$3.git\";;\nesac\n"
             ),
         );
         let mut cfg = Config::default();
@@ -851,6 +921,81 @@ mod tests {
         search_has(&e, &[1, 2, 3, 4]);
         assert!(poll_at(&e.engine, true, &e.dir.join("review.json")).is_empty());
         assert!(rows(&e).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_login_offers_nothing_until_it_is_known() {
+        for (name, login) in [("nologin", ""), ("nulllogin", "null\n")] {
+            let e = env(name, |_| {});
+            let file = e.dir.join("review.json");
+            write(&e.dir, "login", login);
+            team_pr(&e, 5, "OPEN", false, "alice");
+            team_pr(&e, 6, "OPEN", false, "me");
+            search_has(&e, &[5, 6]);
+            slack_post(&e, &at(-60.0), 5);
+            let since = load_from(&file).since;
+            assert!(poll_at(&e.engine, true, &file).is_empty(), "{name}");
+            assert!(rows(&e).is_empty(), "{name}");
+            let state = load_from(&file);
+            assert!(state.seen.is_empty(), "{name}");
+            assert!(state.since - since < 60.0, "{name}: Slack is read again");
+
+            write(&e.dir, "login", "me\n");
+            let found = poll_at(&e.engine, true, &file);
+            assert_eq!(found.len(), 1, "{name}");
+            assert_eq!(found[0].number, 5, "{name}");
+        }
+    }
+
+    #[test]
+    fn refresh_closes_your_own_undispatched_rows() {
+        let e = env("ownrows", |_| {});
+        for n in [1, 2, 3] {
+            team_pr(&e, n, "OPEN", false, "ME");
+        }
+        team_pr(&e, 4, "OPEN", false, "alice");
+        seed(&e, "api", 1, "new", "");
+        seed(&e, "api", 2, "dispatched", "rvown");
+        seed(&e, "api", 3, "new", "");
+        e.engine
+            .store
+            .upsert_review_pr(&crate::store::ReviewPr {
+                source: BY_HAND.into(),
+                ..row(&e, "api", 3)
+            })
+            .unwrap();
+        seed(&e, "api", 4, "new", "");
+        poll_at(&e.engine, true, &e.dir.join("review.json"));
+        let got: Vec<String> = (1..=4).map(|n| row(&e, "api", n).status).collect();
+        assert_eq!(got, ["closed", "dispatched", "new", "new"]);
+    }
+
+    const EMPTY: &str =
+        r#"{"resources":{"graphql":{"limit":5000,"remaining":0,"reset":9999999999}}}"#;
+
+    #[test]
+    fn an_empty_quota_pauses_the_poll() {
+        let e = env("quota", |c| c.slack.search_cmd = "echo [] #{query}".into());
+        let file = e.dir.join("review.json");
+        team_pr(&e, 5, "OPEN", false, "alice");
+        search_has(&e, &[5]);
+        write(&e.dir, "rate.json", EMPTY);
+        assert!(poll_at(&e.engine, true, &file).is_empty());
+        let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
+        assert_eq!(log.trim(), "api rate_limit");
+        let state = load_from(&file);
+        assert_eq!(state.last_poll, 0.0);
+        assert!(state.hold.paused);
+        assert_eq!(state.hold.until, 9999999999.0);
+
+        // While it holds, the timer doesn't even ask.
+        assert!(poll_at(&e.engine, false, &file).is_empty());
+        let log = std::fs::read_to_string(e.dir.join("gh.log")).unwrap();
+        assert_eq!(log.trim(), "api rate_limit");
+
+        write(&e.dir, "rate.json", "{}");
+        assert_eq!(poll_at(&e.engine, true, &file).len(), 1);
+        assert_eq!(load_from(&file).hold, Hold::default());
     }
 
     #[test]

@@ -12,6 +12,7 @@
 
 use crate::engine::Engine;
 use crate::ledger;
+use crate::quota::{self, Hold};
 use crate::shell::{self, quote};
 use crate::sources::{adf_text, issue_fields, name_of, Sources};
 use anyhow::{anyhow, Result};
@@ -76,6 +77,8 @@ pub struct Pr {
 pub struct Checked {
     pub at: f64,
     pub error: String,
+    /// Waiting on GitHub's API quota (never Jira).
+    pub hold: Hold,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -138,8 +141,17 @@ fn poll_at(engine: &Engine, force: bool, file: &std::path::Path) -> State {
     } else {
         cfg.pr_poll_secs
     };
-    if force || now - state.github.at >= every as f64 {
-        poll_github(engine, &mut state);
+    let due = now - state.github.at >= every as f64 && now >= state.github.hold.until;
+    if force || due {
+        let (go, hold) = if cfg.github_repos.is_empty() {
+            (true, Hold::default())
+        } else {
+            quota::gate(&cfg.gh, state.github.at, every as f64, force)
+        };
+        state.github.hold = hold;
+        if go {
+            poll_github(engine, &mut state);
+        }
     }
     if let Err(e) = save(&state, file) {
         eprintln!("drovr: couldn't save the watcher's state: {e:#}");
@@ -740,7 +752,7 @@ mod tests {
         );
         write("search.json", "[]");
         write("view.json", "{}");
-        write("gh", &format!("#!/bin/sh\ncase \"$1\" in search) cat {d}/search.json;; pr) cat {d}/view.json;; esac\n"));
+        write("gh", &format!("#!/bin/sh\ncase \"$1\" in search) cat {d}/search.json;; pr) cat {d}/view.json;; api) cat {d}/rate.json;; esac\n"));
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut cfg = Config::default();
@@ -766,6 +778,50 @@ mod tests {
         format!(
             r#"[{{"number":7,"title":"feat(SRE-3229): kinds","url":"{PR7}","repository":{{"nameWithOwner":"o/r"}},"state":"{state}","isDraft":false,"updatedAt":"{updated}"}}]"#
         )
+    }
+
+    fn rate(graphql: u32) -> String {
+        format!(
+            r#"{{"resources":{{"core":{{"limit":5000,"remaining":0,"reset":9999999999}},"graphql":{{"limit":5000,"remaining":{graphql},"reset":9999999999}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn an_empty_quota_pauses_github_but_not_jira() {
+        let (engine, dir, file, write) = fake_watch("quota-empty");
+        write("search.json", &search_pr7("open", "p1"));
+        write("rate.json", &rate(0));
+        let s = poll_at(&engine, true, &file);
+        assert_eq!(s.tickets["SRE-3229"].status, "To do");
+        assert!(s.prs.is_empty());
+        assert_eq!(s.github.at, 0.0);
+        assert!(s.github.hold.paused);
+        assert_eq!(s.github.hold.until, 9999999999.0);
+
+        // The quota's back: a forced poll reads it again and clears the hold.
+        write("rate.json", &rate(5000));
+        let s = poll_at(&engine, true, &file);
+        assert!(s.prs.contains_key(PR7));
+        assert_eq!(s.github.hold, Hold::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hold_keeps_the_timer_from_polling_github() {
+        let (engine, dir, file, write) = fake_watch("quota-hold");
+        write("search.json", &search_pr7("open", "p1"));
+        write("rate.json", &rate(5000));
+        write(
+            "watch.json",
+            r#"{"github":{"at":1,"hold":{"until":9999999999,"paused":true}}}"#,
+        );
+        assert!(poll_at(&engine, false, &file).prs.is_empty());
+        write(
+            "watch.json",
+            r#"{"github":{"at":1,"hold":{"until":5,"paused":true}}}"#,
+        );
+        assert!(poll_at(&engine, false, &file).prs.contains_key(PR7));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
