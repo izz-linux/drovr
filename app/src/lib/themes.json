@@ -16,7 +16,11 @@
       "yellow": "#7a5a00",
       "red": "#c4382f",
       "purple": "#6940a5",
-      "cyan": "#2eaadc"
+      "cyan": "#2eaadc",
+      "chart-1": "#2a78d6",
+      "chart-2": "#eb6834",
+      "chart-3": "#1baf7a",
+      "chart-4": "#eda100"
     }
   },
   {
@@ -36,7 +40,11 @@
       "yellow": "#f2d48a",
       "red": "#ff7b72",
       "purple": "#c792ea",
-      "cyan": "#5ccfe6"
+      "cyan": "#5ccfe6",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     }
   },
   {
@@ -56,7 +64,11 @@
       "yellow": "#e8c46a",
       "red": "#ff6b68",
       "purple": "#9876aa",
-      "cyan": "#6897bb"
+      "cyan": "#6897bb",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     }
   },
   {
@@ -76,7 +88,11 @@
       "yellow": "#d9a400",
       "red": "#dc322f",
       "purple": "#6c71c4",
-      "cyan": "#2aa198"
+      "cyan": "#2aa198",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     }
   },
   {
@@ -96,7 +112,11 @@
       "yellow": "#ebcb8b",
       "red": "#bf616a",
       "purple": "#b48ead",
-      "cyan": "#8fbcbb"
+      "cyan": "#8fbcbb",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     }
   },
   {
@@ -116,7 +136,11 @@
       "yellow": "#e8c66a",
       "red": "#e07a5f",
       "purple": "#c9a0dc",
-      "cyan": "#8fc7c0"
+      "cyan": "#8fc7c0",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     },
     "lettering": {
       "color": "#e6c768",
@@ -140,7 +164,11 @@
       "yellow": "#e5c56f",
       "red": "#e3796b",
       "purple": "#b6a2e0",
-      "cyan": "#7cc3d9"
+      "cyan": "#7cc3d9",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     },
     "lettering": {
       "color": "#d9b45e",
@@ -164,7 +192,11 @@
       "yellow": "#f0cf86",
       "red": "#ff8a7a",
       "purple": "#d0a3c8",
-      "cyan": "#9cc9c4"
+      "cyan": "#9cc9c4",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     },
     "lettering": {
       "color": "#ecd29a",
@@ -188,7 +220,11 @@
       "yellow": "#e2c060",
       "red": "#e8786a",
       "purple": "#bb9bd6",
-      "cyan": "#7fbfc9"
+      "cyan": "#7fbfc9",
+      "chart-1": "#3987e5",
+      "chart-2": "#d95926",
+      "chart-3": "#199e70",
+      "chart-4": "#c98500"
     },
     "lettering": {
       "color": "#d8b24e",
