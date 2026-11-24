@@ -20,7 +20,7 @@
   <p class="muted">The ticket workflow is off, so no new PRs are followed. Turn it on with <code>workflow.enabled</code>.</p>
 {/if}
 {#if !data.merged}
-  <div class="empty">No merged PRs in these weeks. The watcher follows the PRs of your sprint's tickets in <code>watch.github_repos</code>.</div>
+  <div class="empty">No merged PRs in this time. The watcher follows the PRs of your sprint's tickets in <code>watch.github_repos</code>.</div>
 {:else}
   <div class="row head">
     <h3 class="grow">Build cost per merged PR, with rework</h3>

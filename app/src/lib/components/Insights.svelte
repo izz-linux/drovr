@@ -5,10 +5,12 @@
   import Retros from "./Retros.svelte";
   import Models from "./InsightsModels.svelte";
 
-  // What runs cost, week by week, from the spend log, and how PRs turned out.
+  // What runs cost, day by day, from the spend log, and how PRs turned out.
   let tab = $state<"overview" | "models" | "retros">("overview");
   let span = $state(8);
   let data = $state<Insights | null>(null);
+  let days = $state<InsightsWeek[]>([]);
+  let dayAverage = $state<number | null>(null);
   let prs = $state<InsightsModels | null>(null);
   let error = $state("");
   let asTable = $state(false);
@@ -22,13 +24,24 @@
       new Date(now.getFullYear(), now.getMonth(), monday + 7 * (i - n + 1)).getTime() / 1000);
   }
 
+  /** The starts of the days from `from` to today, and of tomorrow, in seconds. */
+  function dayBounds(from: number): number[] {
+    const first = new Date(from * 1000), now = new Date(), out: number[] = [];
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+    for (let i = 0; ; i++) {
+      const at = new Date(first.getFullYear(), first.getMonth(), first.getDate() + i).getTime();
+      out.push(at / 1000);
+      if (at >= tomorrow) return out;
+    }
+  }
+
   $effect(() => {
     const n = span;
     let gone = false;
     const load = () => {
       const b = bounds(n);
-      Promise.all([api.insights(b), api.insightsModels(b[0], b[n])])
-        .then(([d, m]) => { if (!gone) { data = d; prs = m; error = ""; } })
+      Promise.all([api.insights(b), api.insights(dayBounds(b[0])), api.insightsModels(b[0], b[n])])
+        .then(([d, e, m]) => { if (!gone) { data = d; days = e.weeks; dayAverage = e.week_average; prs = m; error = ""; } })
         .catch((e) => { if (!gone) error = String(e); });
     };
     shown = null;
@@ -44,22 +57,25 @@
   const color = (s: string) => `var(--chart-${series.indexOf(s) + 1})`;
   const cost = (w: InsightsWeek, s: string) =>
     w.by_harness.filter((p) => (HARNESSES.includes(p.name) ? p.name : "other") === s).reduce((a, p) => a + p.cost, 0);
-  const present = $derived(series.filter((s) => data?.weeks.some((w) => cost(w, s) > 0)));
+  const present = $derived(series.filter((s) => days.some((w) => cost(w, s) > 0)));
 
   const usd = (n: number) => (n >= 100 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(2)}`);
   const hours = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${h.toFixed(1)} h` : `${(h / 24).toFixed(1)} days`);
   const day = (ts: number) => new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const weekday = (ts: number) => new Date(ts * 1000).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
   const runs = (n: number) => `${n.toLocaleString()} run${n === 1 ? "" : "s"}`;
   const unknown = (t: InsightsTotal) => (t.unpriced ? `${runs(t.unpriced)} with no cost reported` : "");
-  const last = $derived((data?.weeks.length ?? 0) - 1);
+  const last = $derived(days.length - 1);
+  // The first day is a Monday, so these are Mondays too.
+  const every = $derived(7 * Math.ceil(days.length / 60));
   const label = (w: InsightsWeek, i: number) =>
-    [`Week of ${day(w.start)}${i === last ? ", so far" : ""}: ${usd(w.cost)}, ${runs(w.runs)}`,
+    [`${weekday(w.start)}${i === last ? ", so far" : ""}: ${usd(w.cost)}, ${runs(w.runs)}`,
       ...present.filter((s) => cost(w, s) > 0).map((s) => `${NAMES[s]} ${usd(cost(w, s))}`),
       unknown(w), w.retros.length ? `retro ${w.retros.map(day).join(", ")}` : ""].filter(Boolean).join("; ");
 
   // The axis ends on a round number, at or above everything drawn.
   const top = $derived.by(() => {
-    const most = Math.max(data?.weekly_target_usd ?? 0, ...(data?.weeks.map((w) => w.cost) ?? []), 1);
+    const most = Math.max(...days.map((w) => w.cost), 1);
     const unit = 10 ** Math.floor(Math.log10(most));
     return unit * ([1, 2, 4, 6, 8, 10].find((m) => m * unit >= most) ?? 10);
   });
@@ -98,7 +114,7 @@
     </div>
     <button class="ghost" hidden={tab !== "overview"} aria-pressed={asTable} onclick={() => (asTable = !asTable)}>{asTable ? "Show chart" : "Show table"}</button>
     <select hidden={tab === "retros"} aria-label="Weeks shown" bind:value={span}>
-      {#each [4, 8, 12, 26] as n}<option value={n}>Last {n} weeks</option>{/each}
+      {#each [2, 4, 8, 12, 26] as n}<option value={n}>Last {n} weeks</option>{/each}
     </select>
   </header>
   {#if error}<div class="banner err">{error}</div>{/if}
@@ -113,6 +129,7 @@
     {:else if data}
       <div class="tiles">
         <div class="tile"><span class="muted">Spent</span><b>{usd(data.total.cost)}</b><span class="muted small">{runs(data.total.runs)}</span></div>
+        <div class="tile"><span class="muted">Average day</span><b>{dayAverage == null ? "—" : usd(dayAverage)}</b><span class="muted small">full days, weekends too</span></div>
         <div class="tile"><span class="muted">Average week</span><b>{data.week_average == null ? "—" : usd(data.week_average)}</b><span class="muted small">{data.weekly_target_usd ? `target ${usd(data.weekly_target_usd)}` : "full weeks only"}</span></div>
         <div class="tile"><span class="muted">Average retro</span><b>{data.retro_average == null ? "—" : usd(data.retro_average)}</b><span class="muted small">the retro agent's runs</span></div>
         {#if prs?.merged}
@@ -125,16 +142,16 @@
 
       <section>
         <div class="row">
-          <h3 class="grow">Spend by week</h3>
+          <h3 class="grow">Spend by day</h3>
           {#each present as s}<span class="key"><i style:background={color(s)}></i>{NAMES[s]}</span>{/each}
           <span class="key"><i class="flag">◆</i>Retro</span>
         </div>
         {#if asTable}
           <table class="weeks">
-            <thead><tr><th>Week of</th>{#each present as s}<th class="num">{NAMES[s]}</th>{/each}<th class="num">Total</th><th class="num">Runs</th><th class="num">Not reported</th><th>Retros</th></tr></thead>
+            <thead><tr><th>Day</th>{#each present as s}<th class="num">{NAMES[s]}</th>{/each}<th class="num">Total</th><th class="num">Runs</th><th class="num">Not reported</th><th>Retros</th></tr></thead>
             <tbody>
-              {#each data.weeks as w, i}
-                <tr><th scope="row">{day(w.start)}{i === last ? " (so far)" : ""}</th>{#each present as s}<td class="num">{usd(cost(w, s))}</td>{/each}<td class="num">{usd(w.cost)}</td><td class="num">{w.runs.toLocaleString()}</td><td class="num">{w.unpriced || ""}</td><td>{w.retros.map(day).join(", ")}</td></tr>
+              {#each days as w, i}
+                <tr><th scope="row">{weekday(w.start)}{i === last ? " (so far)" : ""}</th>{#each present as s}<td class="num">{usd(cost(w, s))}</td>{/each}<td class="num">{usd(w.cost)}</td><td class="num">{w.runs.toLocaleString()}</td><td class="num">{w.unpriced || ""}</td><td>{w.retros.map(day).join(", ")}</td></tr>
               {/each}
             </tbody>
           </table>
@@ -143,8 +160,7 @@
             <div class="axis muted small"><span>{usd(top)}</span><span>{usd(top / 2)}</span><span>$0</span></div>
             <div class="plot">
               <div class="line" style:bottom="100%"></div><div class="line" style:bottom="50%"></div>
-              {#if data.weekly_target_usd}<div class="line target" style:bottom={`${(100 * data.weekly_target_usd) / top}%`}><span class="small">target</span></div>{/if}
-              {#each data.weeks as w, i}
+              {#each days as w, i}
                 <button class="week" class:now={i === last} aria-label={label(w, i)}
                   onmouseenter={() => (shown = i)} onmouseleave={() => (shown = null)} onfocus={() => (shown = i)} onblur={() => (shown = null)}>
                   <div class="stack" style:height={`${(100 * w.cost) / top}%`}>
@@ -152,10 +168,10 @@
                   </div>
                 </button>
               {/each}
-              {#if shown !== null && data.weeks[shown]}
-                {@const w = data.weeks[shown]}
-                <div class="tip" class:left={shown > last / 2} style:--at={`${(100 * (shown + 0.5)) / data.weeks.length}%`}>
-                  <b>Week of {day(w.start)}{shown === last ? ", so far" : ""}</b>
+              {#if shown !== null && days[shown]}
+                {@const w = days[shown]}
+                <div class="tip" class:left={shown > last / 2} style:--at={`${(100 * (shown + 0.5)) / days.length}%`}>
+                  <b>{weekday(w.start)}{shown === last ? ", so far" : ""}</b>
                   <div>{usd(w.cost)} · {runs(w.runs)}</div>
                   {#each present as s}{#if cost(w, s) > 0}<div class="key"><i style:background={color(s)}></i>{NAMES[s]} {usd(cost(w, s))}</div>{/if}{/each}
                   {#if w.unpriced}<div class="muted">{unknown(w)}</div>{/if}
@@ -164,7 +180,7 @@
               {/if}
             </div>
             <div class="names muted small" aria-hidden="true">
-              {#each data.weeks as w, i}<span>{#if w.retros.length}<i class="flag">◆</i>{/if}{span > 12 && i % 4 ? "" : day(w.start)}</span>{/each}
+              {#each days as w, i}<span><i class="flag">{w.retros.length ? "◆" : ""}</i>{i % every ? "" : day(w.start)}</span>{/each}
             </div>
           </div>
         {/if}
@@ -199,8 +215,6 @@
   .axis { display: flex; flex-direction: column; justify-content: space-between; text-align: right; height: 216px; margin: -8px 0; }
   .plot { position: relative; height: 200px; display: flex; border-bottom: 1px solid var(--muted); }
   .line { position: absolute; left: 0; right: 0; border-top: 1px solid var(--border); pointer-events: none; }
-  .line.target { border-top: 2px solid var(--text); z-index: 1; }
-  .line.target span { position: absolute; right: 0; bottom: 2px; background: var(--bg); padding: 0 4px; }
   .week { flex: 1 1 0; min-width: 0; height: 100%; padding: 0; border: none; border-radius: 0; background: transparent; display: flex; align-items: flex-end; justify-content: center; position: relative; cursor: default; }
   .week:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
   .stack { width: min(24px, 70%); display: flex; flex-direction: column-reverse; gap: 2px; }
@@ -211,7 +225,8 @@
   .tip.left { left: auto; right: calc(100% - var(--at) + 18px); }
   .tip .key { display: flex; }
   .names { grid-column: 2; display: flex; padding-top: 4px; }
-  .names span { flex: 1 1 0; min-width: 0; text-align: center; white-space: nowrap; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+  .names span { flex: 1 1 0; min-width: 0; text-align: center; white-space: nowrap; display: flex; flex-direction: column; align-items: center; }
+  .names .flag { height: 14px; }
   .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 0 32px; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th { font-weight: 400; text-align: left; }

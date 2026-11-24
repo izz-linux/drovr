@@ -107,7 +107,7 @@ cargo install --path crates/drovr-cli
 | Code review | 7 | Changed files and diffs in each repo and worktree an agent worked in |
 | PRs | 8 | PRs waiting on your review, from offer to merge (once `[review]` watches a channel or team) |
 | Pipeline | 9 | Your sprint, its PRs and and the agents on each ticket (only with `workflow.enabled`) |
-| Insights | 0 | What runs cost, week by week, and by harness, model, stage and ticket; and how PRs turned out, by model; and the retros |
+| Insights | 0 | What runs cost, day by day, and by harness, model, stage and ticket; and how PRs turned out, by model; and the retros |
 
 Settings is ⌘/Ctrl+, (**drovr → Settings…**): theme, the phone page's sign-in link, and your config file.
 
@@ -299,8 +299,8 @@ drovr records what each run cost, in its database (`drovr.db` in its state folde
 
 **Insights** (⌘0) adds up the spend log, whether or not the workflow is on:
 
-- **Totals:** what you spent, an average full week, and an average retro (its agent's runs).
-- **Spend by week:** stacked by harness, for the last 4, 8, 12 or 26 weeks, Monday to Monday. A ◆ marks each week a retro was started. Set `weekly_target_usd` under `[insights]` to draw a target. **Show table** gives the same numbers as a table.
+- **Totals:** what you spent, an average full week and day (weekends too), and an average retro (its agent's runs). Set `weekly_target_usd` under `[insights]` to show a target beside the week.
+- **Spend by day:** stacked by harness, for the last 2, 4, 8, 12 or 26 weeks, which start on Mondays. A ◆ marks each day a retro was started. **Show table** gives the same numbers as a table.
 - **By harness, model, stage and ticket:** each adds up to the total. A model run through OpenCode is marked `(OC)`, apart from the same model in Claude Code. A run on several tickets is split evenly between them.
 
 Runs whose CLI reported no cost are counted separately, and the totals leave them out.

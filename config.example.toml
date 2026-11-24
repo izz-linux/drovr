@@ -96,7 +96,7 @@ skills_dir = "~/.claude/skills"   # where approved skill proposals are written
 hide_decided = true           # hide a ticket from the picker once its retros are decided, until new work
 
 [insights]
-weekly_target_usd = 0         # what you mean to spend in a week, drawn on the Insights chart; 0 = none
+weekly_target_usd = 0         # what you mean to spend in a week, shown beside the average in Insights; 0 = none
 
 [stages.models]               # the model each stage runs on; unset = the default
 # triage = "claude-haiku-5-5"
