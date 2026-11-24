@@ -106,8 +106,8 @@ cargo install --path crates/drovr-cli
 | Message bus | 6 | Agents' messages to each other, and each group's shared notes, with a filter |
 | Code review | 7 | Changed files and diffs in each repo and worktree an agent worked in |
 | PRs | 8 | PRs waiting on your review, from offer to merge (once `[review]` watches a channel or team) |
-| Pipeline | 9 | Your sprint, its PRs and the agents on each ticket, and the retros (only with `workflow.enabled`) |
-| Insights | 0 | What runs cost, week by week, and by harness, model, stage and ticket; and how PRs turned out, by model |
+| Pipeline | 9 | Your sprint, its PRs and and the agents on each ticket (only with `workflow.enabled`) |
+| Insights | 0 | What runs cost, week by week, and by harness, model, stage and ticket; and how PRs turned out, by model; and the retros |
 
 Settings is ⌘/Ctrl+, (**drovr → Settings…**): theme, the phone page's sign-in link, and your config file.
 
@@ -345,7 +345,7 @@ Part of the ticket workflow (`workflow.enabled`). A ticket goes through stages, 
 
 ### The retro
 
-Part of the ticket workflow (`workflow.enabled`), and it runs only when you start one: **Start retro** in a ticket's timeline, or **Retro…** in Pipeline to pick several tickets. The picker shows when each ticket's last retro ran, and hides tickets with nothing new since their retro behind a toggle. Add a note if there's something to look at in particular.
+Part of the ticket workflow (`workflow.enabled`), and it runs only when you start one: **Start retro** in a ticket's timeline, or **Retro…** under **Retros** in Insights (⌘0) to pick several tickets. The picker has four lists: **Not covered** (no retro has read them), **New work** (agents, PRs or reviews moved since the last retro; Jira changes and cleanup don't count), **Covered**, and **Hidden**. The first two start out picked, and a retro on a ticket with new work starts from where the last one stopped. **Hide** takes a ticket out of its list, and **Show** puts it back. With `retro.hide_decided`, a covered ticket is hidden once you've decided every proposal of its retros. A hidden ticket comes back when there's new work on it, and its record is kept. Add a note if there's something to look at in particular.
 
 1. **The numbers:** drovr works them out from the tickets' records itself and saves them as `evidence.json` in the retro's folder (`~/.claude/plans/retros/<when>/`). They cover runs, cost and tokens by stage, harness and model (a model has one name however it was started: `opus`, `claude-opus-5-5` or a gateway's `…/anthropic/claude-opus-5.5`), rework (handoffs sent back, CI failures, changes requested), dismissals (Inbox items declined or dismissed), misses (PRs closed unmerged), overrides (a stage's model changed at a handoff), wakes, checkpoints, how long the Inbox waited on you, and your stops and **Send now**s.
 2. **The retro agent** (on `retro.model`) reads the records, the handoffs and those numbers. It gets your current stages, models, limits, rules and skills, and the last 50 proposals from earlier retros with what you decided, so it doesn't bring back one you dismissed without new evidence. It submits proposals, each with its evidence:
@@ -356,7 +356,7 @@ Part of the ticket workflow (`workflow.enabled`), and it runs only when you star
    - **skill_edit / new_skill:** a whole `SKILL.md`.
 
    It also publishes a short report to Reports.
-3. **You decide:** proposals appear under **Retros** at the top of Pipeline. **Approve** one at a time, or **Approve all**, or **Dismiss**. Approving applies it:
+3. **You decide:** proposals appear under **Retros** in Insights. **Approve** one at a time, or **Approve all**, or **Dismiss**. Approving applies it:
    - **Config changes:** written to your `config.toml` with its comments and layout kept. The file before the change is saved beside it as `config.toml.before-retro`. drovr only changes the keys above.
    - **Skills:** written to `retro.skills_dir/<name>/SKILL.md` (`~/.claude/skills`), with the one it replaces kept beside it.
    - **The record:** every approval and dismissal goes into the tickets' records and the retro's `decisions.jsonl`. Every later retro is told about them, whichever tickets it's on.
@@ -731,6 +731,7 @@ drovr reads `~/.config/drovr/config.toml`. Every key is optional, and [`config.e
 | `stages.review_skill` | `""` | A SKILL.md the build reviewers and PR reviewers follow, e.g. `"~/.claude/skills/code-review/SKILL.md"`; empty, they review on their own |
 | `retro.model` | `""` | The retro agent's model; empty for the default |
 | `retro.skills_dir` | `"~/.claude/skills"` | Where approved skill proposals are written |
+| `retro.hide_decided` | `true` | Hide a ticket from the retro picker once you've decided every proposal of its retros, until there's new work on it |
 | `permissions.auto_allow` | read-only tools, `WebSearch` and `mcp__drovr__*` | Tools headless agents use without asking; a trailing `*` matches a prefix. `WebFetch` asks in the Inbox: with `Read` allowed too, an agent misled by text in a ticket, page or Slack message could otherwise send your files to any URL. Add it back if you accept that. |
 | `permissions.wait_seconds` | `900` | How long a permission request waits for you before it's denied |
 | `orchestrator.auto_spawn` | `true` | Start workers without asking first |

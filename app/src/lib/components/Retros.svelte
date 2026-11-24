@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, ago, type Proposal, type Retro, type TicketRecord } from "#lib/api.ts";
+  import { api, ago, type Proposal, type Retro, type RetroTicket } from "#lib/api.ts";
   import { app, act, select, toast } from "#lib/state.svelte.ts";
   import Modal from "./Modal.svelte";
 
@@ -7,10 +7,10 @@
   // it) or dismiss it, or approve all that are left.
   let retros = $state<Retro[]>([]);
   let starting = $state(false);
-  let records = $state<TicketRecord[]>([]);
+  let tickets = $state<RetroTicket[]>([]);
+  let list = $state<RetroTicket["list"]>("not_covered");
   let picked = $state<Record<string, boolean>>({});
   let note = $state("");
-  let showReviewed = $state(false);
   let showFinished = $state(false);
   let open = $state<Record<string, boolean>>({});
 
@@ -24,15 +24,15 @@
   });
 
   async function startDialog() {
-    records = await api.records().catch(() => []);
-    picked = {};
-    showReviewed = false;
+    await loadTickets();
+    // New work is picked: the next retro is for it.
+    picked = Object.fromEntries(tickets.filter((t) => isNew(t)).map((t) => [t.ticket, true]));
+    list = LISTS.find(([id]) => inList(id).length)?.[0] ?? "not_covered";
     starting = true;
   }
 
   async function start() {
-    const tickets = Object.keys(picked).filter((k) => picked[k]);
-    const a = await act(() => api.startRetro(tickets, note), `Retro started on ${tickets.join(", ")}`);
+    const a = await act(() => api.startRetro(chosen, note), `Retro started on ${chosen.join(", ")}`);
     if (a) { starting = false; note = ""; load(); }
   }
 
@@ -54,17 +54,29 @@
   const change = (p: Proposal) =>
     p.change?.config ? `${p.change.config.key} = ${JSON.stringify(p.change.config.value)}`
     : p.change?.skill ? `skill ${p.change.skill.name}` : "a change you make yourself";
-  // One line per ticket (it may have records in several groups' folders):
-  // when its last retro ran, and whether it's had work since.
-  type Pick = { ticket: string; lastRetro: number; fresh: boolean };
-  const picks = (rs: TicketRecord[]): Pick[] => {
-    const by = new Map<string, { lastRetro: number; lastWork: number }>();
-    for (const r of rs) {
-      const t = by.get(r.ticket) ?? { lastRetro: 0, lastWork: 0 };
-      by.set(r.ticket, { lastRetro: Math.max(t.lastRetro, r.last_retro), lastWork: Math.max(t.lastWork, r.last_work) });
-    }
-    return [...by].map(([ticket, t]) => ({ ticket, lastRetro: t.lastRetro, fresh: !t.lastRetro || t.lastWork > t.lastRetro }));
+  const LISTS: [RetroTicket["list"], string, string][] = [
+    ["not_covered", "Not covered", "No retro has read these."],
+    ["new_work", "New work", "Agents, PRs or reviews moved since the last retro, which is where the next one starts. Jira status and cleanup don't count."],
+    ["covered", "Covered", "A retro has read everything that matters here. Picked again, it reads all of it."],
+    ["hidden", "Hidden", "Out of the lists until you show them, or until there's new work on them. Their records are kept."],
+  ];
+  const inList = (id: string) => tickets.filter((t) => t.list === id);
+  const isNew = (t: RetroTicket) => t.list === "not_covered" || t.list === "new_work";
+  const chosen = $derived(tickets.filter((t) => picked[t.ticket] && t.list !== "hidden").map((t) => t.ticket));
+  async function loadTickets() {
+    try { tickets = await api.retroTickets(); } catch (e) { toast(String(e)); }
+  }
+  async function hide(t: RetroTicket, hidden: boolean) {
+    await act(() => api.setRetroHidden(t.ticket, hidden));
+    if (hidden) picked[t.ticket] = false;
+    await loadTickets();
+  }
+  const did = (t: RetroTicket) => {
+    const what = [t.runs && `${t.runs} run${t.runs === 1 ? "" : "s"}`, t.merged && `${t.merged} PR${t.merged === 1 ? "" : "s"} merged`, t.cost && `$${t.cost.toFixed(2)}`].filter(Boolean).join(", ");
+    return `${what || "no runs"}${t.retros.length ? " since" : ""}`;
   };
+  const day = (ts: number) => new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const covered = (t: RetroTicket) => (t.retros.length ? `Retro ${t.retros.map(day).join(", ")}` : "Never in a retro");
   // A retro is finished once its agent has stopped and you've decided every
   // proposal; finished ones fold away under a toggle.
   const isActive = (r: Retro) => agentState(r.agent) === "working" || r.proposals.some((p) => p.status === "pending");
@@ -74,9 +86,6 @@
     const n = (st: string) => r.proposals.filter((p) => p.status === st).length;
     return r.proposals.length ? `${n("approved")} approved · ${n("dismissed")} dismissed` : "no proposals";
   };
-  const all = $derived(picks(records));
-  const fresh = $derived(all.filter((p) => p.fresh));
-  const reviewed = $derived(all.filter((p) => !p.fresh));
 </script>
 
 <section class="retros">
@@ -131,33 +140,30 @@
 {#if starting}
   <Modal title="Start a retro" onclose={() => (starting = false)}>
     <p class="muted small">A retro agent reads these tickets' records and the numbers drovr works out from them (cost by stage and model, rework, dismissals, misses), then proposes changes with evidence. Nothing changes until you approve it.</p>
+    <div class="row lists">
+      {#each LISTS as [id, name]}<button class="ghost" class:on={list === id} aria-pressed={list === id} onclick={() => (list = id)}>{name} {inList(id).length}</button>{/each}
+    </div>
+    <p class="muted small">{LISTS.find(([id]) => id === list)?.[2]}</p>
     <div class="picks">
-      {#snippet pick(p: Pick)}
-        <label class="row pick">
-          <input type="checkbox" bind:checked={picked[p.ticket]} /> {p.ticket}
-          {#if p.lastRetro}<span class="muted small">retro {ago(p.lastRetro)} ago · {p.fresh ? "new work since" : "nothing new since"}</span>{/if}
-        </label>
-      {/snippet}
-      {#each fresh as p (p.ticket)}
-        {@render pick(p)}
+      {#each inList(list) as t (t.ticket)}
+        <div class="row pick">
+          {#if list === "hidden"}<span class="grow"><strong>{t.ticket}</strong><span class="muted small">{did(t)} · {covered(t)}</span></span>
+          {:else}<label class="row grow"><input type="checkbox" bind:checked={picked[t.ticket]} /><span><strong>{t.ticket}</strong><span class="muted small">{did(t)} · {covered(t)}</span></span></label>{/if}
+          <button class="ghost small" onclick={() => hide(t, list !== "hidden")}>{list === "hidden" ? "Show" : "Hide"}</button>
+        </div>
       {:else}
-        <div class="muted">{all.length ? "Every ticket has had a retro since its last work." : "No ticket has a record yet."}</div>
+        <div class="muted">{tickets.length ? "None." : "No ticket has a record yet."}</div>
       {/each}
-      {#if reviewed.length}
-        <button class="ghost small" onclick={() => (showReviewed = !showReviewed)}>{showReviewed ? "▾" : "▸"} {reviewed.length} with nothing new since their retro</button>
-        {#if showReviewed}{#each reviewed as p (p.ticket)}{@render pick(p)}{/each}{/if}
-      {/if}
     </div>
     <input placeholder="Anything to look at in particular (optional)" bind:value={note} />
     {#snippet footer()}
       <button onclick={() => (starting = false)}>Cancel</button>
-      <button class="primary" disabled={!Object.values(picked).some(Boolean)} onclick={start}>Start retro</button>
+      <button class="primary" disabled={!chosen.length} onclick={start}>Start retro on {chosen.length} {chosen.length === 1 ? "ticket" : "tickets"}</button>
     {/snippet}
   </Modal>
 {/if}
 
 <style>
-  .retros { border-bottom: 1px solid var(--border); padding: 8px 0 12px; margin-bottom: 4px; }
   .head h3 { margin: 4px 0; font-size: 14px; }
   .retro { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: var(--panel); }
   .prop { border-top: 1px solid var(--border); padding: 6px 0; }
@@ -168,6 +174,10 @@
   .ev { margin: 4px 0 4px 18px; font-size: 12px; }
   pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; max-height: 260px; overflow: auto; background: var(--bg); padding: 6px; border-radius: 4px; }
   .picks { max-height: 260px; overflow: auto; margin: 8px 0; }
-  .pick { gap: 6px; font-size: 13px; }
+  .lists { flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+  .lists .on { background: var(--panel-2); border-color: var(--accent); }
+  .pick { gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+  .pick span span { display: block; }
+  .pick label { margin: 0; font-size: inherit; font-weight: inherit; letter-spacing: normal; text-transform: none; color: inherit; }
   .pick input { width: auto; }
 </style>

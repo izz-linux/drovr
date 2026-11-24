@@ -71,13 +71,32 @@ pub struct Retro {
     pub proposals: Vec<Proposal>,
 }
 
+/// A ticket a retro can be run on.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct RetroTicket {
+    pub ticket: String,
+    /// `not_covered`, `new_work`, `covered` or `hidden`.
+    pub list: String,
+    /// When each of its retros started, oldest first.
+    pub retros: Vec<f64>,
+    pub last_work: f64,
+    /// Since its last retro, or ever.
+    pub runs: u64,
+    pub cost: f64,
+    pub merged: u64,
+}
+
 fn retros_dir(cfg: &crate::config::Config) -> PathBuf {
     cfg.reports.path().join("retros")
 }
 
 /// The numbers a retro starts from, worked out from the records so the
-/// agent doesn't have to count.
-pub fn evidence(cfg: &crate::config::Config, tickets: &[String]) -> Value {
+/// agent doesn't have to count. A ticket in `since` is counted from then on.
+pub fn evidence(
+    cfg: &crate::config::Config,
+    tickets: &[String],
+    since: &BTreeMap<String, f64>,
+) -> Value {
     let mut per_ticket = Map::new();
     #[derive(Default)]
     struct Row {
@@ -90,14 +109,22 @@ pub fn evidence(cfg: &crate::config::Config, tickets: &[String]) -> Value {
     }
     let mut by_stage_model: BTreeMap<(String, String, String), Row> = BTreeMap::new();
     for t in tickets {
-        let events = ledger::timeline(cfg, t);
+        let all = ledger::timeline(cfg, t);
+        let from = since.get(t).copied().unwrap_or(0.0);
+        let first = all.partition_point(|e| e["ts"].as_f64().unwrap_or(0.0) <= from);
+        let events = &all[first..];
         let mut stage_of: BTreeMap<String, String> = BTreeMap::new();
         let mut started: BTreeMap<(String, i64), (String, String)> = BTreeMap::new();
         let mut n: BTreeMap<&str, i64> = BTreeMap::new();
         let mut bump = |k: &'static str| *n.entry(k).or_default() += 1;
         let (mut cost, mut waits) = (0.0, vec![]);
         let mut next_model: BTreeMap<i64, String> = BTreeMap::new();
-        for e in &events {
+        for (i, e) in all.iter().enumerate() {
+            // What was read before only says which run is which.
+            let kind = e["kind"].as_str().unwrap_or("");
+            if i < first && !matches!(kind, "agent_started" | "run_start") {
+                continue;
+            }
             let agent = e["agent"].as_str().unwrap_or("").to_string();
             match e["kind"].as_str().unwrap_or("") {
                 "agent_started" => {
@@ -208,6 +235,9 @@ pub fn evidence(cfg: &crate::config::Config, tickets: &[String]) -> Value {
         counts.insert("cost_usd".into(), json!((cost * 100.0).round() / 100.0));
         counts.insert("hours".into(), json!((span * 10.0).round() / 10.0));
         counts.insert("events".into(), json!(events.len()));
+        if from > 0.0 {
+            counts.insert("since".into(), json!(ledger::iso(from)));
+        }
         if !waits.is_empty() {
             counts.insert(
                 "avg_inbox_wait_s".into(),
@@ -224,6 +254,18 @@ pub fn evidence(cfg: &crate::config::Config, tickets: &[String]) -> Value {
         })
         .collect();
     json!({ "tickets": per_ticket, "by_stage_and_model": rows })
+}
+
+/// A record's folder, as the retro agent is told about it.
+fn folder_line(r: &ledger::Record, since: &BTreeMap<String, f64>) -> String {
+    match since.get(&r.ticket) {
+        Some(ts) => format!(
+            "- {} (an earlier retro read it up to {}; look at what's after that)",
+            r.path,
+            ledger::iso(*ts)
+        ),
+        None => format!("- {}", r.path),
+    }
 }
 
 /// The skills you have, by name.
@@ -255,6 +297,12 @@ impl Engine {
         if tickets.is_empty() || records.is_empty() {
             bail!("pick tickets that have a record");
         }
+        let since: BTreeMap<String, f64> = self
+            .retro_tickets()?
+            .into_iter()
+            .filter(|t| t.list == "new_work" && tickets.contains(&t.ticket))
+            .filter_map(|t| Some((t.ticket, *t.retros.last()?)))
+            .collect();
         let history = earlier_decisions(&self.retros());
         let now = crate::store::now();
         let stamp = ledger::iso(now)
@@ -266,7 +314,7 @@ impl Engine {
         std::fs::create_dir_all(&dir)?;
         std::fs::write(
             dir.join("evidence.json"),
-            serde_json::to_string_pretty(&evidence(&self.cfg, &tickets))?,
+            serde_json::to_string_pretty(&evidence(&self.cfg, &tickets, &since))?,
         )?;
         let name = format!("retro-{}", stamp[..13].replace('-', ""));
         let meta = Retro {
@@ -284,7 +332,7 @@ impl Engine {
             "watch.rules": self.cfg.watch.rules,
             "default_model": self.cfg.defaults.model,
         });
-        let folders: Vec<String> = records.iter().map(|r| format!("- {}", r.path)).collect();
+        let folders: Vec<String> = records.iter().map(|r| folder_line(r, &since)).collect();
         let you = self.cfg.your_name();
         let task = format!(
             r#"Run a retro on {tickets} for {you}, to make the next tickets go better and cost less.
@@ -391,8 +439,70 @@ Then publish a short report with `publish_report` (title "Retro: {tickets}"): wh
             );
         }
         Ok(
-            json!({ "saved": out.len(), "note": format!("{} reviews them in drovr's Pipeline view.", crate::engine::capitalize(&self.cfg.your_name())) }),
+            json!({ "saved": out.len(), "note": format!("{} reviews them in drovr's Insights, under Retros.", crate::engine::capitalize(&self.cfg.your_name())) }),
         )
+    }
+
+    /// The tickets with a record, for the picker.
+    pub fn retro_tickets(&self) -> Result<Vec<RetroTicket>> {
+        let all = self.retros();
+        let choices = self.store.retro_hidden()?;
+        let mut events: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        for r in ledger::list(&self.cfg) {
+            let more = ledger::read(Path::new(&r.path));
+            events.entry(r.ticket).or_default().extend(more);
+        }
+        let mut out = vec![];
+        for (ticket, events) in events {
+            let ts = |e: &Value| e["ts"].as_f64().unwrap_or(0.0);
+            let on: Vec<&Retro> = all.iter().filter(|r| r.tickets.contains(&ticket)).collect();
+            let known = |e: &Value| on.iter().any(|r| e["dir"] == r.dir.as_str());
+            let mut retros: Vec<f64> = events
+                .iter()
+                .filter(|e| e["kind"] == "retro_started" && !known(e))
+                .map(ts)
+                .chain(on.iter().map(|r| r.started))
+                .collect();
+            retros.sort_by(f64::total_cmp);
+            let last = retros.last().copied().unwrap_or(0.0);
+            let last_work = events
+                .iter()
+                .filter(|e| ledger::is_work(e))
+                .map(ts)
+                .fold(0.0, f64::max);
+            let decided = !on.is_empty() && on.iter().all(|r| self.is_decided(r));
+            let list = if retros.is_empty() {
+                "not_covered"
+            } else if last_work > last {
+                "new_work"
+            } else {
+                "covered"
+            };
+            let hidden = match choices.get(&ticket) {
+                Some((hidden, at)) if *at >= last_work && *at >= last => *hidden,
+                _ => list == "covered" && self.cfg.retro.hide_decided && decided,
+            };
+            let after = || events.iter().filter(|e| ts(e) > last);
+            let runs = || after().filter(|e| e["kind"] == "run_end");
+            out.push(RetroTicket {
+                list: if hidden { "hidden" } else { list }.into(),
+                runs: runs().count() as u64,
+                cost: runs().filter_map(|e| e["cost_usd"].as_f64()).sum(),
+                merged: after().filter(|e| e["kind"] == "pr_merged").count() as u64,
+                ticket,
+                retros,
+                last_work,
+            });
+        }
+        out.sort_by(|a, b| b.last_work.total_cmp(&a.last_work));
+        Ok(out)
+    }
+
+    /// Its agent has submitted, or is gone, and you've decided every proposal.
+    fn is_decided(&self, r: &Retro) -> bool {
+        let submitted = Path::new(&r.dir).join("proposals.json").is_file();
+        (submitted || !matches!(self.store.agent(&r.agent), Ok(Some(_))))
+            && r.proposals.iter().all(|p| p.status != "pending")
     }
 
     /// Every retro, newest first, with its proposals and what you decided.
@@ -994,7 +1104,7 @@ mod tests {
             json!({ "kind": "answered", "agent": "g-triage", "type": "jira", "status": "dismissed", "waited_s": 40 }),
         );
         add(json!({ "kind": "pr_status", "changes": { "ci": ["pending", "failure"] } }));
-        let e = evidence(&cfg, &["SRE-1".into()]);
+        let e = evidence(&cfg, &["SRE-1".into()], &BTreeMap::new());
         let t = &e["tickets"]["SRE-1"];
         assert_eq!(
             (
@@ -1064,7 +1174,7 @@ mod tests {
             json!(["claude-haiku-5-5", "claude-opus-5-5"]),
             json!({ "claude-haiku-5-5": 0.25, "claude-opus-5-5": 1.0 }),
         );
-        let e = evidence(&cfg, &["SRE-1".into()]);
+        let e = evidence(&cfg, &["SRE-1".into()], &BTreeMap::new());
         let rows: Vec<Value> = e["by_stage_and_model"]
             .as_array()
             .unwrap()
@@ -1096,5 +1206,308 @@ mod tests {
         );
         assert_eq!(e["tickets"]["SRE-1"]["cost_usd"], 10.25);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn picker(case: &str) -> (Engine, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("drovr-picker-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = crate::config::Config::default();
+        cfg.workflow.enabled = true;
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        let store = crate::store::Store::open(&dir.join("t.db")).unwrap();
+        (Engine::with(store, cfg, "drovr".into()), dir)
+    }
+
+    fn record(e: &Engine, folder: &str, ticket: &str, events: &[Value]) {
+        let d = ledger::dir(&e.cfg, folder, ticket);
+        std::fs::create_dir_all(&d).unwrap();
+        let text: String = events.iter().map(|v| format!("{v}\n")).collect();
+        std::fs::write(d.join(ledger::FILE), text).unwrap();
+    }
+
+    fn retro(e: &Engine, name: &str, ticket: &str, started: f64, proposals: Option<&[&str]>) {
+        let d = retros_dir(&e.cfg).join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        let meta = Retro {
+            tickets: vec![ticket.into()],
+            started,
+            agent: format!("retro-{name}"),
+            ..Retro::default()
+        };
+        std::fs::write(d.join("retro.json"), serde_json::to_string(&meta).unwrap()).unwrap();
+        let Some(statuses) = proposals else { return };
+        let list: Vec<Proposal> = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, s)| Proposal {
+                id: format!("p{i}"),
+                status: s.to_string(),
+                ..Proposal::default()
+            })
+            .collect();
+        std::fs::write(
+            d.join("proposals.json"),
+            serde_json::to_string(&list).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn list_of(e: &Engine) -> String {
+        e.retro_tickets().unwrap()[0].list.clone()
+    }
+
+    #[test]
+    fn sorts_tickets_by_what_a_retro_has_read() {
+        let run = |ts: f64| json!({ "ts": ts, "kind": "run_end" });
+        let retro_at = |ts: f64| json!({ "ts": ts, "kind": "retro_started" });
+        let ev = |ts: f64, kind: &str| json!({ "ts": ts, "kind": kind });
+        for (case, events, want) in [
+            ("never", vec![run(1.0)], "not_covered"),
+            ("nothing since", vec![run(1.0), retro_at(2.0)], "covered"),
+            (
+                "a run since",
+                vec![run(1.0), retro_at(2.0), run(3.0)],
+                "new_work",
+            ),
+            (
+                "a PR since",
+                vec![run(1.0), retro_at(2.0), ev(3.0, "pr_merged")],
+                "new_work",
+            ),
+            (
+                "only Jira since",
+                vec![
+                    run(1.0),
+                    retro_at(2.0),
+                    ev(3.0, "jira_status"),
+                    ev(4.0, "sprint_left"),
+                ],
+                "covered",
+            ),
+            (
+                "only cleanup since",
+                vec![
+                    run(1.0),
+                    retro_at(2.0),
+                    ev(3.0, "agent_removed"),
+                    ev(4.0, "stopped"),
+                ],
+                "covered",
+            ),
+            (
+                "an Inbox item dismissed since",
+                vec![
+                    run(1.0),
+                    retro_at(2.0),
+                    json!({ "ts": 3.0, "kind": "answered", "status": "dismissed" }),
+                ],
+                "covered",
+            ),
+            (
+                "an Inbox item answered since",
+                vec![
+                    run(1.0),
+                    retro_at(2.0),
+                    json!({ "ts": 3.0, "kind": "answered", "status": "answered" }),
+                ],
+                "new_work",
+            ),
+        ] {
+            let (e, dir) = picker(&format!("sort-{}", case.replace(' ', "-")));
+            record(&e, "g", "SRE-1", &events);
+            assert_eq!(list_of(&e), want, "{case}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn says_what_happened_since_the_last_retro() {
+        let (e, dir) = picker("since");
+        let run = |ts: f64, usd: f64| json!({ "ts": ts, "kind": "run_end", "cost_usd": usd });
+        // Its record is in two folders, and the older retro only in retro.json.
+        record(
+            &e,
+            "g",
+            "SRE-1",
+            &[
+                run(1.0, 4.0),
+                json!({ "ts": 20.0, "kind": "retro_started" }),
+            ],
+        );
+        record(
+            &e,
+            "h",
+            "SRE-1",
+            &[run(30.0, 1.5), json!({ "ts": 31.0, "kind": "pr_merged" })],
+        );
+        retro(&e, "a", "SRE-1", 10.0, None);
+        assert_eq!(
+            e.retro_tickets().unwrap(),
+            [RetroTicket {
+                ticket: "SRE-1".into(),
+                list: "new_work".into(),
+                retros: vec![10.0, 20.0],
+                last_work: 31.0,
+                runs: 1,
+                cost: 1.5,
+                merged: 1,
+            }]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_retros_event_and_folder_are_one_retro() {
+        let (e, dir) = picker("same");
+        record(
+            &e,
+            "g",
+            "SRE-1",
+            &[
+                json!({ "ts": 1.0, "kind": "run_end" }),
+                json!({ "ts": 20.4, "kind": "retro_started", "dir": retros_dir(&e.cfg).join("a") }),
+            ],
+        );
+        retro(&e, "a", "SRE-1", 20.0, None);
+        assert_eq!(e.retro_tickets().unwrap()[0].retros.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn decided_tickets_are_hidden_until_new_work() {
+        for (case, proposals, auto, work, want) in [
+            (
+                "decided",
+                Some(&["approved", "dismissed"][..]),
+                true,
+                1.0,
+                "hidden",
+            ),
+            ("nothing proposed", Some(&[][..]), true, 1.0, "hidden"),
+            (
+                "one left",
+                Some(&["approved", "pending"][..]),
+                true,
+                1.0,
+                "covered",
+            ),
+            ("not submitted, agent gone", None, true, 1.0, "hidden"),
+            ("turned off", Some(&["approved"][..]), false, 1.0, "covered"),
+            ("new work", Some(&["approved"][..]), true, 9.0, "new_work"),
+        ] {
+            let (mut e, dir) = picker(&format!("auto-{}", case.replace([' ', ','], "-")));
+            e.cfg.retro.hide_decided = auto;
+            record(
+                &e,
+                "g",
+                "SRE-1",
+                &[json!({ "ts": work, "kind": "run_end" })],
+            );
+            retro(&e, "a", "SRE-1", 5.0, proposals);
+            assert_eq!(list_of(&e), want, "{case}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_retro_still_looking_isnt_decided() {
+        let (e, dir) = picker("looking");
+        record(&e, "g", "SRE-1", &[json!({ "ts": 1.0, "kind": "run_end" })]);
+        retro(&e, "a", "SRE-1", 5.0, None);
+        e.store
+            .add_agent(&Agent {
+                name: "retro-a".into(),
+                ..Agent::default()
+            })
+            .unwrap();
+        assert_eq!(list_of(&e), "covered");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn what_you_hid_stays_hidden_until_new_work() {
+        let (e, dir) = picker("hide");
+        let run = |ts: f64| json!({ "ts": ts, "kind": "run_end" });
+        record(&e, "g", "SRE-1", &[run(1.0)]);
+        e.store.set_retro_hidden("SRE-1", true).unwrap();
+        assert_eq!(list_of(&e), "hidden");
+        e.store.set_retro_hidden("SRE-1", false).unwrap();
+        assert_eq!(list_of(&e), "not_covered");
+        e.store.set_retro_hidden("SRE-1", true).unwrap();
+        record(
+            &e,
+            "g",
+            "SRE-1",
+            &[run(1.0), run(crate::store::now() + 60.0)],
+        );
+        assert_eq!(list_of(&e), "not_covered");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn what_you_showed_stays_shown_once_decided() {
+        let (e, dir) = picker("show");
+        record(&e, "g", "SRE-1", &[json!({ "ts": 1.0, "kind": "run_end" })]);
+        retro(&e, "a", "SRE-1", 5.0, Some(&["approved"]));
+        assert_eq!(list_of(&e), "hidden");
+        e.store.set_retro_hidden("SRE-1", false).unwrap();
+        assert_eq!(list_of(&e), "covered");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn evidence_starts_from_the_last_retro() {
+        let (e, dir) = picker("evidence-since");
+        record(
+            &e,
+            "g",
+            "SRE-1",
+            &[
+                json!({ "ts": 1.0, "kind": "agent_started", "agent": "b", "stage": "build" }),
+                json!({ "ts": 2.0, "kind": "run_start", "agent": "b", "run": 1, "model": "m" }),
+                json!({ "ts": 3.0, "kind": "run_end", "agent": "b", "run": 1, "cost_usd": 5.0 }),
+                json!({ "ts": 4.0, "kind": "run_start", "agent": "b", "run": 2, "model": "m" }),
+                json!({ "ts": 4.5, "kind": "handoff_sent_back", "agent": "b" }),
+                json!({ "ts": 6.0, "kind": "run_end", "agent": "b", "run": 2, "cost_usd": 2.0 }),
+            ],
+        );
+        let got = evidence(
+            &e.cfg,
+            &["SRE-1".into()],
+            &[("SRE-1".to_string(), 5.0)].into(),
+        );
+        let t = &got["tickets"]["SRE-1"];
+        assert_eq!(
+            (
+                t["runs"].as_i64(),
+                t["cost_usd"].as_f64(),
+                t["events"].as_i64()
+            ),
+            (Some(1), Some(2.0), Some(1))
+        );
+        assert!(t["rework_handoffs_sent_back"].is_null());
+        assert_eq!(t["since"], "1970-01-01T00:00:05Z");
+        let row = &got["by_stage_and_model"][0];
+        assert_eq!(
+            (
+                row["stage"].as_str(),
+                row["model"].as_str(),
+                row["cost_usd"].as_f64()
+            ),
+            (Some("build"), Some("m"), Some(2.0))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_retro_is_told_where_the_last_one_stopped() {
+        let (e, dir) = picker("told");
+        record(&e, "g", "SRE-1", &[json!({ "ts": 1.0, "kind": "run_end" })]);
+        let r = &ledger::list(&e.cfg)[0];
+        assert_eq!(folder_line(r, &BTreeMap::new()), format!("- {}", r.path));
+        let line = folder_line(r, &[("SRE-1".to_string(), 5.0)].into());
+        assert!(line.contains("up to 1970-01-01T00:00:05Z"), "{line}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

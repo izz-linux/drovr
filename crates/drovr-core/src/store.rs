@@ -137,6 +137,11 @@ CREATE TABLE IF NOT EXISTS build_send_backs (
     agent TEXT NOT NULL,
     PRIMARY KEY (ts, agent)
 );
+CREATE TABLE IF NOT EXISTS retro_hidden (
+    ticket TEXT PRIMARY KEY,
+    hidden INTEGER NOT NULL,
+    ts REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS done_once (
     what TEXT PRIMARY KEY,
     ts REAL NOT NULL
@@ -789,6 +794,25 @@ impl Store {
         self.db.execute(
             "INSERT OR IGNORE INTO build_send_backs (ts, agent) VALUES (?1, ?2)",
             params![ts, agent],
+        )?;
+        Ok(())
+    }
+
+    // -- tickets hidden from the retro picker --------------------------------
+
+    /// What you last chose for each ticket, and when.
+    pub fn retro_hidden(&self) -> Result<std::collections::BTreeMap<String, (bool, f64)>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT ticket, hidden, ts FROM retro_hidden")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_retro_hidden(&self, ticket: &str, hidden: bool) -> Result<()> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO retro_hidden (ticket, hidden, ts) VALUES (?1, ?2, ?3)",
+            params![ticket, hidden, now()],
         )?;
         Ok(())
     }

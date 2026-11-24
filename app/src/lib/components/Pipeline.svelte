@@ -1,7 +1,6 @@
 <script lang="ts">
   import { api, ago, holdText, ticketsIn, type Agent, type SprintTicket, type WatchState, type WatchedPr } from "#lib/api.ts";
   import { app, toast, select } from "#lib/state.svelte.ts";
-  import Retros from "./Retros.svelte";
 
   // Your sprint as the watcher sees it (Jira through your CLI, PRs through
   // gh), next to the agents working each ticket. Part of the ticket workflow.
@@ -106,7 +105,6 @@
   {#if ws?.github.error}<div class="banner err">GitHub: {ws.github.error}</div>{/if}
 
   <div class="scroll grow">
-    <Retros />
     {#if !ws || (!ws.jira.at && !tickets.length)}
       <div class="empty">The watcher hasn't read Jira yet. It reads the tickets matching <code>watch.jql</code> through your Jira command (<code>jira.provider = "command"</code>, e.g. twg), and their PRs from <code>watch.github_repos</code> with gh. <button onclick={refreshNow} disabled={busy}>Read now</button></div>
     {:else}

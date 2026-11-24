@@ -707,6 +707,18 @@ async fn start_retro(tickets: Vec<String>, note: String) -> Res<Agent> {
     blocking(move |e| e.start_retro(&tickets, &note)).await
 }
 
+/// The tickets a retro can be run on, and which list each is in.
+#[tauri::command]
+async fn retro_tickets() -> Res<Vec<drovr_core::retro::RetroTicket>> {
+    blocking(|e| e.retro_tickets()).await
+}
+
+/// Hide a ticket from the retro picker, or show it again.
+#[tauri::command]
+async fn set_retro_hidden(ticket: String, hidden: bool) -> Res<()> {
+    blocking(move |e| e.store.set_retro_hidden(&ticket, hidden)).await
+}
+
 /// Every retro, newest first, with its proposals.
 #[tauri::command]
 async fn retros() -> Res<Vec<drovr_core::retro::Retro>> {
@@ -1020,6 +1032,8 @@ pub fn run() {
             watch_state,
             watch_now,
             start_retro,
+            retro_tickets,
+            set_retro_hidden,
             retros,
             insights,
             insights_models,

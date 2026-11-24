@@ -1,10 +1,12 @@
 <script lang="ts">
   import { api, type InsightsModels, type Insights, type InsightsPart, type InsightsTotal, type InsightsWeek } from "#lib/api.ts";
 
+  import { app } from "#lib/state.svelte.ts";
+  import Retros from "./Retros.svelte";
   import Models from "./InsightsModels.svelte";
 
   // What runs cost, week by week, from the spend log, and how PRs turned out.
-  let tab = $state<"overview" | "models">("overview");
+  let tab = $state<"overview" | "models" | "retros">("overview");
   let span = $state(8);
   let data = $state<Insights | null>(null);
   let prs = $state<InsightsModels | null>(null);
@@ -92,17 +94,19 @@
   <header class="row">
     <h2>Insights</h2>
     <div class="row grow tabs">
-      {#each [["overview", "Overview"], ["models", "Models"]] as const as [id, name]}<button class="ghost" class:on={tab === id} aria-pressed={tab === id} onclick={() => (tab = id)}>{name}</button>{/each}
+      {#each [["overview", "Overview"], ["models", "Models"], ["retros", "Retros"]] as const as [id, name]}<button class="ghost" class:on={tab === id} aria-pressed={tab === id} onclick={() => (tab = id)}>{name}</button>{/each}
     </div>
     <button class="ghost" hidden={tab !== "overview"} aria-pressed={asTable} onclick={() => (asTable = !asTable)}>{asTable ? "Show chart" : "Show table"}</button>
-    <select aria-label="Weeks shown" bind:value={span}>
+    <select hidden={tab === "retros"} aria-label="Weeks shown" bind:value={span}>
       {#each [4, 8, 12, 26] as n}<option value={n}>Last {n} weeks</option>{/each}
     </select>
   </header>
   {#if error}<div class="banner err">{error}</div>{/if}
 
   <div class="scroll grow">
-    {#if tab === "models"}
+    {#if tab === "retros"}
+      {#if app.defaults && !app.defaults.workflow}<p class="muted">The ticket workflow is off, and retros are part of it. Turn it on with <code>workflow.enabled</code>.</p>{:else}<Retros />{/if}
+    {:else if tab === "models"}
       {#if prs}<Models data={prs} />{/if}
     {:else if data && !data.total.runs}
       <div class="empty">No runs in these weeks. drovr logs what each run costs as it ends.</div>

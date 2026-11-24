@@ -104,6 +104,11 @@ export type Proposal = {
   id: string; kind: string; title: string; why: string; evidence: string[]; change: any;
   status: "pending" | "approved" | "dismissed"; result: string;
 };
+/** A ticket a retro can be run on; `runs`, `cost` and `merged` are since its last retro. */
+export type RetroTicket = {
+  ticket: string; list: "not_covered" | "new_work" | "covered" | "hidden"; retros: number[]; last_work: number;
+  runs: number; cost: number; merged: number;
+};
 export type Retro = { dir: string; tickets: string[]; started: number; agent: string; note: string; proposals: Proposal[] };
 export type Note = { key: string; value: string; author: string; ts: number };
 export type Ticket = {
@@ -226,6 +231,8 @@ export const api = {
   /** Read Jira and GitHub now (can take a while). */
   watchNow: () => invoke<WatchState>("watch_now"),
   startRetro: (tickets: string[], note = "") => invoke<Agent>("start_retro", { tickets, note }),
+  retroTickets: () => invoke<RetroTicket[]>("retro_tickets"),
+  setRetroHidden: (ticket: string, hidden: boolean) => invoke<void>("set_retro_hidden", { ticket, hidden }),
   retros: () => invoke<Retro[]>("retros"),
   insightsModels: (from: number, to: number) => invoke<InsightsModels>("insights_models", { from, to }),
   /** `bounds`: the starts of the weeks, and the end of the last. */

@@ -108,7 +108,7 @@
       case "pr_merged": return [`PR #${e.number} merged`, first(e.title, 120)];
       case "pr_closed": return [`PR #${e.number} closed`, first(e.title, 120)];
       case "retro_started": return ["Retro started", `${e.agent} · ${(e.tickets ?? []).join(", ")}`];
-      case "retro_proposals": return ["Retro proposals", `${e.count} to review in Pipeline`];
+      case "retro_proposals": return ["Retro proposals", `${e.count} to review in Insights, under Retros`];
       case "proposal_approved": return ["Proposal approved", `${e.proposal_kind}: ${first(e.title, 100)}${e.result ? ` — ${first(e.result, 80)}` : ""}`];
       case "proposal_dismissed": return ["Proposal dismissed", `${e.proposal_kind}: ${first(e.title, 100)}`];
       default: return [e.kind, ""];
@@ -144,7 +144,7 @@
       {/each}
     </div>
     <button class="ghost" disabled={!events.length} title="Look back at this ticket and get proposals with evidence"
-      onclick={() => api.startRetro([ticket]).then((a) => { toast(`Retro started: ${a.name}. Its proposals show in Pipeline.`); }).catch((e) => toast(String(e)))}>Start retro</button>
+      onclick={() => api.startRetro([ticket]).then((a) => { toast(`Retro started: ${a.name}. Its proposals show in Insights, under Retros.`); }).catch((e) => toast(String(e)))}>Start retro</button>
     {#each here as r}
       <button class="ghost" title={r.path} onclick={() => api.openPath(r.path).catch((e) => toast(String(e)))}>Show folder{here.length > 1 ? ` (${r.folder || "plans"})` : ""}</button>
     {/each}

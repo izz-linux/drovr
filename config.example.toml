@@ -90,9 +90,10 @@ review_skill = ""                  # a SKILL.md the build reviewers and PR revie
 # repos_dir = ""                # local clones live at <repos_dir>/<repo>; empty = defaults.cwd
 # owners = []                   # only review PRs in these GitHub orgs or users; empty = any
 
-[retro]                       # a retro you start from a ticket's timeline or Pipeline
+[retro]                       # a retro you start from a ticket's timeline or Insights
 model = ""                    # the retro agent's model; empty = the default
 skills_dir = "~/.claude/skills"   # where approved skill proposals are written
+hide_decided = true           # hide a ticket from the picker once its retros are decided, until new work
 
 [insights]
 weekly_target_usd = 0         # what you mean to spend in a week, drawn on the Insights chart; 0 = none
