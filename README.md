@@ -558,7 +558,7 @@ tls_key = "~/certs/example.com/privkey.pem"
 
 Match System, Light, Dark, Darcula, Solarized Dark, Nord, Gilded, Deco Navy, Oxblood and Ink & Gold. The first five are the same set and colors as local-wiki. Gilded, Deco Navy, Oxblood and Ink & Gold add gold lettering on the sidebar wordmark, agent titles, lead agents in the list and run labels, and show drovr's messages and agents' tool calls in gold. Choose one from **View → Theme** or in Settings. Your choice is saved, and Match System follows macOS light/dark.
 
-Themes are defined once, in `app/src/lib/themes.json`. Each has an `id`, a `name`, a `scheme` (`light` or `dark`) and its 13 `colors`, and may have `lettering` with a `color` and a `foil` gradient. The UI and View → Theme both read that file.
+Themes are defined once, in `app/src/lib/themes.json`. Each has an `id`, a `name`, a `scheme` (`light` or `dark`) and its 17 `colors`, and may have `lettering` with a `color` and a `foil` gradient. Four of the colors, `chart-1` to `chart-4`, are for charts, in that order; tests fail if a theme lacks them, if one is hard to see on the background or the panel, or if neighbors look too alike, including with red-green color blindness. The UI and View → Theme both read that file.
 
 ## How it works
 
