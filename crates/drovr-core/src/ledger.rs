@@ -189,6 +189,24 @@ pub fn list(cfg: &Config) -> Vec<Record> {
     out
 }
 
+/// The plans folder's subfolder whose record of `ticket` was written to last
+/// (empty for the plans folder itself), or None when it has no record.
+pub fn latest_folder(cfg: &Config, ticket: &str) -> Option<String> {
+    let root = cfg.reports.path();
+    subdirs(&root)
+        .filter(|d| !is_record(&d.path()))
+        .map(|d| d.file_name().to_string_lossy().to_string())
+        .filter(|name| name != ARCHIVE)
+        .chain([String::new()])
+        .filter_map(|folder| {
+            let file = dir(cfg, &folder, ticket).join(FILE);
+            let written = std::fs::metadata(file).ok()?.modified().ok()?;
+            Some((written, folder))
+        })
+        .max()
+        .map(|(_, folder)| folder)
+}
+
 /// Whether `dir` is a ticket's record folder rather than a group's plans folder.
 pub fn is_record(dir: &Path) -> bool {
     dir.join(FILE).is_file()

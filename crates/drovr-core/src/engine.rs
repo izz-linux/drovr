@@ -1947,8 +1947,9 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
     }
 
     /// Add an event to a ticket's record from outside any agent (the
-    /// watcher), in every folder its agents and groups record to. A ticket
-    /// nobody has picked up has no record.
+    /// watcher), in every folder its agents and groups record to, or once
+    /// they're gone, the folder written to last. A ticket nobody has picked
+    /// up has no record.
     pub fn record_ticket(&self, key: &str, kind: &str, data: Value) {
         if !self.cfg.workflow.enabled {
             return;
@@ -1972,6 +1973,9 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
             if ledger::tickets_in(&a.ticket).contains(&key) {
                 folders.insert(folder_of(&a.group_name));
             }
+        }
+        if folders.is_empty() {
+            folders.extend(ledger::latest_folder(&self.cfg, &key));
         }
         let mut event = json!({ "source": "watcher" });
         if let (Some(e), Value::Object(fields)) = (event.as_object_mut(), data) {
