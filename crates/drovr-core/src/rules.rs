@@ -331,66 +331,89 @@ fn tail_chars(s: &str, max: usize) -> String {
     }
 }
 
-/// The latest reviews and review comments on a PR.
+/// A PR's review threads, a page at a time (`gh api graphql --paginate`).
+const THREADS: &str =
+    "query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { \
+    repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
+    reviewThreads(first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } \
+    nodes { isResolved isOutdated path line originalLine \
+    comments(first: 20) { nodes { author { login } body } } } } } } }";
+
+/// Each reviewer's latest review, and every unresolved review thread on a PR.
 fn reviews(gh: &str, pr: &Pr) -> Option<String> {
+    let run = |cmd: &str| shell::sh(cmd, None, None, Duration::from_secs(60)).ok();
+    let login = |v: &Value| v["author"]["login"].as_str().unwrap_or("?").to_string();
+    let text = |v: &Value, max: usize| truncate(v["body"].as_str().unwrap_or("").trim(), max);
     let mut out = String::new();
-    let v = shell::sh(
-        &format!("{gh} pr view {} --json reviews", quote(&pr.url)),
-        None,
-        None,
-        Duration::from_secs(60),
-    )
-    .ok()
-    .and_then(|o| serde_json::from_str::<Value>(&o.stdout).ok());
-    for r in v
-        .as_ref()
-        .and_then(|v| v["reviews"].as_array())
-        .into_iter()
-        .flatten()
-        .rev()
-        .take(3)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
+
+    let v = run(&format!("{gh} pr view {} --json reviews", quote(&pr.url)))
+        .and_then(|o| serde_json::from_str::<Value>(&o.stdout).ok())
+        .unwrap_or_default();
+    let mut latest: Vec<&Value> = vec![];
+    for r in v["reviews"].as_array().into_iter().flatten() {
+        latest.retain(|l| login(l) != login(r));
+        latest.push(r);
+    }
+    for r in latest {
         out += &format!(
             "Review by {} ({}): {}\n",
-            r["author"]["login"].as_str().unwrap_or("?"),
+            login(r),
             r["state"].as_str().unwrap_or(""),
-            truncate(r["body"].as_str().unwrap_or("").trim(), 2000)
+            text(r, 2000)
         );
     }
-    let c = shell::sh(
-        &format!(
-            "{gh} api {}",
-            quote(&format!(
-                "repos/{}/pulls/{}/comments?per_page=100",
-                pr.repo, pr.number
-            ))
-        ),
-        None,
-        None,
-        Duration::from_secs(60),
-    )
-    .ok()
-    .and_then(|o| serde_json::from_str::<Value>(&o.stdout).ok());
-    let comments: Vec<&Value> = c
-        .as_ref()
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .collect();
-    for cm in comments.iter().rev().take(10).rev() {
-        out += &format!(
-            "- {}:{} {}: {}\n",
-            cm["path"].as_str().unwrap_or(""),
-            cm["line"]
-                .as_u64()
-                .or_else(|| cm["original_line"].as_u64())
-                .unwrap_or(0),
-            cm["user"]["login"].as_str().unwrap_or("?"),
-            truncate(cm["body"].as_str().unwrap_or("").trim(), 1000)
-        );
+
+    let (owner, name) = pr.repo.split_once('/').unwrap_or_default();
+    let pages = run(&format!(
+        "{gh} api graphql --paginate -f query={} -f owner={} -f name={} -F number={}",
+        quote(THREADS),
+        quote(owner),
+        quote(name),
+        pr.number
+    ))
+    .map(|o| o.stdout)
+    .unwrap_or_default();
+    let (mut read, mut missed) = (0, false);
+    let mut open: Vec<Value> = vec![];
+    for page in serde_json::Deserializer::from_str(&pages).into_iter::<Value>() {
+        let nodes = page.ok().and_then(|p| {
+            p["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+                .as_array()
+                .cloned()
+        });
+        match nodes {
+            Some(n) => {
+                read += 1;
+                open.extend(n.into_iter().filter(|t| t["isResolved"] != true));
+            }
+            None => missed = true,
+        }
+    }
+    if !open.is_empty() {
+        out += &format!("\n{} unresolved review threads:\n", open.len());
+    }
+    for t in &open {
+        let line = t["line"].as_u64().or_else(|| t["originalLine"].as_u64());
+        let mut place = format!("{}:{}", t["path"].as_str().unwrap_or(""), line.unwrap_or(0));
+        if t["isOutdated"] == true {
+            place += " (outdated)";
+        }
+        for (i, c) in t["comments"]["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let at = if i == 0 {
+                format!("- {place}")
+            } else {
+                "  reply by".into()
+            };
+            out += &format!("{at} {}: {}\n", login(c), text(c, 1000));
+        }
+    }
+    if read == 0 || missed {
+        out += "\ndrovr couldn't read all of the review threads; read them on the PR.\n";
     }
     (!out.is_empty()).then_some(out)
 }
@@ -523,6 +546,89 @@ mod tests {
         r.ci_passed = "ask".into();
         r.ready_for_review = "ask".into();
         r.new_review = "ask".into();
+    }
+
+    fn fake_gh(dir: &std::path::Path, reviews: &Value, threads: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(dir.join("reviews.json"), reviews.to_string()).unwrap();
+        std::fs::write(dir.join("threads.json"), threads).unwrap();
+        let d = dir.display();
+        let gh = dir.join("gh");
+        std::fs::write(
+            &gh,
+            format!("#!/bin/sh\ncase \"$1 $2\" in\n\"pr view\") cat {d}/reviews.json;;\n\"api graphql\") cat {d}/threads.json;;\nesac\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        gh.display().to_string()
+    }
+
+    fn thread(n: usize, resolved: bool, outdated: bool) -> Value {
+        json!({ "isResolved": resolved, "isOutdated": outdated, "path": "a.rs", "line": n, "originalLine": n,
+                "comments": { "nodes": [
+                    { "author": { "login": "bot" }, "body": format!("finding {n}.") },
+                    { "author": null, "body": format!("reply {n}.") }
+                ] } })
+    }
+
+    fn threads_page(threads: Vec<Value>) -> String {
+        json!({ "data": { "repository": { "pullRequest": { "reviewThreads": { "nodes": threads } } } } })
+            .to_string()
+    }
+
+    #[test]
+    fn sends_every_unresolved_thread() {
+        let (dir, _engine) = setup("threads");
+        // Two pages, as `gh api graphql --paginate` prints them.
+        let pages = [
+            threads_page((1..=100).map(|n| thread(n, n == 2, n == 3)).collect()),
+            threads_page(vec![thread(101, false, false)]),
+        ]
+        .concat();
+        let gh = fake_gh(&dir, &json!({ "reviews": [] }), &pages);
+        let pr = pr("success", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+        let text = reviews(&quote(&gh), &pr).unwrap();
+        for n in [1, 3, 50, 100, 101] {
+            assert!(text.contains(&format!("finding {n}.")), "{n}");
+            assert!(text.contains(&format!("reply {n}.")), "{n}");
+        }
+        assert!(!text.contains("finding 2."), "resolved");
+        assert!(text.contains("a.rs:3 (outdated)"));
+        assert!(text.contains("100 unresolved"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sends_each_reviewers_latest_review() {
+        let (dir, _engine) = setup("latest-reviews");
+        let review = |who: &str, body: &str| json!({ "author": { "login": who }, "state": "COMMENTED", "body": body });
+        let all = json!({ "reviews": [
+            review("ann", "ann early"), review("bot-a", "a"), review("bot-b", "b"),
+            review("bot-c", "c"), review("ann", "ann late"), review("bot-d", "d")
+        ] });
+        let gh = fake_gh(&dir, &all, &threads_page(vec![]));
+        let pr = pr("success", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+        let text = reviews(&quote(&gh), &pr).unwrap();
+        for who in ["bot-a", "bot-b", "bot-c", "bot-d"] {
+            assert!(text.contains(&format!("Review by {who}")), "{who}");
+        }
+        assert!(text.contains("ann late") && !text.contains("ann early"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn says_when_review_comments_could_not_be_read() {
+        let (dir, _engine) = setup("threads-fail");
+        let pr = pr("success", "REVIEW_REQUIRED", "MERGEABLE", "OPEN");
+        for bad in ["", "{\"errors\":[{\"message\":\"no\"}]}"] {
+            let gh = fake_gh(&dir, &json!({ "reviews": [] }), bad);
+            let text = reviews(&quote(&gh), &pr).unwrap_or_default();
+            assert!(text.contains("couldn't read"), "{bad:?}: {text}");
+        }
+        // Nothing to say when there's nothing.
+        let gh = fake_gh(&dir, &json!({ "reviews": [] }), &threads_page(vec![]));
+        assert_eq!(reviews(&quote(&gh), &pr), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

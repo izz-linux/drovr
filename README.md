@@ -387,7 +387,7 @@ For each change, `watch.rules` says whether to **wake** the agent that owns the 
 | --- | --- | --- | --- |
 | `ci_failed` | A PR's checks have all finished and some failed | wake | The failing checks and the end of the failing GitHub Actions log (`gh run view --log-failed`, last 150 lines) |
 | `ci_passed` | Its checks went from pending or failing to passing | wake | CI passed and a nudge to carry on |
-| `changes_requested` | A reviewer requested changes | wake | The latest reviews and inline review comments (file:line) |
+| `changes_requested` | A reviewer requested changes | wake | Each reviewer's latest review and every unresolved review thread (file:line) |
 | `new_review` | Each new review without a change request (fires for every review, not once per commit) | wake | The same |
 | `ready_for_review` | Green, mergeable, no review decision yet; once per commit | ask | A "waiting on review" item for you |
 | `conflict` | The PR has merge conflicts | wake | What to do: merge the base in, resolve, push |
