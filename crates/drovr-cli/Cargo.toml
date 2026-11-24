@@ -1,6 +1,6 @@
 [package]
 name = "drovr-cli"
-version = "0.16.2"
+version = "0.17.0"
 description = "The drovr CLI: orchestrate, monitor and share context across Claude Code, OpenCode and OpenAI Codex agents from a shell"
 edition = "2021"
 license = "MIT"
