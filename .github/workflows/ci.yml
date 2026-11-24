@@ -1,6 +1,8 @@
 name: CI
 
 # Fast checks on pull requests: does it compile and pass its tests on macOS?
+# It also runs on main, to save the Rust cache: a pull request can only read
+# its own caches and main's.
 # No .app or .dmg here; signed releases are built by release.yml, or locally
 # with `pnpm tauri:build:signed`.
 #
@@ -13,12 +15,15 @@ name: CI
 # is skipped there too.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
-# A newer push to the same PR cancels the run in progress.
+# A newer push to the same PR cancels the run in progress. On main it finishes,
+# so that it saves the cache.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -36,7 +41,7 @@ jobs:
       - name: Does it change more than docs?
         id: filter
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           if [[ "$BRANCH" == release-please--* ]]; then
@@ -75,6 +80,8 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Core tests
         run: cargo test -p drovr-core
