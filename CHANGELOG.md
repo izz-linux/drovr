@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.1](https://github.com/izz-linux/drovr/compare/v0.17.0...v0.17.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* leave retros with no logged cost out of the average ([#102](https://github.com/izz-linux/drovr/issues/102)) ([43f5dae](https://github.com/izz-linux/drovr/commit/43f5daee977b2d5cfd7a108469080c596d216f49))
+* show spend by day in Insights ([#103](https://github.com/izz-linux/drovr/issues/103)) ([6e0424d](https://github.com/izz-linux/drovr/commit/6e0424da887406311ec015a78cb957c75441defb))
+
 ## [0.17.0](https://github.com/izz-linux/drovr/compare/v0.16.2...v0.17.0) (2026-11-24)
 
 

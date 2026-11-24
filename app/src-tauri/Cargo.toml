@@ -1,6 +1,6 @@
 [package]
 name = "drovr-app"
-version = "0.17.0"
+version = "0.17.1"
 description = "drovr: a lightweight desktop control plane for orchestrating, monitoring and sharing context across Claude Code, OpenCode and OpenAI Codex agents"
 edition = "2021"
 license = "MIT"
