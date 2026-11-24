@@ -29,7 +29,16 @@ pub struct Config {
     pub review: Review,
     pub stages: Stages,
     pub retro: RetroConfig,
+    pub insights: InsightsConfig,
     pub inbox: Inbox,
+}
+
+/// The Insights view.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InsightsConfig {
+    /// What you mean to spend in a week, in US dollars; 0 for no target.
+    pub weekly_target_usd: f64,
 }
 
 /// The retro you start from the timeline or Pipeline.
@@ -695,6 +704,7 @@ impl Default for Config {
             review: Review::default(),
             stages: Stages::default(),
             retro: RetroConfig::default(),
+            insights: InsightsConfig::default(),
             inbox: Inbox::default(),
         }
     }

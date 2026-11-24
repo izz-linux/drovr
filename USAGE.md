@@ -13,6 +13,7 @@ How to get things done with drovr, in the app and from the command line. For wha
 | ⌘1 … ⌘7 | Agents, Inbox, Reports, Jira, Slack · Confluence, Message bus, Code review |
 | ⌘8 | PRs (once `[review]` has a Slack channel or a GitHub team, or PRs are listed) |
 | ⌘9 | Pipeline (with `workflow.enabled`) |
+| ⌘0 | Insights |
 | ⌘, | Settings (**drovr → Settings…**) |
 | ⌘N | New agent |
 | ⌘G | New group |

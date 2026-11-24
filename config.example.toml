@@ -94,6 +94,9 @@ review_skill = ""                  # a SKILL.md the build reviewers and PR revie
 model = ""                    # the retro agent's model; empty = the default
 skills_dir = "~/.claude/skills"   # where approved skill proposals are written
 
+[insights]
+weekly_target_usd = 0         # what you mean to spend in a week, drawn on the Insights chart; 0 = none
+
 [stages.models]               # the model each stage runs on; unset = the default
 # triage = "claude-haiku-5-5"
 # blueprint = "claude-opus-5-5"

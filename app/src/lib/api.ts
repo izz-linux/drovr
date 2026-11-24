@@ -12,6 +12,15 @@ export type Agent = {
   /** Your messages it hasn't read yet. */
   queued: Message[];
 };
+/** Runs and what they cost; `cost` leaves out the `unpriced` ones. */
+export type InsightsTotal = { cost: number; runs: number; unpriced: number };
+export type InsightsPart = InsightsTotal & { name: string };
+export type InsightsWeek = InsightsTotal & { start: number; by_harness: InsightsPart[]; retros: number[] };
+export type Insights = {
+  weeks: InsightsWeek[]; total: InsightsTotal;
+  by_stage: InsightsPart[]; by_harness: InsightsPart[]; by_model: InsightsPart[]; by_ticket: InsightsPart[];
+  week_average: number | null; retro_average: number | null; weekly_target_usd: number;
+};
 export type Group = {
   name: string; goal: string; ticket: string; cwd: string; plans_dir: string; created: number;
   /** Created with the ticket workflow on: its lead runs the ticket in stages. */
@@ -203,6 +212,8 @@ export const api = {
   watchNow: () => invoke<WatchState>("watch_now"),
   startRetro: (tickets: string[], note = "") => invoke<Agent>("start_retro", { tickets, note }),
   retros: () => invoke<Retro[]>("retros"),
+  /** `bounds`: the starts of the weeks, and the end of the last. */
+  insights: (bounds: number[]) => invoke<Insights>("insights", { bounds }),
   /** Approve (and apply) or dismiss a proposal; returns what approving did. */
   decideProposal: (dir: string, id: string, approve: boolean) => invoke<string>("decide_proposal", { dir, id, approve }),
   /** A preview URL for a local file. `convertFileSrc` encodes the slashes

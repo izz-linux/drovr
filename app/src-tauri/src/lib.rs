@@ -713,6 +713,12 @@ async fn retros() -> Res<Vec<drovr_core::retro::Retro>> {
     blocking(|e| Ok(e.retros())).await
 }
 
+/// What runs cost, by week (see `Engine::insights`).
+#[tauri::command]
+async fn insights(bounds: Vec<f64>) -> Res<drovr_core::insights::Insights> {
+    blocking(move |e| e.insights(&bounds)).await
+}
+
 /// Approve (and apply) or dismiss one of a retro's proposals.
 #[tauri::command]
 async fn decide_proposal(dir: String, id: String, approve: bool) -> Res<String> {
@@ -1006,6 +1012,7 @@ pub fn run() {
             watch_now,
             start_retro,
             retros,
+            insights,
             decide_proposal,
             stop_agent,
             stop_group,

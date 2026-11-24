@@ -12,6 +12,7 @@
         [`${mod}1 … ${mod}7`, "Agents, Inbox, Reports, Jira, Slack · Confluence, Message bus, Code review"],
         ...(app.defaults?.review_enabled || app.snap.review_prs.length ? ([[`${mod}8`, "PRs"]] as [string, string][]) : []),
         ...(app.defaults?.workflow ? ([[`${mod}9`, "Pipeline"]] as [string, string][]) : []),
+        [`${mod}0`, "Insights"],
         [`${mod},`, "Settings"],
         [`${mod}N`, "New agent"],
         [`${mod}G`, "New group"],

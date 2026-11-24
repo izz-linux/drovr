@@ -7,6 +7,7 @@ pub mod confluence;
 pub mod datadog;
 pub mod engine;
 pub mod harness;
+pub mod insights;
 pub mod ledger;
 pub mod mcp;
 pub mod memory;

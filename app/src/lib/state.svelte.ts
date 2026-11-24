@@ -25,7 +25,7 @@ export const search = $state({
   target: "",
 });
 
-export type View = "agents" | "inbox" | "reports" | "jira" | "search" | "bus" | "review" | "settings" | "pipeline" | "prs";
+export type View = "agents" | "inbox" | "reports" | "jira" | "search" | "bus" | "review" | "settings" | "pipeline" | "prs" | "insights";
 
 export const app = $state({
   view: "agents" as View,

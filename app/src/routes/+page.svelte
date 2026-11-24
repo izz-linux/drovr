@@ -19,6 +19,7 @@
   import Timeline from "#lib/components/Timeline.svelte";
   import Pipeline from "#lib/components/Pipeline.svelte";
   import Prs from "#lib/components/Prs.svelte";
+  import Insights from "#lib/components/Insights.svelte";
 
   // Pipeline is part of the ticket workflow (workflow.enabled). PRs shows once
   // [review] has a channel or team, or rows exist.
@@ -32,6 +33,7 @@
     { id: "review", label: "Code review", key: "7" },
     ...(app.defaults?.review_enabled || app.snap.review_prs.length ? [{ id: "prs" as View, label: "PRs", key: "8" }] : []),
     ...(app.defaults?.workflow ? [{ id: "pipeline" as View, label: "Pipeline", key: "9" }] : []),
+    { id: "insights", label: "Insights", key: "0" },
     { id: "settings", label: "Settings", key: "," },
   ]);
 
@@ -107,6 +109,7 @@
     {:else if app.view === "review"}<Review />
     {:else if app.view === "pipeline"}<Pipeline />
     {:else if app.view === "prs"}<Prs />
+    {:else if app.view === "insights"}<Insights />
     {:else}<Settings />{/if}
   </main>
 </div>
