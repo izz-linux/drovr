@@ -303,7 +303,7 @@ drovr records what each run cost, in its database (`drovr.db` in its state folde
 - **Spend by week:** stacked by harness, for the last 4, 8, 12 or 26 weeks, Monday to Monday. A ◆ marks each week a retro was started. Set `weekly_target_usd` under `[insights]` to draw a target. **Show table** gives the same numbers as a table.
 - **By harness, model, stage and ticket:** each adds up to the total. A model run through OpenCode is marked `(OC)`, apart from the same model in Claude Code. A run on several tickets is split evenly between them.
 
-Runs whose CLI reported no cost are counted separately, and the totals leave them out.
+Runs whose CLI reported no cost are counted separately, and the totals leave them out. A retro with no cost in the spend log, such as one from before the log, isn't in the average retro.
 
 With the workflow on, the watcher also keeps what became of each PR it follows (`watch.github_repos`): when it was ready, merged or closed, pushes and failed CI once it was ready, how many of its heads others reviewed, and its size. The Overview shows the cost per merged PR (everything spent, divided by the PRs merged), the share reworked, and the median time from ready to merged.
 

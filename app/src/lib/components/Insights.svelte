@@ -114,7 +114,7 @@
       <div class="tiles">
         <div class="tile"><span class="muted">Spent</span><b>{usd(data.total.cost)}</b><span class="muted small">{runs(data.total.runs)}</span></div>
         <div class="tile"><span class="muted">Average week</span><b>{data.week_average == null ? "—" : usd(data.week_average)}</b><span class="muted small">{data.weekly_target_usd ? `target ${usd(data.weekly_target_usd)}` : "full weeks only"}</span></div>
-        <div class="tile"><span class="muted">Average retro</span><b>{data.retro_average == null ? "—" : usd(data.retro_average)}</b><span class="muted small">the retro agent's runs</span></div>
+        <div class="tile"><span class="muted">Average retro</span><b>{data.retro_average == null ? "—" : usd(data.retro_average)}</b><span class="muted small">{data.retro_average == null ? "none logged" : "the retro agent's runs"}</span></div>
         {#if prs?.merged}
           <div class="tile"><span class="muted">Per merged PR</span><b>{usd(data.total.cost / prs.merged)}</b><span class="muted small">everything spent ÷ {prs.merged} merged</span></div>
           <div class="tile"><span class="muted">PRs reworked</span><b>{prs.whole ? `${Math.round((100 * prs.reworked) / prs.whole)}%` : "—"}</b><span class="muted small">{prs.whole ? `${prs.reworked} of ${prs.whole} seen from the start` : "none seen from the start"}</span></div>

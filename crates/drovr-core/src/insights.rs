@@ -46,7 +46,8 @@ pub struct Insights {
     /// A full week's average, from the first week with a run; None until
     /// there's been one.
     pub week_average: Option<f64>,
-    /// What retro agents cost, for each retro started; None without one.
+    /// What a retro's agent cost, over the retros with a cost logged (those
+    /// from before the spend log have none); None without one.
     pub retro_average: Option<f64>,
     /// 0 for none.
     pub weekly_target_usd: f64,
@@ -134,7 +135,7 @@ impl Engine {
         let (mut stages, mut harnesses, mut models, mut tickets) =
             (Parts::new(), Parts::new(), Parts::new(), Parts::new());
         let mut weekly: Vec<Parts> = vec![Parts::new(); weeks.len()];
-        let mut retro_cost = 0.0;
+        let mut retro_costs: BTreeMap<&str, f64> = BTreeMap::new();
         for row in self.store.spend_since(bounds[0])? {
             let Some(w) = week_of(row.ts) else { continue };
             out.total.add(&row, 1);
@@ -152,8 +153,9 @@ impl Engine {
                 .iter()
                 .filter(|r| r.agent == row.agent && r.started <= row.ts)
                 .max_by(|a, b| a.started.total_cmp(&b.started));
-            if retro.is_some_and(|r| week_of(r.started).is_some()) {
-                retro_cost += row.cost_usd.unwrap_or(0.0);
+            let retro = retro.filter(|r| week_of(r.started).is_some());
+            if let (Some(r), Some(usd)) = (retro, row.cost_usd) {
+                *retro_costs.entry(&r.dir).or_default() += usd;
             }
         }
         for (week, parts) in weeks.iter_mut().zip(weekly) {
@@ -165,8 +167,10 @@ impl Engine {
             let spent: f64 = full.iter().map(|w| w.total.cost).sum();
             out.week_average = Some(spent / full.len() as f64);
         }
-        let started: usize = weeks.iter().map(|w| w.retros.len()).sum();
-        out.retro_average = (started > 0).then(|| retro_cost / started as f64);
+        if !retro_costs.is_empty() {
+            let spent: f64 = retro_costs.values().sum();
+            out.retro_average = Some(spent / retro_costs.len() as f64);
+        }
         out.by_stage = sorted(stages);
         out.by_harness = sorted(harnesses);
         out.by_model = sorted(models);
@@ -354,7 +358,8 @@ mod tests {
         let i = e.insights(&WEEKS).unwrap();
         let marks: Vec<_> = i.weeks.iter().map(|w| w.retros.clone()).collect();
         assert_eq!(marks, [vec![], vec![200.0], vec![399.0], vec![]]);
-        assert_eq!(i.retro_average, Some(3.0));
+        // The second has no run logged since it started.
+        assert_eq!(i.retro_average, Some(6.0));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -376,5 +381,34 @@ mod tests {
             assert!(e.insights(bad).is_err(), "{bad:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_retro_with_no_cost_logged_isnt_averaged() {
+        for (case, rows, want) in [
+            ("none", vec![], None),
+            (
+                "unpriced",
+                vec![row(15.0, "codex", "m", "retro", None)],
+                None,
+            ),
+            (
+                "one",
+                vec![row(15.0, "claude", "m", "retro", Some(4.0))],
+                Some(4.0),
+            ),
+        ] {
+            let (e, dir) = engine(&format!("retro-{case}"), &rows);
+            for (name, agent, started) in [("a", "old", 11.0), ("b", "b", 12.0)] {
+                let d = dir.join("plans/retros").join(name);
+                std::fs::create_dir_all(&d).unwrap();
+                let meta = json!({ "tickets": ["SRE-1"], "agent": agent, "started": started });
+                std::fs::write(d.join("retro.json"), meta.to_string()).unwrap();
+            }
+            let i = e.insights(&[10.0, 20.0]).unwrap();
+            assert_eq!(i.weeks[0].retros, [11.0, 12.0], "{case}");
+            assert_eq!(i.retro_average, want, "{case}");
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
