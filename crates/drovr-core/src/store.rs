@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS spend (
     source TEXT NOT NULL DEFAULT 'run'
 );
 CREATE INDEX IF NOT EXISTS spend_ts ON spend (ts);
+CREATE TABLE IF NOT EXISTS pr_outcomes (
+    url TEXT PRIMARY KEY,
+    data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS build_send_backs (
+    ts REAL NOT NULL,
+    agent TEXT NOT NULL,
+    PRIMARY KEY (ts, agent)
+);
 CREATE TABLE IF NOT EXISTS done_once (
     what TEXT PRIMARY KEY,
     ts REAL NOT NULL
@@ -704,6 +713,84 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(n)
+    }
+
+    // -- what became of PRs ---------------------------------------------------
+
+    pub fn outcomes(&self) -> Result<Vec<crate::outcomes::Outcome>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT data FROM pr_outcomes ORDER BY url")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+    }
+
+    pub fn outcome(&self, url: &str) -> Result<Option<crate::outcomes::Outcome>> {
+        let data: Option<String> = self
+            .db
+            .query_row("SELECT data FROM pr_outcomes WHERE url = ?1", [url], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
+    }
+
+    pub fn save_outcome(&self, o: &crate::outcomes::Outcome) -> Result<()> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO pr_outcomes (url, data) VALUES (?1, ?2)",
+            params![o.url, serde_json::to_string(o)?],
+        )?;
+        Ok(())
+    }
+
+    /// Add imported outcomes and send-backs, leaving out any it has, and mark
+    /// `what` done. Adds nothing if another process did it first.
+    pub fn import_outcomes(
+        &self,
+        what: &str,
+        outcomes: &[crate::outcomes::Outcome],
+        send_backs: &[(f64, String)],
+    ) -> Result<usize> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.db,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        if self.done_once(what)? {
+            return Ok(0);
+        }
+        let mut n = 0;
+        for o in outcomes {
+            n += self.db.execute(
+                "INSERT OR IGNORE INTO pr_outcomes (url, data) VALUES (?1, ?2)",
+                params![o.url, serde_json::to_string(o)?],
+            )?;
+        }
+        for (ts, agent) in send_backs {
+            self.add_send_back(*ts, agent)?;
+        }
+        self.db.execute(
+            "INSERT INTO done_once (what, ts) VALUES (?1, ?2)",
+            params![what, now()],
+        )?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// When you sent a build agent's handoff back, oldest first.
+    pub fn send_backs(&self) -> Result<Vec<(f64, String)>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT ts, agent FROM build_send_backs ORDER BY ts, agent")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn add_send_back(&self, ts: f64, agent: &str) -> Result<()> {
+        self.db.execute(
+            "INSERT OR IGNORE INTO build_send_backs (ts, agent) VALUES (?1, ?2)",
+            params![ts, agent],
+        )?;
+        Ok(())
     }
 
     // -- messages -------------------------------------------------------------

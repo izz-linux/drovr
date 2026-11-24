@@ -78,6 +78,16 @@ fn or<'a>(name: &'a str, none: &'a str) -> &'a str {
     }
 }
 
+/// The model a row is listed under: Claude Code and an AI gateway in OpenCode
+/// run the same models.
+pub(crate) fn model_label(row: &Row) -> String {
+    let via = match row.harness.as_str() {
+        "opencode" => " (OC)",
+        _ => "",
+    };
+    format!("{}{via}", or(&row.model, "unknown"))
+}
+
 /// Most expensive first, then by name.
 fn sorted(parts: Parts) -> Vec<Part> {
     let mut out: Vec<Part> = parts
@@ -133,13 +143,7 @@ impl Engine {
             add(&mut weekly[w], harness, &row, 1);
             add(&mut harnesses, harness, &row, 1);
             add(&mut stages, or(&row.stage, "no stage"), &row, 1);
-            // Claude Code and an AI gateway in OpenCode run the same models.
-            let via = match harness {
-                "opencode" => " (OC)",
-                _ => "",
-            };
-            let model = format!("{}{via}", or(&row.model, "unknown"));
-            add(&mut models, &model, &row, 1);
+            add(&mut models, &model_label(&row), &row, 1);
             let on: Vec<&str> = row.tickets.split(',').collect();
             for ticket in &on {
                 add(&mut tickets, or(ticket, "no ticket"), &row, on.len());

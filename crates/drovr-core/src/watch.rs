@@ -67,6 +67,14 @@ pub struct Pr {
     pub updated: String,
     /// How many reviews it has had.
     pub reviews: u64,
+    pub branch: String,
+    /// When it was opened, and merged or closed; 0 if it isn't known.
+    pub created: f64,
+    pub closed: f64,
+    /// How many of its heads others than its author reviewed.
+    pub review_rounds: u64,
+    /// Added and deleted.
+    pub lines: u64,
     /// What `watch.rules` already acted on, as `trigger@head`.
     pub fired: Vec<String>,
 }
@@ -397,7 +405,7 @@ fn poll_github(engine: &Engine, state: &mut State) {
         };
         if look {
             let cmd = format!(
-                "{gh} pr view {} --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,updatedAt,title,reviews",
+                "{gh} pr view {} --json state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,updatedAt,title,reviews,author,headRefName,createdAt,closedAt,additions,deletions",
                 quote(&url)
             );
             if let Some(b) = before {
@@ -417,6 +425,9 @@ fn poll_github(engine: &Engine, state: &mut State) {
                 tickets: pr.tickets,
                 ..b.clone()
             };
+        }
+        if look {
+            engine.observe_pr(before, &pr, baseline);
         }
         if !baseline {
             for (kind, data) in pr_changes(before, &pr) {
@@ -483,7 +494,19 @@ pub fn apply_view(pr: &mut Pr, v: &Value) {
     (pr.ci, pr.failing, pr.failing_urls) = checks(&v["statusCheckRollup"]);
     if let Some(r) = v["reviews"].as_array() {
         pr.reviews = r.len() as u64;
+        let author = &v["author"]["login"];
+        let heads: BTreeSet<&str> = r
+            .iter()
+            .filter(|r| r["author"]["login"] != *author)
+            .filter_map(|r| r["commit"]["oid"].as_str())
+            .collect();
+        pr.review_rounds = heads.len() as u64;
     }
+    let time = |k: &str| v[k].as_str().and_then(crate::outcomes::parse_iso);
+    pr.branch = v["headRefName"].as_str().unwrap_or("").to_string();
+    pr.created = time("createdAt").unwrap_or(0.0);
+    pr.closed = time("closedAt").unwrap_or(0.0);
+    pr.lines = v["additions"].as_u64().unwrap_or(0) + v["deletions"].as_u64().unwrap_or(0);
 }
 
 /// The overall state of a PR's checks: check runs (status, conclusion) and
@@ -863,6 +886,39 @@ mod tests {
         assert_eq!(s.prs[PR7].fired, fired);
         assert_eq!(count("pr_linked"), 1);
         assert_eq!(count("pr_merged"), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pr_is_followed_to_its_outcome() {
+        let (engine, dir, file, write) = fake_watch("outcome");
+        poll_at(&engine, true, &file);
+        let created = ledger::iso(crate::store::now() - 30.0);
+        let view = |state: &str, head: &str, closed: &str| {
+            format!(
+                r#"{{"state":"{state}","isDraft":false,"mergeable":"MERGEABLE","headRefOid":"{head}","statusCheckRollup":[],"updatedAt":"{head}{state}","author":{{"login":"me"}},"headRefName":"feat","createdAt":"{created}","closedAt":{closed},"additions":30,"deletions":12,"reviews":[
+                {{"author":{{"login":"me"}},"commit":{{"oid":"a"}}}},{{"author":{{"login":"bot"}},"commit":{{"oid":"a"}}}},{{"author":{{"login":"you"}},"commit":{{"oid":"a"}}}},{{"author":{{"login":"bot"}},"commit":{{"oid":"b"}}}}]}}"#
+            )
+        };
+        write("search.json", &search_pr7("open", "p1"));
+        write("view.json", &view("OPEN", "a", "null"));
+        poll_at(&engine, true, &file);
+        write("search.json", &search_pr7("open", "p2"));
+        write("view.json", &view("OPEN", "b", "null"));
+        poll_at(&engine, true, &file);
+        write("search.json", &search_pr7("merged", "p3"));
+        write(
+            "view.json",
+            &view("MERGED", "b", "\"2030-01-01T00:00:00Z\""),
+        );
+        poll_at(&engine, true, &file);
+        let got = engine.store.outcomes().unwrap();
+        assert_eq!(got.len(), 1);
+        let o = &got[0];
+        assert!(o.whole);
+        assert_eq!((o.pushes, o.rounds, o.lines), (1, Some(2), Some(42)));
+        assert_eq!(o.ready, crate::outcomes::parse_iso(&created));
+        assert_eq!((o.state.as_str(), o.closed), ("MERGED", Some(1893456000.0)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

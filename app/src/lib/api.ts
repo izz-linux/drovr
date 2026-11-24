@@ -21,6 +21,21 @@ export type Insights = {
   by_stage: InsightsPart[]; by_harness: InsightsPart[]; by_model: InsightsPart[]; by_ticket: InsightsPart[];
   week_average: number | null; retro_average: number | null; weekly_target_usd: number;
 };
+/** How PRs of one size, built by one model, turned out. */
+export type ModelRow = {
+  size: "small" | "medium" | "large" | "unknown"; model: string; reviewed: boolean; prs: number;
+  /** Enough PRs to compare. */
+  enough: boolean;
+  /** A PR's average cost before rework, and in it. */
+  first: number; rework: number; unpriced: number; reworked: number;
+  /** Medians; null when nothing says. */
+  hours: number | null; rounds: number | null;
+};
+export type InsightsModels = {
+  rows: ModelRow[]; merged: number; whole: number; reworked: number; hours: number | null;
+  /** Merged PRs the rows leave out, by why. */
+  left_out: Record<string, number>;
+};
 export type Group = {
   name: string; goal: string; ticket: string; cwd: string; plans_dir: string; created: number;
   /** Created with the ticket workflow on: its lead runs the ticket in stages. */
@@ -212,6 +227,7 @@ export const api = {
   watchNow: () => invoke<WatchState>("watch_now"),
   startRetro: (tickets: string[], note = "") => invoke<Agent>("start_retro", { tickets, note }),
   retros: () => invoke<Retro[]>("retros"),
+  insightsModels: (from: number, to: number) => invoke<InsightsModels>("insights_models", { from, to }),
   /** `bounds`: the starts of the weeks, and the end of the last. */
   insights: (bounds: number[]) => invoke<Insights>("insights", { bounds }),
   /** Approve (and apply) or dismiss a proposal; returns what approving did. */

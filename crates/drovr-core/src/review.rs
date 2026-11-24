@@ -83,6 +83,12 @@ pub fn toplevel(dir: &Path) -> Option<String> {
     (!top.is_empty()).then(|| top.to_string())
 }
 
+/// The branch a repo's folder is on, and its `origin`.
+pub fn checked_out(root: &str) -> Option<(String, String)> {
+    let one = |args: &str| Some(git(root, args).ok()?.trim().to_string());
+    Some((one("branch --show-current")?, one("remote get-url origin")?))
+}
+
 /// The repos an agent worked in, most recently touched first. `cwd` is where
 /// it started; `transcripts` are its session and run logs (JSON lines).
 /// `shared` are folders in repos many agents work in, like the plans folder:

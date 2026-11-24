@@ -198,6 +198,12 @@ impl Engine {
             "handoff_sent_back",
             json!({ "stage": stage, "notes": truncate(notes, 4000), "by": "you" }),
         );
+        if stage == "build" {
+            let now = crate::store::now();
+            if let Err(e) = self.store.add_send_back(now, &item.agent) {
+                eprintln!("drovr: couldn't log a handoff sent back: {e:#}");
+            }
+        }
         let notes = if notes.trim().is_empty() {
             "(no notes)"
         } else {
@@ -729,6 +735,24 @@ mod tests {
             .collect();
         assert!(kinds.contains(&"handoff_sent_back".to_string()));
         assert!(kinds.contains(&"agent_removed".to_string()));
+        cleanup(&dir, &engine);
+    }
+
+    #[test]
+    fn a_build_sent_back_is_logged() {
+        let (dir, engine, id) = setup("send-back-log");
+        for stage in ["close", "build"] {
+            let a = stage_agent(&engine, &format!("{stage}-{id}"), stage);
+            let h = engine
+                .handoff(&a, &json!({ "summary": "s", "next_inputs": "n" }))
+                .unwrap();
+            engine
+                .reject(h["inbox"].as_i64().unwrap(), "Again")
+                .unwrap();
+        }
+        let sent = engine.store.send_backs().unwrap();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].1, format!("build-{id}"));
         cleanup(&dir, &engine);
     }
 

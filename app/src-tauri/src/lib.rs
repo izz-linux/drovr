@@ -719,6 +719,12 @@ async fn insights(bounds: Vec<f64>) -> Res<drovr_core::insights::Insights> {
     blocking(move |e| e.insights(&bounds)).await
 }
 
+/// How PRs merged from `from` up to `to` turned out, by model.
+#[tauri::command]
+async fn insights_models(from: f64, to: f64) -> Res<drovr_core::outcomes::Models> {
+    blocking(move |e| e.models(from, to)).await
+}
+
 /// Approve (and apply) or dismiss one of a retro's proposals.
 #[tauri::command]
 async fn decide_proposal(dir: String, id: String, approve: bool) -> Res<String> {
@@ -932,6 +938,9 @@ pub fn run() {
             if let Err(err) = e.import_spend() {
                 eprintln!("drovr: importing what past runs cost: {err:#}");
             }
+            if let Err(err) = e.import_outcomes() {
+                eprintln!("drovr: importing what became of past PRs: {err:#}");
+            }
             if e.cfg.workflow.enabled {
                 drovr_core::watch::poll(&e, false);
             }
@@ -1013,6 +1022,7 @@ pub fn run() {
             start_retro,
             retros,
             insights,
+            insights_models,
             decide_proposal,
             stop_agent,
             stop_group,

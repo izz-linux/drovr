@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { api, type Insights, type InsightsPart, type InsightsTotal, type InsightsWeek } from "#lib/api.ts";
+  import { api, type InsightsModels, type Insights, type InsightsPart, type InsightsTotal, type InsightsWeek } from "#lib/api.ts";
 
-  // What runs cost, week by week, from the spend log.
+  import Models from "./InsightsModels.svelte";
+
+  // What runs cost, week by week, from the spend log, and how PRs turned out.
+  let tab = $state<"overview" | "models">("overview");
   let span = $state(8);
   let data = $state<Insights | null>(null);
+  let prs = $state<InsightsModels | null>(null);
   let error = $state("");
   let asTable = $state(false);
   let shown = $state<number | null>(null);
@@ -19,10 +23,12 @@
   $effect(() => {
     const n = span;
     let gone = false;
-    const load = () =>
-      api.insights(bounds(n))
-        .then((d) => { if (!gone) { data = d; error = ""; } })
+    const load = () => {
+      const b = bounds(n);
+      Promise.all([api.insights(b), api.insightsModels(b[0], b[n])])
+        .then(([d, m]) => { if (!gone) { data = d; prs = m; error = ""; } })
         .catch((e) => { if (!gone) error = String(e); });
+    };
     shown = null;
     load();
     const t = setInterval(load, 30_000);
@@ -39,6 +45,7 @@
   const present = $derived(series.filter((s) => data?.weeks.some((w) => cost(w, s) > 0)));
 
   const usd = (n: number) => (n >= 100 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(2)}`);
+  const hours = (h: number) => (h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${h.toFixed(1)} h` : `${(h / 24).toFixed(1)} days`);
   const day = (ts: number) => new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const runs = (n: number) => `${n.toLocaleString()} run${n === 1 ? "" : "s"}`;
   const unknown = (t: InsightsTotal) => (t.unpriced ? `${runs(t.unpriced)} with no cost reported` : "");
@@ -83,8 +90,11 @@
 
 <div class="wrap">
   <header class="row">
-    <h2 class="grow">Insights</h2>
-    <button class="ghost" aria-pressed={asTable} onclick={() => (asTable = !asTable)}>{asTable ? "Show chart" : "Show table"}</button>
+    <h2>Insights</h2>
+    <div class="row grow tabs">
+      {#each [["overview", "Overview"], ["models", "Models"]] as const as [id, name]}<button class="ghost" class:on={tab === id} aria-pressed={tab === id} onclick={() => (tab = id)}>{name}</button>{/each}
+    </div>
+    <button class="ghost" hidden={tab !== "overview"} aria-pressed={asTable} onclick={() => (asTable = !asTable)}>{asTable ? "Show chart" : "Show table"}</button>
     <select aria-label="Weeks shown" bind:value={span}>
       {#each [4, 8, 12, 26] as n}<option value={n}>Last {n} weeks</option>{/each}
     </select>
@@ -92,13 +102,20 @@
   {#if error}<div class="banner err">{error}</div>{/if}
 
   <div class="scroll grow">
-    {#if data && !data.total.runs}
+    {#if tab === "models"}
+      {#if prs}<Models data={prs} />{/if}
+    {:else if data && !data.total.runs}
       <div class="empty">No runs in these weeks. drovr logs what each run costs as it ends.</div>
     {:else if data}
       <div class="tiles">
         <div class="tile"><span class="muted">Spent</span><b>{usd(data.total.cost)}</b><span class="muted small">{runs(data.total.runs)}</span></div>
         <div class="tile"><span class="muted">Average week</span><b>{data.week_average == null ? "—" : usd(data.week_average)}</b><span class="muted small">{data.weekly_target_usd ? `target ${usd(data.weekly_target_usd)}` : "full weeks only"}</span></div>
         <div class="tile"><span class="muted">Average retro</span><b>{data.retro_average == null ? "—" : usd(data.retro_average)}</b><span class="muted small">the retro agent's runs</span></div>
+        {#if prs?.merged}
+          <div class="tile"><span class="muted">Per merged PR</span><b>{usd(data.total.cost / prs.merged)}</b><span class="muted small">everything spent ÷ {prs.merged} merged</span></div>
+          <div class="tile"><span class="muted">PRs reworked</span><b>{prs.whole ? `${Math.round((100 * prs.reworked) / prs.whole)}%` : "—"}</b><span class="muted small">{prs.whole ? `${prs.reworked} of ${prs.whole} seen from the start` : "none seen from the start"}</span></div>
+          <div class="tile"><span class="muted">Ready to merged</span><b>{prs.hours == null ? "—" : hours(prs.hours)}</b><span class="muted small">median</span></div>
+        {/if}
         {#if data.total.unpriced}<div class="tile"><span class="muted">Cost not reported</span><b>{data.total.unpriced.toLocaleString()}</b><span class="muted small">runs the totals leave out</span></div>{/if}
       </div>
 
@@ -159,6 +176,8 @@
   .wrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   header { padding: 10px 16px; border-bottom: 1px solid var(--border); gap: 12px; }
   h2 { margin: 0; font-size: 16px; }
+  .tabs { gap: 2px; }
+  .tabs .on { background: var(--panel-2); border-color: var(--border); }
   h3 { margin: 0 0 8px; font-size: 13px; }
   select { width: auto; }
   .small { font-size: 11px; }

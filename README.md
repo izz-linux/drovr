@@ -107,7 +107,7 @@ cargo install --path crates/drovr-cli
 | Code review | 7 | Changed files and diffs in each repo and worktree an agent worked in |
 | PRs | 8 | PRs waiting on your review, from offer to merge (once `[review]` watches a channel or team) |
 | Pipeline | 9 | Your sprint, its PRs and the agents on each ticket, and the retros (only with `workflow.enabled`) |
-| Insights | 0 | What runs cost, week by week, and by harness, model, stage and ticket |
+| Insights | 0 | What runs cost, week by week, and by harness, model, stage and ticket; and how PRs turned out, by model |
 
 Settings is ⌘/Ctrl+, (**drovr → Settings…**): theme, the phone page's sign-in link, and your config file.
 
@@ -304,6 +304,17 @@ drovr records what each run cost, in its database (`drovr.db` in its state folde
 - **By harness, model, stage and ticket:** each adds up to the total. A model run through OpenCode is marked `(OC)`, apart from the same model in Claude Code. A run on several tickets is split evenly between them.
 
 Runs whose CLI reported no cost are counted separately, and the totals leave them out.
+
+With the workflow on, the watcher also keeps what became of each PR it follows (`watch.github_repos`): when it was ready, merged or closed, pushes and failed CI once it was ready, how many of its heads others reviewed, and its size. The Overview shows the cost per merged PR (everything spent, divided by the PRs merged), the share reworked, and the median time from ready to merged.
+
+**Models** compares what merged PRs cost by the model that built them, rework included:
+
+- **Rework:** a PR took rework if, once it was ready for review, it was pushed to again, its CI failed or changes were requested, or if you sent its build handoff back while it was open. The builder's and its reviewer's runs that start after it was ready (or sent back) are the rework, and count against the model that built it, whichever model ran them.
+- **Like with like:** PRs are grouped by size (added and deleted lines: up to 100, up to 500, over 500), by model, and by whether the builder had a reviewer. A group with fewer than 10 PRs says it's too small to compare.
+- **Who built it:** the agent whose `drovr/<agent>` branch it is, else the one build agent with a worktree of that repo on the PR's branch, else its tickets' only build agent. It's never guessed. A builder's runs are shared evenly by its PRs that are still open, so costs of PRs built together are estimates.
+- **Left out, and counted:** PRs not seen from the start (first seen over an hour after they were opened, or already merged), with no one certain builder, with no runs logged, or built by several models, a router or an alias whose version isn't known.
+
+Earlier PRs are added once, from the tickets' records. Those don't say how big a PR was or how often it was reviewed.
 
 ### Stages
 

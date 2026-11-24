@@ -146,7 +146,7 @@ impl Engine {
 }
 
 /// Every ticket's record, archived ones too.
-fn records(cfg: &Config) -> Vec<(String, Vec<Value>)> {
+pub(crate) fn records(cfg: &Config) -> Vec<(String, Vec<Value>)> {
     let plans = cfg.reports.path();
     let mut out = vec![];
     for root in [plans.join(ledger::ARCHIVE), plans] {
