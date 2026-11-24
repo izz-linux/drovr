@@ -12,11 +12,12 @@
 
 use crate::engine::{Engine, NewAgent};
 use crate::ledger;
+use crate::models;
 use crate::store::Agent;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// What a proposal may be.
@@ -85,12 +86,13 @@ pub fn evidence(cfg: &crate::config::Config, tickets: &[String]) -> Value {
         tokens_in: u64,
         tokens_out: u64,
         cache_read: u64,
+        started_as: BTreeSet<String>,
     }
-    let mut by_stage_model: BTreeMap<(String, String), Row> = BTreeMap::new();
+    let mut by_stage_model: BTreeMap<(String, String, String), Row> = BTreeMap::new();
     for t in tickets {
         let events = ledger::timeline(cfg, t);
         let mut stage_of: BTreeMap<String, String> = BTreeMap::new();
-        let mut model_of: BTreeMap<(String, i64), String> = BTreeMap::new();
+        let mut started: BTreeMap<(String, i64), (String, String)> = BTreeMap::new();
         let mut n: BTreeMap<&str, i64> = BTreeMap::new();
         let mut bump = |k: &'static str| *n.entry(k).or_default() += 1;
         let (mut cost, mut waits) = (0.0, vec![]);
@@ -102,34 +104,38 @@ pub fn evidence(cfg: &crate::config::Config, tickets: &[String]) -> Value {
                     stage_of.insert(agent, e["stage"].as_str().unwrap_or("").to_string());
                 }
                 "run_start" => {
-                    model_of.insert(
+                    let s = |k: &str| e[k].as_str().unwrap_or("").to_string();
+                    started.insert(
                         (agent, e["run"].as_i64().unwrap_or(0)),
-                        e["model"].as_str().unwrap_or("").to_string(),
+                        (s("harness"), s("model")),
                     );
                 }
                 "run_end" => {
                     bump("runs");
                     let c = e["cost_usd"].as_f64().unwrap_or(0.0);
                     cost += c;
-                    let model = e["models"][0]
-                        .as_str()
-                        .map(String::from)
-                        .or_else(|| {
-                            model_of
-                                .get(&(agent.clone(), e["run"].as_i64().unwrap_or(0)))
-                                .cloned()
-                        })
-                        .filter(|m| !m.is_empty())
-                        .unwrap_or_else(|| "default".into());
+                    let (harness, asked) = started
+                        .get(&(agent.clone(), e["run"].as_i64().unwrap_or(0)))
+                        .cloned()
+                        .unwrap_or_default();
+                    let (model, split) = model_split(e, &asked);
                     let stage = stage_of
                         .get(&agent)
                         .cloned()
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| "none".into());
-                    let row = by_stage_model.entry((stage, model)).or_default();
+                    for (m, usd) in split {
+                        by_stage_model
+                            .entry((stage.clone(), harness.clone(), m))
+                            .or_default()
+                            .cost += usd;
+                    }
+                    let row = by_stage_model.entry((stage, harness, model)).or_default();
+                    if !asked.is_empty() {
+                        row.started_as.insert(asked);
+                    }
                     let tok = |k: &str| e["tokens"][k].as_u64().unwrap_or(0);
                     row.runs += 1;
-                    row.cost += c;
                     row.tokens_in += tok("input");
                     row.tokens_out += tok("output");
                     row.cache_read += tok("cache_read");
@@ -212,12 +218,36 @@ pub fn evidence(cfg: &crate::config::Config, tickets: &[String]) -> Value {
     }
     let rows: Vec<Value> = by_stage_model
         .into_iter()
-        .map(|((stage, model), r)| {
-            json!({ "stage": stage, "model": model, "runs": r.runs, "cost_usd": (r.cost * 100.0).round() / 100.0,
+        .map(|((stage, harness, model), r)| {
+            json!({ "stage": stage, "harness": harness, "model": model, "started_as": r.started_as, "runs": r.runs, "cost_usd": (r.cost * 100.0).round() / 100.0,
                     "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "cache_read": r.cache_read })
         })
         .collect();
     json!({ "tickets": per_ticket, "by_stage_and_model": rows })
+}
+
+/// The model a run counts as, and its cost by model. A cost the CLI didn't
+/// split by model is all the run's model's.
+fn model_split(end: &Value, asked: &str) -> (String, BTreeMap<String, f64>) {
+    let used: Vec<String> = end["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.as_str().map(String::from))
+        .collect();
+    let mut split: BTreeMap<String, f64> = BTreeMap::new();
+    for (model, usd) in end["model_costs"].as_object().into_iter().flatten() {
+        *split.entry(models::canonical(model)).or_default() += usd.as_f64().unwrap_or(0.0);
+    }
+    let mut main = models::main_model(asked, &used);
+    if !split.contains_key(&main) {
+        if let Some((m, _)) = split.iter().max_by(|a, b| a.1.total_cmp(b.1)) {
+            main = m.clone();
+        }
+    }
+    let rest = end["cost_usd"].as_f64().unwrap_or(0.0) - split.values().sum::<f64>();
+    *split.entry(main.clone()).or_default() += rest;
+    (main, split)
 }
 
 /// The skills you have, by name.
@@ -286,7 +316,7 @@ impl Engine {
 Everything that happened is in these folders: `ledger.jsonl` (one JSON event per line: runs with model, tokens and cost; questions and answers; decisions; handoffs; wakes; PR and Jira changes), with `handoffs/` and `checkpoints/` beside it.
 {folders}
 
-drovr has already worked out the numbers from them: {dir}/evidence.json. Use those rather than recounting.
+drovr has already worked out the numbers from them: {dir}/evidence.json. Use those rather than recounting. Its model names are the same for every harness; `runs` and tokens count under a run's main model, and cost under each model it used. `started_as` is what those runs were started with.
 
 The current setup: {setup}
 Skills in {skills_dir}: {skills}
@@ -296,7 +326,7 @@ Earlier retros' proposals and what {you} decided:
 Don't propose again what {you} dismissed unless the evidence is new, and say what's new. What {you} approved is already in the setup above. Leave out what an earlier retro proposed that {you} hasn't decided yet.
 {note}
 Look for rework (handoffs sent back, CI failures, changes requested), dismissals (Inbox items declined or dismissed, drafts discarded), misses (problems found late, PRs closed unmerged, decisions reversed), overrides (a stage's model changed at a handoff), and cost by stage and model. Then call `submit_proposals` with what you'd change, each with its evidence:
-- model: a stage's model, as {{"config": {{"key": "stages.models.<stage>", "value": "<model>"}}}}. A cheaper model where rework stays low, a stronger one where rework costs more than it saves.
+- model: a stage's model, as {{"config": {{"key": "stages.models.<stage>", "value": "<model>"}}}}, written as the harness takes it (as in `started_as`). A cheaper model where rework stays low, a stronger one where rework costs more than it saves.
 - threshold: {{"config": {{"key": "stages.build_checkpoint_tokens" or "stages.build_checkpoint_usd", "value": <number>}}}}
 - wake_rule: {{"config": {{"key": "watch.rules.<rule>", "value": "wake" | "ask" | "ignore"}}}}
 - process: a setting when it maps to one (e.g. stages.order), else {{}} with the change in why.
@@ -955,8 +985,87 @@ mod tests {
         );
         assert_eq!(
             e["by_stage_and_model"][0],
-            json!({ "stage": "triage", "model": "claude-sonnet-5-5", "runs": 1, "cost_usd": 0.5, "tokens_in": 10, "tokens_out": 20, "cache_read": 0 })
+            json!({ "stage": "triage", "harness": "", "model": "claude-sonnet-5-5", "started_as": [], "runs": 1, "cost_usd": 0.5, "tokens_in": 10, "tokens_out": 20, "cache_read": 0 })
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn evidence_costs_each_model_under_one_name() {
+        let dir = std::env::temp_dir().join(format!("drovr-ev-models-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cfg = crate::config::Config::default();
+        cfg.reports.dir = dir.display().to_string();
+        let add = |e: Value| ledger::append(&cfg, "g", "SRE-1", &e).unwrap();
+        let start = |run: i64, harness: &str, model: &str| {
+            add(
+                json!({ "kind": "run_start", "agent": "b", "run": run, "harness": harness, "model": model }),
+            )
+        };
+        let end = |run: i64, cost: f64, models: Value, costs: Value| {
+            add(
+                json!({ "kind": "run_end", "agent": "b", "run": run, "cost_usd": cost, "models": models, "model_costs": costs }),
+            )
+        };
+        add(json!({ "kind": "agent_started", "agent": "b", "stage": "build" }));
+        // Split by model; what's left over is the main model's.
+        start(1, "claude", "sonnet");
+        end(
+            1,
+            3.0,
+            json!(["claude-opus-5-5", "claude-sonnet-5-5"]),
+            json!({ "claude-opus-5-5": 1.0, "claude-sonnet-5-5": 1.5 }),
+        );
+        // Recorded before costs were split: the model it was started on.
+        start(2, "claude", "sonnet");
+        end(
+            2,
+            2.0,
+            json!(["claude-opus-5-5", "claude-sonnet-5-5"]),
+            Value::Null,
+        );
+        // OpenCode reports no model. Its gateway's name is the same model.
+        start(3, "opencode", "gw/anthropic/claude-sonnet-5.5");
+        end(3, 4.0, Value::Null, Value::Null);
+        // No model chosen: the one that cost the most.
+        start(4, "claude", "");
+        end(
+            4,
+            1.25,
+            json!(["claude-haiku-5-5", "claude-opus-5-5"]),
+            json!({ "claude-haiku-5-5": 0.25, "claude-opus-5-5": 1.0 }),
+        );
+        let e = evidence(&cfg, &["SRE-1".into()]);
+        let rows: Vec<Value> = e["by_stage_and_model"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                json!([
+                    r["harness"],
+                    r["model"],
+                    r["runs"],
+                    r["cost_usd"],
+                    r["started_as"]
+                ])
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                json!(["claude", "claude-haiku-5-5", 0, 0.25, []]),
+                json!(["claude", "claude-opus-5-5", 1, 2.0, []]),
+                json!(["claude", "claude-sonnet-5-5", 2, 4.0, ["sonnet"]]),
+                json!([
+                    "opencode",
+                    "claude-sonnet-5-5",
+                    1,
+                    4.0,
+                    ["gw/anthropic/claude-sonnet-5.5"]
+                ]),
+            ]
+        );
+        assert_eq!(e["tickets"]["SRE-1"]["cost_usd"], 10.25);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

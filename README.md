@@ -272,7 +272,7 @@ The record is plain files: `ledger.jsonl` in the ticket's own folder, one JSON e
 - **Which agents:** an agent's events go to its own tickets (its **Ticket** field, e.g. `SRE-3230, SRE-3253`), or to its group's ticket when it has none. An agent with no ticket has no record.
 - **What's recorded:**
   - **Agents:** agents starting and being removed.
-  - **Runs:** each run's start (its prompt, the configured model, a new or resumed session) and its end (how it ended, cost, duration, turns, tokens in and out and from the cache, and the models it used).
+  - **Runs:** each run's start (its prompt, the configured model, a new or resumed session) and its end (how it ended, cost, duration, turns, tokens in and out and from the cache, the models it used, and what each cost when the CLI says).
   - **The Inbox:** each item as it's asked (questions, commands, permissions, worker requests, done reports) and how it was resolved (answered, declined or dismissed, and how long it waited).
   - **Agent decisions:** what agents decided themselves, with `record_decision`.
   - **Messages:** messages between agents and from you.
@@ -317,7 +317,7 @@ Part of the ticket workflow (`workflow.enabled`). A ticket goes through stages, 
 
 Part of the ticket workflow (`workflow.enabled`), and it runs only when you start one: **Start retro** in a ticket's timeline, or **Retro…** in Pipeline to pick several tickets. The picker shows when each ticket's last retro ran, and hides tickets with nothing new since their retro behind a toggle. Add a note if there's something to look at in particular.
 
-1. **The numbers:** drovr works them out from the tickets' records itself and saves them as `evidence.json` in the retro's folder (`~/.claude/plans/retros/<when>/`). They cover runs, cost and tokens by stage and model, rework (handoffs sent back, CI failures, changes requested), dismissals (Inbox items declined or dismissed), misses (PRs closed unmerged), overrides (a stage's model changed at a handoff), wakes, checkpoints, how long the Inbox waited on you, and your stops and **Send now**s.
+1. **The numbers:** drovr works them out from the tickets' records itself and saves them as `evidence.json` in the retro's folder (`~/.claude/plans/retros/<when>/`). They cover runs, cost and tokens by stage, harness and model (a model has one name however it was started: `opus`, `claude-opus-5-5` or a gateway's `…/anthropic/claude-opus-5.5`), rework (handoffs sent back, CI failures, changes requested), dismissals (Inbox items declined or dismissed), misses (PRs closed unmerged), overrides (a stage's model changed at a handoff), wakes, checkpoints, how long the Inbox waited on you, and your stops and **Send now**s.
 2. **The retro agent** (on `retro.model`) reads the records, the handoffs and those numbers. It gets your current stages, models, limits, rules and skills, and the last 50 proposals from earlier retros with what you decided, so it doesn't bring back one you dismissed without new evidence. It submits proposals, each with its evidence:
    - **model:** a stage's model (`stages.models.<stage>`): cheaper where rework stays low, stronger where rework costs more than it saves.
    - **threshold:** the build checkpoint limits.

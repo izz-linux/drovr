@@ -8,6 +8,7 @@ use crate::sessions::SavedSession;
 use crate::shell::quote;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 pub struct Claude;
@@ -97,6 +98,20 @@ impl Harness for Claude {
     fn run_cost(&self, end: &Value, costs: &mut Costs) -> Option<f64> {
         let total = end["total_cost_usd"].as_f64()?;
         Some(costs.added(end["session_id"].as_str().unwrap_or(""), total))
+    }
+
+    /// `modelUsage` covers the whole session, as `total_cost_usd` does.
+    fn run_model_costs(&self, end: &Value, costs: &mut Costs) -> BTreeMap<String, f64> {
+        let session = end["session_id"].as_str().unwrap_or("");
+        end["model_totals"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(model, total)| {
+                let added = costs.added(&format!("{session}\n{model}"), total.as_f64()?);
+                (added > 0.0).then(|| (model.clone(), added))
+            })
+            .collect()
     }
 
     /// The last assistant message's input: fresh, read from the cache and
@@ -320,6 +335,9 @@ fn claude_event(v: &Value) -> Event {
                 "cache_write": v["usage"]["cache_creation_input_tokens"],
             },
             "models": v["modelUsage"].as_object().map(|m| m.keys().cloned().collect::<Vec<_>>()),
+            "model_totals": v["modelUsage"].as_object().map(|m| {
+                m.iter().map(|(k, u)| (k.clone(), u["costUSD"].clone())).collect::<serde_json::Map<_, _>>()
+            }),
         })),
         _ => Event::Skip,
     }
@@ -482,6 +500,39 @@ mod tests {
         assert_eq!(end["models"], json!(["claude-sonnet-5-5"]));
         // The run's last line still shows the cost, not tokens.
         assert!(end["input_tokens"].is_null());
+    }
+
+    #[test]
+    fn splits_a_runs_cost_by_model() {
+        let end = |session: &str, models: Value| {
+            let v = json!({ "type": "result", "session_id": session, "modelUsage": models });
+            let Event::End(end) = claude_event(&v) else {
+                panic!("not an end")
+            };
+            end
+        };
+        let mut costs = Costs::default();
+        let mut split = |e: Value| Claude.run_model_costs(&e, &mut costs);
+        let first = split(end("s1", json!({ "opus": { "costUSD": 1.0 } })));
+        assert_eq!(first, [("opus".to_string(), 1.0)].into());
+        // Resumed: the session's totals so far, so only what they grew by.
+        let second = split(end(
+            "s1",
+            json!({ "haiku": { "costUSD": 0.25 }, "opus": { "costUSD": 1.5 } }),
+        ));
+        assert_eq!(
+            second,
+            [("haiku".to_string(), 0.25), ("opus".to_string(), 0.5)].into()
+        );
+        // A model the run didn't use isn't listed.
+        let third = split(end(
+            "s1",
+            json!({ "haiku": { "costUSD": 0.5 }, "opus": { "costUSD": 1.5 } }),
+        ));
+        assert_eq!(third, [("haiku".to_string(), 0.25)].into());
+        let fresh = split(end("s2", json!({ "opus": { "costUSD": 0.75 } })));
+        assert_eq!(fresh, [("opus".to_string(), 0.75)].into());
+        assert!(split(end("s2", Value::Null)).is_empty());
     }
 
     #[test]

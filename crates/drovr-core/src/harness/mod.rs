@@ -19,7 +19,7 @@ use crate::sessions::SavedSession;
 use crate::store::Agent;
 use anyhow::{bail, Result};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 /// Claude Code, the default.
@@ -192,6 +192,13 @@ pub trait Harness: Sync {
     fn run_cost(&self, end: &Value, costs: &mut Costs) -> Option<f64> {
         let _ = (end, costs);
         None
+    }
+
+    /// What that run cost by model, by the names the CLI reported, or empty
+    /// when it doesn't say.
+    fn run_model_costs(&self, end: &Value, costs: &mut Costs) -> BTreeMap<String, f64> {
+        let _ = (end, costs);
+        BTreeMap::new()
     }
 
     /// How much context the session carried at the end of a run's `log`,

@@ -16,7 +16,7 @@ use crate::store::{Agent, Item, Store};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -576,6 +576,22 @@ impl Engine {
                 (end["session_id"].as_str().unwrap_or("").to_string(), cost)
             })
             .collect()
+    }
+
+    /// What the last headless run cost by model, where its CLI says.
+    fn last_model_costs(&self, agent: &Agent) -> BTreeMap<String, f64> {
+        let harness = harness::of(agent);
+        let dir = home().join("agents").join(&agent.name).join("runs");
+        let mut costs = Costs::default();
+        let mut last = BTreeMap::new();
+        for run in 1..=agent.runs {
+            last = std::fs::read_to_string(dir.join(format!("{run}.jsonl")))
+                .ok()
+                .and_then(|log| run_end(&log, harness))
+                .map(|end| harness.run_model_costs(&end, &mut costs))
+                .unwrap_or_default();
+        }
+        last
     }
 
     pub(crate) fn agent_dir(&self, name: &str) -> PathBuf {
@@ -1403,6 +1419,7 @@ impl Engine {
                 "turns": end["num_turns"],
                 "tokens": end["tokens"],
                 "models": end["models"],
+                "model_costs": self.last_model_costs(&agent),
             }),
         );
         // A stage agent may be asked for a checkpoint, or continued fresh.
@@ -4409,6 +4426,63 @@ esac
         assert!(calls.contains("pane close w1:p1"), "{calls}");
         assert!(calls.contains("--session-id"), "{calls}");
         assert!(calls.contains("agent prompt w1:p2"), "{calls}");
+    }
+
+    #[test]
+    fn a_run_end_records_what_each_model_cost() {
+        let dir = std::env::temp_dir().join(format!("drovr-model-costs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = Config::default();
+        cfg.workflow.enabled = true;
+        cfg.reports.dir = dir.join("plans").display().to_string();
+        let engine = Engine::with(Store::open(&dir.join("t.db")).unwrap(), cfg, "drovr".into());
+        let name = format!("model-costs-{}", std::process::id());
+        engine
+            .store
+            .add_agent(&Agent {
+                name: name.clone(),
+                role: "solo".into(),
+                backend: "headless".into(),
+                harness: "claude".into(),
+                run_state: "idle".into(),
+                ticket: "SRE-1".into(),
+                ..Agent::default()
+            })
+            .unwrap();
+        let runs = engine.agent_dir(&name).join("runs");
+        let end = |total: f64, models: Value| {
+            json!({ "type": "result", "session_id": "s", "total_cost_usd": total, "modelUsage": models })
+                .to_string()
+        };
+        let logs = [
+            end(1.0, json!({ "claude-opus-5-5": { "costUSD": 1.0 } })),
+            end(
+                1.75,
+                json!({ "claude-haiku-5-5": { "costUSD": 0.25 }, "claude-opus-5-5": { "costUSD": 1.5 } }),
+            ),
+        ];
+        for (i, log) in logs.iter().enumerate() {
+            let run = i as i64 + 1;
+            std::fs::write(runs.join(format!("{run}.jsonl")), log).unwrap();
+            std::fs::write(runs.join(format!("{run}.exit")), "0").unwrap();
+            assert_eq!(engine.store.claim_run(&name).unwrap(), Some(run));
+            engine.finished(&name).unwrap();
+        }
+        let got: Vec<Value> = ledger::timeline(&engine.cfg, "SRE-1")
+            .into_iter()
+            .filter(|e| e["kind"] == "run_end")
+            .map(|e| e["model_costs"].clone())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                json!({ "claude-opus-5-5": 1.0 }),
+                json!({ "claude-haiku-5-5": 0.25, "claude-opus-5-5": 0.5 })
+            ]
+        );
+        let _ = std::fs::remove_dir_all(engine.agent_dir(&name));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
