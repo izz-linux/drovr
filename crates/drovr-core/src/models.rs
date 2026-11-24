@@ -3,7 +3,8 @@
 //! Agents always start with the name as configured; these are only for
 //! adding up what a model did.
 
-use std::collections::BTreeSet;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Claude Code's aliases, which mean a different version over time.
 const ALIASES: &[&str] = &["opus", "sonnet", "haiku", "fable"];
@@ -64,6 +65,30 @@ pub fn main_model(asked: &str, used: &[String]) -> String {
     } else {
         "several models".into()
     }
+}
+
+/// The model a run counts as, and its cost by model. A cost the CLI didn't
+/// split by model is all the run's model's.
+pub fn split(end: &Value, asked: &str) -> (String, BTreeMap<String, f64>) {
+    let used: Vec<String> = end["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.as_str().map(String::from))
+        .collect();
+    let mut split: BTreeMap<String, f64> = BTreeMap::new();
+    for (model, usd) in end["model_costs"].as_object().into_iter().flatten() {
+        *split.entry(canonical(model)).or_default() += usd.as_f64().unwrap_or(0.0);
+    }
+    let mut main = main_model(asked, &used);
+    if !split.contains_key(&main) {
+        if let Some((m, _)) = split.iter().max_by(|a, b| a.1.total_cmp(b.1)) {
+            main = m.clone();
+        }
+    }
+    let rest = end["cost_usd"].as_f64().unwrap_or(0.0) - split.values().sum::<f64>();
+    *split.entry(main.clone()).or_default() += rest;
+    (main, split)
 }
 
 #[cfg(test)]

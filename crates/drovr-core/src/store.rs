@@ -105,6 +105,33 @@ CREATE TABLE IF NOT EXISTS review_prs (
     my_review TEXT NOT NULL DEFAULT '',
     draft INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS spend (
+    key TEXT PRIMARY KEY,
+    ts REAL NOT NULL,
+    agent TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT '',
+    group_name TEXT NOT NULL DEFAULT '',
+    tickets TEXT NOT NULL DEFAULT '',
+    stage TEXT NOT NULL DEFAULT '',
+    harness TEXT NOT NULL DEFAULT '',
+    started_as TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    run INTEGER NOT NULL DEFAULT 0,
+    main INTEGER NOT NULL DEFAULT 1,
+    cost_usd REAL,
+    tokens_in INTEGER,
+    tokens_out INTEGER,
+    cache_read INTEGER,
+    cache_write INTEGER,
+    duration_ms INTEGER,
+    state TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'run'
+);
+CREATE INDEX IF NOT EXISTS spend_ts ON spend (ts);
+CREATE TABLE IF NOT EXISTS done_once (
+    what TEXT PRIMARY KEY,
+    ts REAL NOT NULL
+);
 "#;
 
 pub fn now() -> f64 {
@@ -329,6 +356,31 @@ fn message_row(r: &Row) -> rusqlite::Result<Message> {
         recipient: r.get("recipient")?,
         group_name: r.get("group_name")?,
         body: r.get("body")?,
+    })
+}
+
+fn spend_row(r: &Row) -> rusqlite::Result<crate::spend::Row> {
+    Ok(crate::spend::Row {
+        key: r.get("key")?,
+        ts: r.get("ts")?,
+        agent: r.get("agent")?,
+        role: r.get("role")?,
+        group_name: r.get("group_name")?,
+        tickets: r.get("tickets")?,
+        stage: r.get("stage")?,
+        harness: r.get("harness")?,
+        started_as: r.get("started_as")?,
+        model: r.get("model")?,
+        run: r.get("run")?,
+        main: r.get("main")?,
+        cost_usd: r.get("cost_usd")?,
+        tokens_in: r.get("tokens_in")?,
+        tokens_out: r.get("tokens_out")?,
+        cache_read: r.get("cache_read")?,
+        cache_write: r.get("cache_write")?,
+        duration_ms: r.get("duration_ms")?,
+        state: r.get("state")?,
+        source: r.get("source")?,
     })
 }
 
@@ -559,6 +611,99 @@ impl Store {
             params![name, now()],
         )?;
         Ok(())
+    }
+
+    // -- spend ---------------------------------------------------------------
+
+    /// Add rows to the spend log, leaving out any it has.
+    pub fn add_spend(&self, rows: &[crate::spend::Row]) -> Result<usize> {
+        let tx = self.db.unchecked_transaction()?;
+        let n = self.insert_spend(rows)?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    fn insert_spend(&self, rows: &[crate::spend::Row]) -> Result<usize> {
+        let mut stmt = self.db.prepare(
+            "INSERT OR IGNORE INTO spend (key, ts, agent, role, group_name, tickets, stage, \
+             harness, started_as, model, run, main, cost_usd, tokens_in, tokens_out, \
+             cache_read, cache_write, duration_ms, state, source) VALUES \
+             (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
+             ?18, ?19, ?20)",
+        )?;
+        let mut n = 0;
+        for r in rows {
+            n += stmt.execute(params![
+                r.key,
+                r.ts,
+                r.agent,
+                r.role,
+                r.group_name,
+                r.tickets,
+                r.stage,
+                r.harness,
+                r.started_as,
+                r.model,
+                r.run,
+                r.main,
+                r.cost_usd,
+                r.tokens_in,
+                r.tokens_out,
+                r.cache_read,
+                r.cache_write,
+                r.duration_ms,
+                r.state,
+                r.source,
+            ])?;
+        }
+        Ok(n)
+    }
+
+    /// The spend log from `ts` on, oldest first.
+    pub fn spend_since(&self, ts: f64) -> Result<Vec<crate::spend::Row>> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT * FROM spend WHERE ts >= ?1 ORDER BY ts, key")?;
+        let rows = stmt.query_map([ts], spend_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Whether `what`, which is only done once per database, was done.
+    pub fn done_once(&self, what: &str) -> Result<bool> {
+        Ok(self
+            .db
+            .prepare("SELECT 1 FROM done_once WHERE what = ?1")?
+            .exists([what])?)
+    }
+
+    /// Add imported rows, leaving out runs the log already has, and mark
+    /// `what` done. Adds nothing if another process did it first.
+    pub fn import_spend(&self, what: &str, rows: &[crate::spend::Row]) -> Result<usize> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.db,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        if self.done_once(what)? {
+            return Ok(0);
+        }
+        let mut logged = self.db.prepare(
+            "SELECT 1 FROM spend WHERE source = 'run' AND agent = ?1 AND run = ?2 \
+             AND abs(ts - ?3) < 60",
+        )?;
+        let mut new = vec![];
+        for r in rows {
+            if !logged.exists(params![r.agent, r.run, r.ts])? {
+                new.push(r.clone());
+            }
+        }
+        drop(logged);
+        let n = self.insert_spend(&new)?;
+        self.db.execute(
+            "INSERT INTO done_once (what, ts) VALUES (?1, ?2)",
+            params![what, now()],
+        )?;
+        tx.commit()?;
+        Ok(n)
     }
 
     // -- messages -------------------------------------------------------------

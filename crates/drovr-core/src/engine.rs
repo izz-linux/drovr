@@ -1393,6 +1393,11 @@ impl Engine {
             _ => "idle",
         };
         self.store.set_agent(name, "run_state", next)?;
+        let priced = end.as_ref().is_some_and(|e| {
+            harness::of(&agent)
+                .run_cost(e, &mut Costs::default())
+                .is_some()
+        });
         let mut end = end.unwrap_or_default();
         // A CLI that reports each run's own cost (OpenCode) leaves the
         // session's running total to drovr: the stage checkpoint reads it.
@@ -1407,21 +1412,19 @@ impl Engine {
                 end["total_cost_usd"] = json!(total);
             }
         }
-        self.record(
-            name,
-            "run_end",
-            json!({
-                "run": agent.runs,
-                "state": next,
-                "exit": exit,
-                "cost_usd": (total - agent.cost_usd).max(0.0),
-                "duration_ms": end["duration_ms"],
-                "turns": end["num_turns"],
-                "tokens": end["tokens"],
-                "models": end["models"],
-                "model_costs": self.last_model_costs(&agent),
-            }),
-        );
+        let event = json!({
+            "run": agent.runs,
+            "state": next,
+            "exit": exit,
+            "cost_usd": (total - agent.cost_usd).max(0.0),
+            "duration_ms": end["duration_ms"],
+            "turns": end["num_turns"],
+            "tokens": end["tokens"],
+            "models": end["models"],
+            "model_costs": self.last_model_costs(&agent),
+        });
+        self.log_spend(&agent, agent.runs, priced, &event);
+        self.record(name, "run_end", event);
         // A stage agent may be asked for a checkpoint, or continued fresh.
         if (next == "idle" || next == "done")
             && self.after_stage_run(&agent, &end, log.as_deref().unwrap_or(""))?
@@ -2678,20 +2681,19 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
     fn herdr_end_run(&self, agent: &Agent, state: &str) -> Result<Value> {
         let (mut run, live) = self.herdr_track_cost(&agent.name)?;
         let model = live.as_ref().map(|l| l.model.clone());
-        self.record(
-            &agent.name,
-            "run_end",
-            json!({
-                "run": self.agent(&agent.name)?.runs,
-                "state": state,
-                "exit": null,
-                "cost_usd": run.run_cost,
-                "duration_ms": ((crate::store::now() - run.started) * 1000.0) as i64,
-                "turns": null,
-                "tokens": null,
-                "models": model.filter(|m| !m.is_empty()).map(|m| vec![m]),
-            }),
-        );
+        let n = self.agent(&agent.name)?.runs;
+        let event = json!({
+            "run": n,
+            "state": state,
+            "exit": null,
+            "cost_usd": run.run_cost,
+            "duration_ms": ((crate::store::now() - run.started) * 1000.0) as i64,
+            "turns": null,
+            "tokens": null,
+            "models": model.filter(|m| !m.is_empty()).map(|m| vec![m]),
+        });
+        self.log_spend(agent, n, live.is_some(), &event);
+        self.record(&agent.name, "run_end", event);
         run.run_cost = 0.0;
         self.herdr_save_run(&agent.name, &run)?;
         Ok(json!({
@@ -4343,6 +4345,10 @@ esac
         assert_eq!(ends[0]["state"], "idle");
         assert_eq!(ends[0]["cost_usd"], 0.5);
         assert_eq!(ends[0]["models"], json!(["claude-haiku-5-5"]));
+        let spent = engine.store.spend_since(0.0).unwrap();
+        assert_eq!(spent.len(), 1, "{spent:?}");
+        assert_eq!((spent[0].run, spent[0].cost_usd), (1, Some(0.5)));
+        assert_eq!(spent[0].model, "claude-haiku-5-5");
     }
 
     #[test]
@@ -4485,6 +4491,26 @@ esac
                 json!({ "claude-haiku-5-5": 0.25, "claude-opus-5-5": 0.5 })
             ]
         );
+        let spent: Vec<_> = engine
+            .store
+            .spend_since(0.0)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.run, r.model, r.cost_usd))
+            .collect();
+        assert_eq!(
+            spent,
+            [
+                (1, "claude-opus-5-5".to_string(), Some(1.0)),
+                (2, "claude-haiku-5-5".to_string(), Some(0.25)),
+                (2, "claude-opus-5-5".to_string(), Some(0.5)),
+            ]
+        );
+        // A killed run reports no cost: it's unknown, not zero.
+        assert_eq!(engine.store.claim_run(&name).unwrap(), Some(3));
+        engine.finished(&name).unwrap();
+        let killed = engine.store.spend_since(0.0).unwrap().pop().unwrap();
+        assert_eq!((killed.run, killed.cost_usd), (3, None));
         let _ = std::fs::remove_dir_all(engine.agent_dir(&name));
         let _ = std::fs::remove_dir_all(&dir);
     }

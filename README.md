@@ -265,7 +265,7 @@ To publish a report, or any local HTML file, as a claude.ai artifact:
 
 drovr keeps a record of everything that happens on a ticket, so you can look back at how the work went and, later, run a retro on it.
 
-**It's off by default, as one switch:** `workflow.enabled = true` (in `[workflow]`) turns on the whole ticket workflow together: the record and timeline, agents' `record_decision` and `draft_jira_update` tools, the watcher and Pipeline (⌘9), stages in groups created from then on, and the retro. Set it back to `false` and drovr works exactly as before: nothing more is recorded or polled, agents get the old tools from their next run, and the timeline buttons and Pipeline go away. Records already written stay on disk. The switch takes effect when you save it in Settings; agents pick it up on their next run.
+**It's off by default, as one switch:** `workflow.enabled = true` (in `[workflow]`) turns on the whole ticket workflow together: the record and timeline, agents' `record_decision` and `draft_jira_update` tools, the watcher and Pipeline (⌘9), stages in groups created from then on, and the retro. Set it back to `false` and drovr works as before: nothing more is recorded on tickets or polled (what runs cost still is; see [The spend log](#the-spend-log)), agents get the old tools from their next run, and the timeline buttons and Pipeline go away. Records already written stay on disk. The switch takes effect when you save it in Settings; agents pick it up on their next run.
 
 The record is plain files: `ledger.jsonl` in the ticket's own folder, one JSON event per line, only ever appended to. The folder is in the group's plans folder (`~/.claude/plans/<group>/<TICKET>/`), or in the plans folder itself for a solo agent's ticket (`~/.claude/plans/<TICKET>/`). You can read the file in any editor, keep it in git, or hand it to an agent.
 
@@ -285,6 +285,14 @@ The record is plain files: `ledger.jsonl` in the ticket's own folder, one JSON e
 - **Secrets stay out:** anything that looks like a credential (GitHub, GitLab and Slack tokens, Anthropic and AWS keys, bearer tokens) is replaced with `[redacted]` before it's written.
 - **Timeline:** **Timeline** in an agent's header, or **timeline** on a group, shows the record. It has a day-by-day list you can filter (runs, decisions and the Inbox, messages and prompts, status and reports, agents and wakes, Jira and PRs, stages, retro) with totals at the top: runs and cost, questions asked and declined, decisions, wakes. Click an event to see all of it. **Show folder** opens the ticket's folder in Finder, and **Start retro** starts a retro on the ticket.
 - **Nothing else changes:** writing the record never stops the work. If a write fails, drovr logs it and carries on.
+
+### The spend log
+
+drovr records what each run cost, in its database (`drovr.db` in its state folder, `~/.local/share/drovr`), **whether or not `workflow.enabled` is on**. A row per run and model holds the time, the agent with its role, group, tickets and stage, the harness, the model, the cost, the token counts, how long it took and how it ended. It never holds a prompt, a message or a task, and it stays on your Mac.
+
+- **Costs are what the CLI reports.** When it reports none (Codex, or a run that was killed), the cost is unknown, not zero.
+- **Models go by one name,** however the run was started (`opus`, or a gateway's path in OpenCode); the name it was started with is kept too.
+- **Earlier runs** are added once, from the tickets' records, the first time the app runs with the log. Records don't say whether a zero cost was reported, so those count as unknown.
 
 ### Stages
 

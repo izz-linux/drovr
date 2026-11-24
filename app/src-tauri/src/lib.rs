@@ -923,6 +923,9 @@ pub fn run() {
     std::thread::spawn(|| loop {
         path_ready();
         if let Ok(e) = Engine::open() {
+            if let Err(err) = e.import_spend() {
+                eprintln!("drovr: importing what past runs cost: {err:#}");
+            }
             if e.cfg.workflow.enabled {
                 drovr_core::watch::poll(&e, false);
             }

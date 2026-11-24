@@ -23,6 +23,7 @@ pub mod rules;
 pub mod sessions;
 pub mod shell;
 pub mod sources;
+pub mod spend;
 pub mod stages;
 pub mod store;
 pub mod watch;
