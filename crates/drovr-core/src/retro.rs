@@ -945,6 +945,59 @@ mod tests {
     }
 
     #[test]
+    fn records_on_tickets_with_no_live_agents() {
+        let cases: [(&str, &[&str], &str, &[&str]); 5] = [
+            ("in a group's folder", &["g"], "", &["g"]),
+            ("in the plans folder", &[""], "", &[""]),
+            ("in the one used last", &["old", "new"], "", &["new"]),
+            ("nobody picked it up", &[], "", &[]),
+            ("a live group's comes first", &["old"], "live", &["live"]),
+        ];
+        for (i, (name, existing, live, expected)) in cases.into_iter().enumerate() {
+            let dir =
+                std::env::temp_dir().join(format!("drovr-no-live-{}-{i}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut cfg = crate::config::Config::default();
+            cfg.workflow.enabled = true;
+            cfg.reports.dir = dir.join("plans").display().to_string();
+            let engine = Engine::with(
+                crate::store::Store::open(&dir.join("t.db")).unwrap(),
+                cfg,
+                "drovr".into(),
+            );
+            for (age, folder) in existing.iter().rev().enumerate() {
+                ledger::append(&engine.cfg, folder, "SRE-1", &json!({ "kind": "run_end" }))
+                    .unwrap();
+                let file = ledger::dir(&engine.cfg, folder, "SRE-1").join(ledger::FILE);
+                let when = std::time::SystemTime::now()
+                    - std::time::Duration::from_secs(60 * (age as u64 + 1));
+                std::fs::File::options()
+                    .append(true)
+                    .open(file)
+                    .unwrap()
+                    .set_modified(when)
+                    .unwrap();
+            }
+            if !live.is_empty() {
+                engine
+                    .store
+                    .add_group(live, "", "SRE-1", "/tmp", "", false)
+                    .unwrap();
+            }
+            engine.record_ticket("sre-1", "retro_started", json!({}));
+            let mut got: Vec<String> = ledger::list(&engine.cfg)
+                .into_iter()
+                .filter(|r| r.last_retro > 0.0)
+                .map(|r| r.folder)
+                .collect();
+            got.sort();
+            assert_eq!(got, expected, "{name}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
     fn works_out_the_evidence() {
         let dir = std::env::temp_dir().join(format!("drovr-evidence-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
