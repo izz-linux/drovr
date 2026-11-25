@@ -32,7 +32,7 @@
   <section class="list">
     <form class="head" onsubmit={(e) => { e.preventDefault(); search(); }}>
       <input placeholder="SRE-123, JQL, or text (empty = your open tickets)" bind:value={jira.query} />
-      <button class="primary" type="submit" disabled={!!jira.loading}>Search</button>
+      <button class="primary" type="submit" disabled={!!jira.loading} title="Search Jira: a key opens that ticket, JQL runs as is, anything else is a text search">Search</button>
     </form>
     <div class="scroll grow">
       {#each jira.results as t}
@@ -53,8 +53,8 @@
     {#if jira.ticket}
       <div class="row">
         <h2 class="grow">{jira.ticket.key} · {jira.ticket.summary}</h2>
-        {#if jira.ticket.url}<button onclick={() => api.openUrl(jira.ticket!.url)}>Open in Jira</button>{/if}
-        <button class="primary" onclick={() => (app.dispatching = jira.ticket)}>Hand off to agents…</button>
+        {#if jira.ticket.url}<button onclick={() => api.openUrl(jira.ticket!.url)} title="Open this ticket in your browser">Open in Jira</button>{/if}
+        <button class="primary" onclick={() => (app.dispatching = jira.ticket)} title="Start an agent or a group on this ticket">Hand off to agents…</button>
       </div>
       <div class="meta">
         <span class="pill">{jira.ticket.issue_type}</span><span class="pill">{jira.ticket.status}</span>
@@ -62,7 +62,7 @@
       </div>
       {#if owners.length}
         <div class="owners">Being worked by:
-          {#each owners as a}<button class="ghost" onclick={() => { app.selected = a.name; app.view = "agents"; }}>{a.name} <span class="pill s-{a.state}">{a.state}</span></button>{/each}
+          {#each owners as a}<button title="Go to this agent" class="ghost" onclick={() => { app.selected = a.name; app.view = "agents"; }}>{a.name} <span class="pill s-{a.state}">{a.state}</span></button>{/each}
         </div>
       {/if}
       <h3>Description</h3>

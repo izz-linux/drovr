@@ -98,9 +98,9 @@
     <div class="retro">
       <div class="row">
         <strong class="grow">{r.tickets.join(", ")}</strong>
-        <span class="muted small">{ago(r.started)} ago · <button class="link" onclick={() => select(r.agent)}>{r.agent}</button> {agentState(r.agent)}</span>
+        <span class="muted small">{ago(r.started)} ago · <button title="Go to the retro's agent" class="link" onclick={() => select(r.agent)}>{r.agent}</button> {agentState(r.agent)}</span>
         {#if finished}<button class="ghost small" onclick={() => (open[r.dir] = !open[r.dir])}>{open[r.dir] ? "▾" : "▸"} {summary(r)}</button>{/if}
-        {#if pending.length > 1}<button onclick={() => approveAll(r)}>Approve all ({pending.length})</button>{/if}
+        {#if pending.length > 1}<button title="Approve and apply every pending proposal" onclick={() => approveAll(r)}>Approve all ({pending.length})</button>{/if}
       </div>
       {#if !finished || open[r.dir]}
       {#if !r.proposals.length}<div class="muted small">No proposals yet{agentState(r.agent) === "working" ? "; it's still looking" : ""}.</div>{/if}
@@ -110,8 +110,8 @@
             <span class="pill">{p.kind.replace("_", " ")}</span>
             <strong class="grow">{p.title}</strong>
             {#if p.status === "pending"}
-              <button class="primary" onclick={() => decide(r, p, true)}>Approve</button>
-              <button class="ghost" onclick={() => decide(r, p, false)}>Dismiss</button>
+              <button title="Apply this proposal" class="primary" onclick={() => decide(r, p, true)}>Approve</button>
+              <button title="Drop this proposal; the next retro is told you did" class="ghost" onclick={() => decide(r, p, false)}>Dismiss</button>
             {:else}<span class="muted small">{p.status}</span>{/if}
           </div>
           {#if p.why}<div class="why">{p.why}</div>{/if}
@@ -149,7 +149,7 @@
         <div class="row pick">
           {#if list === "hidden"}<span class="grow"><strong>{t.ticket}</strong><span class="muted small">{did(t)} · {covered(t)}</span></span>
           {:else}<label class="row grow"><input type="checkbox" bind:checked={picked[t.ticket]} /><span><strong>{t.ticket}</strong><span class="muted small">{did(t)} · {covered(t)}</span></span></label>{/if}
-          <button class="ghost small" onclick={() => hide(t, list !== "hidden")}>{list === "hidden" ? "Show" : "Hide"}</button>
+          <button class="ghost small" title={list === "hidden" ? "Put this ticket back in its list" : "Take this ticket out of its list; its record is kept"} onclick={() => hide(t, list !== "hidden")}>{list === "hidden" ? "Show" : "Hide"}</button>
         </div>
       {:else}
         <div class="muted">{tickets.length ? "None." : "No ticket has a record yet."}</div>
@@ -158,7 +158,7 @@
     <input placeholder="Anything to look at in particular (optional)" bind:value={note} />
     {#snippet footer()}
       <button onclick={() => (starting = false)}>Cancel</button>
-      <button class="primary" disabled={!chosen.length} onclick={start}>Start retro on {chosen.length} {chosen.length === 1 ? "ticket" : "tickets"}</button>
+      <button title="Start an agent that reviews these tickets' records and proposes changes" class="primary" disabled={!chosen.length} onclick={start}>Start retro on {chosen.length} {chosen.length === 1 ? "ticket" : "tickets"}</button>
     {/snippet}
   </Modal>
 {/if}
@@ -170,7 +170,7 @@
   .prop.done { opacity: .6; }
   .why { font-size: 13px; margin: 2px 0; }
   .small { font-size: 11px; }
-  .link { background: none; border: none; padding: 0; color: var(--accent); font-size: 11px; }
+  .link, .link:hover { background: none; border: none; padding: 0; color: var(--accent); font-size: 11px; }
   .ev { margin: 4px 0 4px 18px; font-size: 12px; }
   pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; max-height: 260px; overflow: auto; background: var(--bg); padding: 6px; border-radius: 4px; }
   .picks { max-height: 260px; overflow: auto; margin: 8px 0; }

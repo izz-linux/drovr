@@ -101,14 +101,14 @@
     </div>
     <div class="row actions">
       {#if r.status === "new"}
-        <button class="primary" onclick={() => dispatch(r)} disabled={busy[r.key]}>{busy[r.key] ? "Dispatching…" : "Dispatch reviewer"}</button>
+        <button title="Start a reviewer agent on this PR" class="primary" onclick={() => dispatch(r)} disabled={busy[r.key]}>{busy[r.key] ? "Dispatching…" : "Dispatch reviewer"}</button>
       {:else if starting(r)}
         <span class="muted">Starting…</span>
       {:else}
-        {#if agentOf(r)}<button onclick={() => select(r.agent)}>Open reviewer</button>{/if}
-        {#if rep}<button onclick={() => openReport(rep)}>Report</button>{/if}
+        {#if agentOf(r)}<button title="Go to this PR's reviewer agent" onclick={() => select(r.agent)}>Open reviewer</button>{/if}
+        {#if rep}<button title="Open the reviewer's report" onclick={() => openReport(rep)}>Report</button>{/if}
       {/if}
-      <button onclick={() => api.openUrl(r.url)}>Open on GitHub</button>
+      <button title="Open this PR on GitHub in your browser" onclick={() => api.openUrl(r.url)}>Open on GitHub</button>
       <button class="ghost" onclick={() => dismiss(r)} disabled={busy[r.key]} title={r.status === "dispatched" ? "Removes the reviewer and hides the PR" : "Hide this PR"}>Dismiss</button>
     </div>
   </article>
@@ -118,7 +118,7 @@
   <div class="row top">
     <h2 class="grow">PRs</h2>
     {#if holdText(hold)}<span class="muted small">{holdText(hold)}</span>{/if}
-    <button onclick={refreshNow} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh"}</button>
+    <button title="Look for new PRs and refresh CI and reviews now" onclick={refreshNow} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh"}</button>
   </div>
 
   {#if !rows.length}

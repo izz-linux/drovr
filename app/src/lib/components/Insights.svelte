@@ -102,7 +102,7 @@
         {/each}
       </tbody>
     </table>
-    {#if list.length > ROWS}<button class="ghost" onclick={() => (all[title] = !all[title])}>{all[title] ? "Show fewer" : `Show all ${list.length}`}</button>{/if}
+    {#if list.length > ROWS}<button class="ghost" title={all[title] ? "List only the top rows" : "List every row"} onclick={() => (all[title] = !all[title])}>{all[title] ? "Show fewer" : `Show all ${list.length}`}</button>{/if}
   </section>
 {/snippet}
 
@@ -112,7 +112,7 @@
     <div class="row grow tabs">
       {#each [["overview", "Overview"], ["models", "Models"], ["retros", "Retros"]] as const as [id, name]}<button class="ghost" class:on={tab === id} aria-pressed={tab === id} onclick={() => (tab = id)}>{name}</button>{/each}
     </div>
-    <button class="ghost" hidden={tab !== "overview"} aria-pressed={asTable} onclick={() => (asTable = !asTable)}>{asTable ? "Show chart" : "Show table"}</button>
+    <button class="ghost" title="Switch between the chart and a table of the same numbers" hidden={tab !== "overview"} aria-pressed={asTable} onclick={() => (asTable = !asTable)}>{asTable ? "Show chart" : "Show table"}</button>
     <select hidden={tab === "retros"} aria-label="Weeks shown" bind:value={span}>
       {#each [2, 4, 8, 12, 26] as n}<option value={n}>Last {n} weeks</option>{/each}
     </select>

@@ -82,7 +82,7 @@
         {#each recipients as a}<option value={a.name}>{a.name}</option>{/each}
       </select>
       <input class="grow" bind:value={body} placeholder={`Message as ${app.you}…`} />
-      <button class="primary" type="submit">Send</button>
+      <button title="Post this message on the bus" class="primary" type="submit">Send</button>
     </form>
   </section>
   <section class="notes scroll">

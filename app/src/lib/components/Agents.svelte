@@ -247,7 +247,7 @@
     {#if interrupted.length}
       <div class="interrupted">
         <span class="grow">{interrupted.length} agent{interrupted.length > 1 ? "s were" : " was"} interrupted by a restart</span>
-        <button onclick={resumeAll}>Resume all</button>
+        <button onclick={resumeAll} title="Resume every interrupted agent where it left off">Resume all</button>
       </div>
     {/if}
     <div class="scroll grow">
@@ -312,19 +312,19 @@
           <h2 class="grow lettered">{current.name}</h2>
           <span class="pill s-{current.state}">{current.state}</span>
           {#if current.state === "working"}
-            <button class="danger" onclick={() => act(() => api.stop(current.name), "Stopped")}>Stop</button>
+            <button class="danger" onclick={() => act(() => api.stop(current.name), "Stopped")} title="Stop its current run. Its session is kept, so you can resume it.">Stop</button>
           {:else if current.state === "stopped" || current.state === "error" || current.state === "interrupted"}
-            <button onclick={() => act(() => api.resume(current.name), "Resumed")}>Resume</button>
+            <button onclick={() => act(() => api.resume(current.name), "Resumed")} title="Start a new run that continues where it left off">Resume</button>
           {/if}
           <button onclick={attach} title="Open this session interactively">{app.snap.herdr ? "Open in herdr" : "Copy attach cmd"}</button>
           {#if herdrAgent}
             <button class:on={paneView} onclick={() => (paneView = !paneView)} title="Show its herdr pane's screen instead of the session">Pane</button>
           {/if}
-          <button onclick={() => { app.view = "review"; }}>Review</button>
+          <button onclick={() => { app.view = "review"; }} title="See what this agent changed in each repo it worked in">Review</button>
           {#if currentTickets.length}
             <button onclick={() => (app.timeline = currentTickets[0])} title={`Everything that happened on ${currentTickets.join(", ")}, for review and the retro`}>Timeline</button>
           {/if}
-          <button class:on={app.termOpen} onclick={() => (app.termOpen = !app.termOpen)} title="Show or hide the terminal (⌃`)">Terminal</button>
+          <button class:on={app.termOpen} onclick={() => (app.termOpen = !app.termOpen)} title="Show or hide the terminal panel in the agent's folder (⌃`)">Terminal</button>
           <button class="ghost danger" class:armed={arming === `a:${current.name}`} title="Stop and remove this agent and its output"
             onclick={() => { const n = current!.name; twice(`a:${n}`, () => removeAgent(n)); }}>{arming === `a:${current.name}` ? "Remove?" : "✕"}</button>
         </div>
@@ -337,7 +337,7 @@
           <span>updated {ago(current.updated)} ago</span>
         </div>
         {#if pending.length}
-          <button class="needs" onclick={() => (app.view = "inbox")}>⚑ {pending.length} item{pending.length > 1 ? "s" : ""} waiting for you in the Inbox</button>
+          <button title="Go to the Inbox to answer what this agent is waiting on" class="needs" onclick={() => (app.view = "inbox")}>⚑ {pending.length} item{pending.length > 1 ? "s" : ""} waiting for you in the Inbox</button>
         {/if}
       </header>
 
@@ -360,7 +360,7 @@
           {:else if l.kind === "result"}<details class="result" open={hits.includes(i)}><summary>{l.text.split("\n")[0].slice(0, 140) || "(no output)"}</summary><pre>{l.text}</pre></details>
           {:else if l.kind === "final"}<div class="final">{l.text}</div>
           {:else if l.kind === "error"}<pre class="err">{l.text}</pre>
-          {:else if l.kind === "waiting"}<div class="waiting"><span>{l.text}</span> <button onclick={attach}>{app.snap.herdr ? "Open in herdr" : "Copy attach cmd"}</button></div>
+          {:else if l.kind === "waiting"}<div class="waiting"><span>{l.text}</span> <button title={app.snap.herdr ? "Open this agent's session in herdr to answer it" : "Copy a command that attaches to this agent's session"} onclick={attach}>{app.snap.herdr ? "Open in herdr" : "Copy attach cmd"}</button></div>
           {:else}<pre class="raw">{l.text}</pre>{/if}
           </div>
         {:else}
@@ -384,7 +384,7 @@
       <footer>
         <textarea rows="3" bind:value={input} onkeydown={onKey}
           placeholder={current.state === "working" ? "It's busy, so this is queued until its run ends. Enter sends, Shift+Enter for a new line" : "Prompt this agent. Enter sends, Shift+Enter for a new line"}></textarea>
-        <button class="primary" onclick={send} disabled={!input.trim()}>Send</button>
+        <button title="Send this message to the agent (Enter). If it's working, it's queued until the run ends." class="primary" onclick={send} disabled={!input.trim()}>Send</button>
       </footer>
       {#if app.termOpen}<TerminalPanel agent={current} />{/if}
     {:else}
@@ -446,6 +446,5 @@
   footer { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); align-items: flex-end; }
   .cost { color: var(--yellow); border-color: var(--yellow); }
   .stage { color: var(--green); border-color: var(--green); }
-  button.on { border-color: var(--accent); color: var(--accent); }
   button.armed, button.armed:hover { background: var(--red); color: #fff; border-color: var(--red); opacity: 1; }
 </style>
