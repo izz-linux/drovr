@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Auto-wakes allowed per agent in ten minutes, so two agents messaging each
 /// other can't loop forever on your API bill.
@@ -32,6 +32,12 @@ const HERDR_INLINE_MAX: usize = 600;
 /// How long a new herdr pane's shell gets to reach its prompt.
 const HERDR_READY_WAIT: Duration = Duration::from_secs(15);
 const HERDR_READY_POLL: Duration = Duration::from_millis(500);
+
+/// How long herdr gets to answer after `herdr.launch` starts it.
+#[cfg(not(test))]
+const HERDR_LAUNCH_WAIT: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const HERDR_LAUNCH_WAIT: Duration = Duration::from_secs(1);
 
 /// herdr can still report an agent as idle just after it's been prompted, so
 /// a run this new, in seconds, isn't over yet.
@@ -864,8 +870,11 @@ impl Engine {
                 ..agent.clone()
             }) {
                 self.store.set_agent(&agent.name, "run_state", "error")?;
-                self.store
-                    .set_agent(&agent.name, "status", &format!("herdr start failed: {e}"))?;
+                self.store.set_agent(
+                    &agent.name,
+                    "status",
+                    &format!("herdr start failed: {e:#}"),
+                )?;
                 return Err(e);
             }
         } else {
@@ -2516,7 +2525,60 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         self.herdr_new_pane(cmd, std::env::var("HERDR_PANE_ID").ok().as_deref())
     }
 
-    fn herdr_new_pane(&self, mut cmd: String, inherited: Option<&str>) -> Result<String> {
+    /// Open a pane, starting herdr first with `herdr.launch` if it isn't
+    /// running.
+    fn herdr_new_pane(&self, cmd: String, inherited: Option<&str>) -> Result<String> {
+        match self.herdr_try_new_pane(cmd.clone(), inherited) {
+            Err(e) if format!("{e:#}").contains("server_not_running") && self.herdr_launch()? => {
+                self.herdr_try_new_pane(cmd, inherited)
+                    .context("started herdr with herdr.launch, then opening the pane failed")
+            }
+            other => other,
+        }
+    }
+
+    /// Run `herdr.launch` and wait for herdr to answer. False when it's not set.
+    fn herdr_launch(&self) -> Result<bool> {
+        if self.cfg.herdr.launch.trim().is_empty() {
+            return Ok(false);
+        }
+        let list = self.herdr_fill(&self.cfg.herdr.list, &[]);
+        // A file lock, not a Mutex: panes open on their own threads and in
+        // agents' MCP servers, and only the first should launch herdr. The
+        // rest wait here, then find it running.
+        let lock = std::fs::File::create(home().join("herdr-launch.lock"))?;
+        lock.lock()?;
+        if shell::sh(&list, None, None, Duration::from_secs(10))?.ok() {
+            return Ok(true);
+        }
+        // Output goes to a file: a `launch` that leaves something in the
+        // background would otherwise hold the pipes open, and drovr with them.
+        let log = home().join("herdr-launch.log");
+        let launch = self.herdr_fill(&self.cfg.herdr.launch, &[]);
+        let script = format!("{{ {launch}\n}} >{} 2>&1", quote(&log.to_string_lossy()));
+        let mut out = shell::sh(&script, None, None, Duration::from_secs(30))?;
+        out.stderr = std::fs::read_to_string(&log).unwrap_or_default();
+        out.into_stdout("herdr.launch")?;
+        let until = Instant::now() + HERDR_LAUNCH_WAIT;
+        loop {
+            // Each check gets only what's left of the wait, so it stays the
+            // wait in all.
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            if shell::sh(&list, None, None, left)?.ok() {
+                return Ok(true);
+            }
+            std::thread::sleep(HERDR_READY_POLL.min(left));
+        }
+        bail!(
+            "started herdr with herdr.launch, but it didn't answer within {}s",
+            HERDR_LAUNCH_WAIT.as_secs()
+        )
+    }
+
+    fn herdr_try_new_pane(&self, mut cmd: String, inherited: Option<&str>) -> Result<String> {
         if cmd.contains("--current") {
             let pane = match inherited.filter(|pane| !pane.is_empty()) {
                 Some(pane) => pane.to_string(),
@@ -2533,7 +2595,9 @@ Plan the work, spawn workers with spawn_worker (or coordinate the agents already
         let cmd = self.herdr_fill(&self.cfg.herdr.list, &[]);
         let out = shell::sh(&cmd, None, None, Duration::from_secs(10))?
             .into_stdout("herdr pane list")
-            .map_err(|e| anyhow!("couldn't find a herdr pane to split. Is herdr running? {e}"))?;
+            .map_err(|e| {
+                anyhow!("couldn't find a herdr pane to split. Is herdr running? Start it with `herdr`, or set herdr.launch so drovr starts it. {e}")
+            })?;
         focused_pane(&out)
             .ok_or_else(|| anyhow!("herdr has no focused pane to split. Open herdr and try again."))
     }
@@ -4098,6 +4162,144 @@ esac
             assert!(err.contains(want), "{case}: {err}");
             assert!(!err.contains("requires HERDR_PANE_ID"), "{case}: {err}");
         }
+    }
+
+    #[test]
+    fn panes_opened_at_once_launch_herdr_once_and_dont_wait_on_its_background() {
+        let up = std::env::temp_dir().join(format!("drovr-herdr-once-{}", std::process::id()));
+        let count = up.with_extension("count");
+        let _ = std::fs::remove_file(&up);
+        let _ = std::fs::remove_file(&count);
+        let list = format!(
+            r#"if [ -e {up} ]; then printf '%s' '{{"result":{{"panes":[{{"focused":true,"pane_id":"w1:p1"}}]}}}}'; else echo '{{"error":{{"code":"server_not_running"}}}}' >&2; exit 1; fi"#,
+            up = up.display()
+        );
+        // Leaves a process in the background, as `herdr &` would.
+        let launch = format!(
+            "echo x >> {}; touch {}; sleep 45 &",
+            count.display(),
+            up.display()
+        );
+        let started = Instant::now();
+        let panes: Vec<_> = (0..3)
+            .map(|i| {
+                let mut engine = engine_with_herdr_stub(&format!("once-{i}"), &list, "");
+                engine.cfg.herdr.launch = launch.clone();
+                std::thread::spawn(move || engine.herdr_split_from("/tmp", None))
+            })
+            .collect();
+        for pane in panes {
+            assert_eq!(pane.join().unwrap().unwrap(), "beside-w1:p1");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(std::fs::read_to_string(&count).unwrap().lines().count(), 1);
+        let _ = std::fs::remove_file(&up);
+        let _ = std::fs::remove_file(&count);
+    }
+
+    #[test]
+    fn starts_herdr_with_launch_when_it_isnt_running() {
+        // `list` fails as herdr does with no server until `launch` has run.
+        let up = std::env::temp_dir().join(format!("drovr-herdr-up-{}", std::process::id()));
+        let _ = std::fs::remove_file(&up);
+        let list = format!(
+            r#"if [ -e {up} ]; then printf '%s' '{{"result":{{"panes":[{{"focused":true,"pane_id":"w1:p1"}}]}}}}'; else echo '{{"error":{{"code":"server_not_running"}}}}' >&2; exit 1; fi"#,
+            up = up.display()
+        );
+        let off = engine_with_herdr_stub("launch-off", &list, "");
+        let err = off.herdr_split_from("/tmp", None).unwrap_err().to_string();
+        assert!(err.contains("herdr.launch"), "{err}");
+
+        let mut on = engine_with_herdr_stub("launch-on", &list, "");
+        on.cfg.herdr.launch = format!("touch {}", up.display());
+        assert_eq!(on.herdr_split_from("/tmp", None).unwrap(), "beside-w1:p1");
+        let _ = std::fs::remove_file(&up);
+    }
+
+    #[test]
+    fn a_new_agents_tab_starts_herdr_with_launch_too() {
+        // New agents get a tab (`agent_pane`, `tab create`), not a split. With
+        // no server, herdr 0.9.5 prints this on stderr and exits 1.
+        let dir = std::env::temp_dir().join(format!("drovr-herdr-tab-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let up = dir.join("up");
+        let stub = dir.join("herdr");
+        std::fs::write(
+            &stub,
+            format!(
+                r#"if [ ! -e {up} ]; then
+  echo '{{"id":"cli:tab:create","error":{{"code":"server_not_running","message":"no herdr server is running"}}}}' >&2
+  exit 1
+fi
+case "$1 $2" in
+"tab create") printf '{{"id":"cli:tab:create","result":{{"pane":{{"pane_id":"w2:p1"}}}}}}' ;;
+"pane list") printf '{{"result":{{"panes":[]}}}}' ;;
+esac
+"#,
+                up = up.display()
+            ),
+        )
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.herdr.command = format!("sh {}", stub.display());
+        let agent = Agent {
+            name: "api".into(),
+            cwd: "/tmp".into(),
+            ..Agent::default()
+        };
+
+        let off = Engine::with(
+            Store::open(&dir.join("off.db")).unwrap(),
+            cfg.clone(),
+            "drovr".into(),
+        );
+        let err = format!("{:#}", off.herdr_agent_pane(&agent).unwrap_err());
+        assert!(err.contains("server_not_running"), "{err}");
+
+        cfg.herdr.launch = format!("touch {}", up.display());
+        let on = Engine::with(
+            Store::open(&dir.join("on.db")).unwrap(),
+            cfg,
+            "drovr".into(),
+        );
+        assert_eq!(on.herdr_agent_pane(&agent).unwrap(), "w2:p1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_launch_that_never_answers_gives_up_and_says_so() {
+        let dir = std::env::temp_dir().join(format!("drovr-herdr-never-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stub = dir.join("herdr");
+        std::fs::write(
+            &stub,
+            "echo '{\"error\":{\"code\":\"server_not_running\"}}' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.herdr.command = format!("sh {}", stub.display());
+        cfg.herdr.launch = "true".into();
+        let engine = Engine::with(Store::open(&dir.join("t.db")).unwrap(), cfg, "drovr".into());
+        let started = Instant::now();
+        let agent = Agent {
+            name: "api".into(),
+            cwd: "/tmp".into(),
+            ..Agent::default()
+        };
+        let err = format!("{:#}", engine.herdr_agent_pane(&agent).unwrap_err());
+        assert!(err.contains("didn't answer within"), "{err}");
+        assert!(
+            started.elapsed() < HERDR_LAUNCH_WAIT * 3,
+            "{:?}",
+            started.elapsed()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// An engine whose `herdr` logs each call and answers like the real one,
